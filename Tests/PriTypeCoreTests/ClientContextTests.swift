@@ -65,41 +65,48 @@ struct ClientContextTests {
         #expect(!unknownCtx.shouldUseImmediateMode)
     }
 
-    @Test("Secure input policy passes through global secure input")
-    func secureInputPolicyPassesThroughGlobalSecureInput() {
-        #expect(SecureInputPolicy.shouldPassThrough(SecureInputSignals(
+    @Test("Secure input policy ignores a stale global flag for a capable field")
+    func secureInputPolicyIgnoresStaleGlobalFlagForCapableField() {
+        #expect(!SecureInputPolicy.shouldPassThrough(SecureInputSignals(
             bundleId: "com.example.messenger",
             hasTextInputCapability: true,
             hasInvalidSelection: false,
-            hasGlobalSecureInput: true,
-            hasMarkedTextSupport: true
+            hasGlobalSecureInput: true
         )))
     }
 
-    @Test("Secure input policy handles invalid selection capability cases")
-    func secureInputPolicyHandlesInvalidSelectionCapabilityCases() {
+    @Test("Secure input policy fails closed for invalid selections")
+    func secureInputPolicyFailsClosedForInvalidSelections() {
         #expect(SecureInputPolicy.shouldPassThrough(SecureInputSignals(
             bundleId: "com.example.PasswordPanel",
             hasTextInputCapability: false,
             hasInvalidSelection: true,
-            hasGlobalSecureInput: false,
-            hasMarkedTextSupport: false
+            hasGlobalSecureInput: false
         )))
 
         #expect(SecureInputPolicy.shouldPassThrough(SecureInputSignals(
             bundleId: "com.example.messenger",
             hasTextInputCapability: true,
             hasInvalidSelection: true,
-            hasGlobalSecureInput: false,
-            hasMarkedTextSupport: true
+            hasGlobalSecureInput: true
+        )))
+
+    }
+
+    @Test("Secure input policy fails closed for a capability-less field")
+    func secureInputPolicyFailsClosedForCapabilityLessField() {
+        #expect(SecureInputPolicy.shouldPassThrough(SecureInputSignals(
+            bundleId: "com.example.LegacyEditor",
+            hasTextInputCapability: false,
+            hasInvalidSelection: false,
+            hasGlobalSecureInput: false
         )))
 
         #expect(SecureInputPolicy.shouldPassThrough(SecureInputSignals(
-            bundleId: "com.google.Chrome",
-            hasTextInputCapability: true,
-            hasInvalidSelection: true,
-            hasGlobalSecureInput: false,
-            hasMarkedTextSupport: true
+            bundleId: "com.example.PasswordPanel",
+            hasTextInputCapability: false,
+            hasInvalidSelection: false,
+            hasGlobalSecureInput: true
         )))
     }
 
@@ -109,8 +116,14 @@ struct ClientContextTests {
             bundleId: "com.apple.SecurityAgent",
             hasTextInputCapability: true,
             hasInvalidSelection: false,
-            hasGlobalSecureInput: false,
-            hasMarkedTextSupport: true
+            hasGlobalSecureInput: false
+        )))
+
+        #expect(SecureInputPolicy.shouldPassThrough(SecureInputSignals(
+            bundleId: "com.apple.loginwindow",
+            hasTextInputCapability: true,
+            hasInvalidSelection: false,
+            hasGlobalSecureInput: false
         )))
     }
 

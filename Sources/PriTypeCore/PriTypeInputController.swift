@@ -400,32 +400,38 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
 
     private func shouldPassThroughSecureInput(client: IMKTextInput, context: ClientContext) -> Bool {
         let bundleId = context.bundleId
-
-        if SecureInputPolicy.isSystemSecureClient(bundleId) {
-            DebugLogger.log("Secure Input: System secure client (\(bundleId)), passing through")
-            return true
-        }
-
+        let isSystemSecureClient = SecureInputPolicy.isSystemSecureClient(bundleId)
         let hasGlobalSecureInput = IsSecureEventInputEnabled()
 
-        if hasGlobalSecureInput {
-            DebugLogger.log("Secure Input: global secure input active in '\(bundleId)', passing through")
-            return true
+        // selectedRange is synchronous client IPC. Probe only when it can change the
+        // decision: a global secure-input warning or a capability-less client. System
+        // secure clients are known up front and must not be queried.
+        var hasInvalidSelection = false
+        if !isSystemSecureClient && (hasGlobalSecureInput || !context.hasTextInputCapability) {
+            hasInvalidSelection = client.selectedRange().location == NSNotFound
         }
 
-        guard !context.hasTextInputCapability else {
-            return false
+        let signals = SecureInputSignals(
+            bundleId: bundleId,
+            hasTextInputCapability: context.hasTextInputCapability,
+            hasInvalidSelection: hasInvalidSelection,
+            hasGlobalSecureInput: hasGlobalSecureInput
+        )
+        let shouldPassThrough = SecureInputPolicy.shouldPassThrough(signals)
+
+        if shouldPassThrough {
+            if isSystemSecureClient {
+                DebugLogger.log("Secure Input: system secure client (\(bundleId)), passing through")
+            } else if hasInvalidSelection {
+                DebugLogger.log("Secure Input: invalid selection in '\(bundleId)', passing through")
+            } else {
+                DebugLogger.log("Secure Input: global flag + no text capability in '\(bundleId)', passing through")
+            }
+        } else if hasGlobalSecureInput {
+            DebugLogger.log("Secure Input: ignoring stale global flag for capable field in '\(bundleId)'")
         }
 
-        let selectionRange = client.selectedRange()
-        let hasInvalidSelection = selectionRange.location == NSNotFound
-
-        if hasInvalidSelection {
-            DebugLogger.log("Secure Input: invalid selection in '\(bundleId)', passing through")
-            return true
-        }
-
-        return false
+        return shouldPassThrough
     }
 
     // 마우스 클릭 등으로 조합 영역 외부 클릭 시 조합 커밋

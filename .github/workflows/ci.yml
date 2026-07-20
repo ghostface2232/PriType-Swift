@@ -6,12 +6,19 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build and Test
-    runs-on: self-hosted
+    # Pull requests can change and execute test code. Keep them off the persistent
+    # signing host and use GitHub's clean, per-job macOS VM instead.
+    runs-on: macos-15
     env:
-      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      # macos-15 currently defaults to Xcode 16.4, which cannot build this
+      # swift-tools-version 6.2 package. Use the installed Xcode 26 toolchain.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     
     steps:
     - name: Checkout
@@ -28,9 +35,9 @@ jobs:
     
   lint:
     name: SwiftLint
-    runs-on: self-hosted
+    runs-on: macos-15
     env:
-      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     
     steps:
     - name: Checkout

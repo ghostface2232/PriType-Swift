@@ -11,7 +11,9 @@ permissions:
 jobs:
   release:
     name: Build, Sign, Notarize & Release
-    runs-on: self-hosted
+    # This label must exist only on the dedicated signing runner. Never add it to
+    # a runner that executes pull-request code. See Docs/ReleaseRunnerSecurity.md.
+    runs-on: [self-hosted, macOS, pritype-signing]
     env:
       DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
     

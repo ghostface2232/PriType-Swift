@@ -175,6 +175,7 @@ libhangul preedit: ᄆ (U+1106)
 | **TextDelivery** | 조합 출력이 호스트에 도달하는 방식. `TextDeliveryPolicy.mode(for:)`가 단일 결정 지점이고, `MarkedTextAdapter`(canonical marked text), `DirectInsertionAdapter`(실험: 실제 텍스트 in-place rewrite), `ImmediateModeAdapter`(Finder 바탕화면) 세 어댑터를 제공한다. 조합 밑줄: `PreeditUnderline`이 엔진별 invisible 속성을 보내지만(분류는 `ClientCompatibilityPolicy.compositionRenderer`), **macOS 26부터는 전송 계층이 IME 속성을 전부 폐기하고 시스템 스타일(`NSUnderline=2`+액센트색)을 재생성하므로 marked text 밑줄은 숨길 수 없다**(13종 페이로드 실측, `PreeditUnderline` 주석 참고). 구버전 macOS에서만 유효. 밑줄 없는 입력은 직접 삽입 모드가 유일한 경로다. |
 | **CursorRectResolver** | 한자 후보창 좌표 전략 체인(firstRect → attributes → 캐시 → AX → 마우스)과 좌표 유효성 검증. |
 | **ClientContextDetector** | 입력 클라이언트 분석기. 번들 ID, `validAttributesForMarkedText`, 좌표 휴리스틱을 조합해 `ClientContext` 구조체를 생성한다. Finder 바탕화면은 좌표 기반(`y < 50`)으로 판별한다. |
+| **SecureInputPolicy** | 시스템 보안 client와 현재 필드의 selection/capability 신호를 조합하는 순수 정책. 정상 capable field에서는 다른 앱이 남긴 stale 전역 Secure Event Input flag를 무시한다. |
 | **RightCommandSuppressor** | `CGEventTap` 기반 시스템 레벨 키 인터셉터. `ConfigurationManager`의 `toggleKeyBinding`/`hanjaKeyBinding`을 읽어 사용자 지정 키를 동적으로 처리한다. Key Recorder 모드를 지원하여 설정 창에서 키 캡처가 가능하다. 이벤트 탭 비활성화 시 재활성화를 시도하며, 60초 내 3회 실패 시 IOKit 백업으로 자동 전환한다. |
 | **IOKitManager** | `IOHIDManager` 기반 하드웨어 레벨 키 모니터. CGEventTap 실패 시 백업 핸들러로 동작한다. HID usage 매핑 테이블을 통해 사용자 지정 키를 동적으로 처리한다. |
 | **HanjaCandidateWindow** | SwiftUI 기반 한자 후보 패널. `NSPanel`을 재사용하며, `screenSaver + 1` 윈도우 레벨로 Electron 앱 위에 표시된다. 1~9 숫자키 선택, 방향키/Tab 페이지 이동을 지원한다. |

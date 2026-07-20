@@ -166,7 +166,7 @@ per-app 하드코딩 목록을 들고 다닌다. 출하 중인 한국어 macOS I
 | **Chrome/VS Code/Slack** | `한글날` 빠르게 + 음절 중간 blur | 하이브리드: 마크드 렌더 + 음절 커밋 정확, run-on 쓰레기/strand 없음. direct는 `selectedRange` garbage(≥10M)로 **deny→마크드 폴백**. |
 | **Terminal/iTerm2** | 셸 프롬프트 한글 + 음절 내 backspace | `selectedRange==NSNotFound`→direct deny. 마크드/음절-커밋 경로, blind-append/셸 텍스트 삭제 없음. |
 | **Notes/TextEdit**(네이티브 NSTextView) | 문장 입력 후 Cmd-Z 반복, autocorrect/smart-sub | 하이브리드(기본): undo가 단어/조합 단위 coalesce, 조합 중 autocorrect 억제, 매-키 깜빡임 없음. direct ON은 여기서만 "동작"하나 undo가 음절당 1회로 퇴행 + 음절 중간 autocorrect 발화 → 플래그 OFF 유지 근거. |
-| **보안 필드**(login/sudo/1Password) | 패스워드 필드 한글 시도 | `SecureInputPolicy.shouldPassThrough`→raw passthrough, insertText/setMarkedText 미시도, 포커스 wedge 없음. direct 시도 안 함(전역 `IsSecureEventInputEnabled` 게이트). |
+| **보안 필드**(login/sudo/1Password) | 패스워드 필드 한글 시도 | `SecureInputPolicy.shouldPassThrough`→raw passthrough, insertText/setMarkedText 미시도, 포커스 wedge 없음. system secure client·invalid selection·capability 부재를 field-local 신호로 사용하고, 정상 capable field에서는 다른 앱이 남긴 stale 전역 flag를 무시. |
 | **Notes/KakaoTalk**(빠른 받침 이동) | `각+ㅏ→가` 확정+`가` 새 블록, 레이아웃보다 빠르게 타건 | 하이브리드: commit-before-mark 유지, 이동 음절당 insertText 정확히 1회→setMarkedText, stale-cursor preedit(kitty #4219)/자모 누락·중복 없음. direct는 stale `selectedRange` read-modify-write로 race 위험 高. |
 | **Finder**(immediate 모드) | 데스크톱/아이콘 이름변경 한글 | `ImmediateModeAdapter` 불변: deferred-batch, floating preedit 없음. direct로 전환하지 않음. |
 | **Spotlight/Raycast/Alfred** | 한글 쿼리 | 터미널처럼 TSMDocumentAccess 없음→direct deny. 마크드/즉시-커밋, 결과 갱신 시 조합 안 끊김. |
