@@ -91,6 +91,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             // Register fallback: if CGEventTap dies repeatedly, switch to IOKit
             RightCommandSuppressor.shared.onTapFailed = {
                 DebugLogger.log("CGEventTap failed repeatedly — activating IOKit fallback")
+                // RightCommandSuppressor has already removed and disabled its tap.
+                // IOKitManager.start() is idempotent, preserving exactly one owner.
                 IOKitManager.shared.onRightCommandToggle = {
                     InputModeCoordinator.shared.requestToggle(source: .iokitFallback)
                 }

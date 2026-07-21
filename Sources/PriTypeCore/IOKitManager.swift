@@ -19,7 +19,8 @@ import ApplicationServices
 ///
 /// The main entry point (`main.swift`) first attempts to start `RightCommandSuppressor`.
 /// If that fails, `IOKitManager` takes over as the primary toggle handler.
-/// When CGEventTap succeeds, `IOKitManager` runs in passive monitoring mode only.
+/// When CGEventTap succeeds, `IOKitManager` is stopped so only one monitor owns a
+/// physical key press at a time.
 ///
 /// ## Primary Use Cases
 /// - Accessibility permission check (`hasAccessibilityPermission()`)
@@ -90,6 +91,12 @@ public final class IOKitManager: @unchecked Sendable {
             DebugLogger.log("IOKitManager: Already running")
             return true
         }
+
+        // A new ownership lifecycle must not inherit a half-pressed modifier from a
+        // previous IOKit run; otherwise its first key-up could emit a phantom toggle.
+        toggleKeyIsDown = false
+        anyOtherKeyPressed = false
+        hanjaKeyIsDown = false
         
         DebugLogger.log("IOKitManager: Starting IOKit-only toggle detection...")
         
@@ -133,13 +140,16 @@ public final class IOKitManager: @unchecked Sendable {
     
     /// Stop monitoring
     public func stop() {
-        guard let hidManager = manager else { return }
-        
-        IOHIDManagerUnscheduleFromRunLoop(hidManager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
-        IOHIDManagerClose(hidManager, IOOptionBits(kIOHIDOptionsTypeNone))
-        manager = nil
-        
-        DebugLogger.log("IOKitManager: Stopped")
+        if let hidManager = manager {
+            IOHIDManagerUnscheduleFromRunLoop(hidManager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
+            IOHIDManagerClose(hidManager, IOOptionBits(kIOHIDOptionsTypeNone))
+            manager = nil
+            DebugLogger.log("IOKitManager: Stopped")
+        }
+
+        toggleKeyIsDown = false
+        anyOtherKeyPressed = false
+        hanjaKeyIsDown = false
     }
     
     // MARK: - Input Handling

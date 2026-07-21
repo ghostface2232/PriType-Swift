@@ -93,6 +93,15 @@ final class InputSession: @unchecked Sendable {
         adapter = TextDeliveryPolicy.makeAdapter(for: client, context: context)
     }
 
+    /// Establish a composition boundary when a direct-insertion live range no longer
+    /// belongs to the current caret/document. The old preedit is already real text, so
+    /// flushing only resets the Hangul engine; the current key is then composed fresh.
+    func prepareForInput() {
+        guard let direct = adapter as? DirectInsertionAdapter,
+              direct.prepareForInput() else { return }
+        _ = composer.flushCommitString()
+    }
+
     // MARK: Duplicate keyDown suppression
 
     /// Record the keyDown and report whether it is a machine re-delivery of the
@@ -164,13 +173,17 @@ final class InputSession: @unchecked Sendable {
             return false
         }
 
-        // EXPERIMENTAL direct insertion: the in-progress syllable is ALREADY real text
-        // in the document. Re-inserting it here would duplicate the character. Just end
-        // the engine's composition and clear the adapter's live-preedit tracking.
+        // Direct-live text is already in the document, while marked fallback still
+        // needs the canonical IMK commit. Finalization follows adapter STATE rather
+        // than adapter TYPE so fallback text cannot be stranded or lost.
         if let direct = adapter as? DirectInsertionAdapter {
-            _ = composer.flushCommitString()   // flush engine + update buffer; do NOT insert
+            if direct.requiresMarkedTextFinalize {
+                Self.finalizeMarkedComposition(composer: composer, client: client, reason: reason)
+            } else {
+                _ = composer.flushCommitString()   // real text already present; do NOT insert
+            }
             direct.resetPreeditTracking()
-            DebugLogger.log("InputSession: finalize[\(reason.rawValue)] direct-insertion (already in document, no re-insert)")
+            DebugLogger.log("InputSession: finalize[\(reason.rawValue)] direct-insertion state finalized")
             return true
         }
 

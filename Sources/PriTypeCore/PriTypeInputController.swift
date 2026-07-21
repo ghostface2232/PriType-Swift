@@ -392,6 +392,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // settings); make sure the adapter still matches before composing into it.
         session.ensureAdapterMatchesPolicy()
 
+        // A direct-live preedit has no IMK marked range, so caret/document changes
+        // must be detected explicitly before this key mutates the Hangul engine.
+        session.prepareForInput()
+
         // 6. Compose.
         let handled = composer.handle(event, delegate: session.adapter)
         session.recordHandleResult(handled)

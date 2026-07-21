@@ -53,11 +53,8 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     /// Track Control state for Control+Space
     private var controlIsDown = false
     
-    /// Track CGEventTap disable events for auto-recovery
-    private var tapDisableCount = 0
-    private var lastTapDisableTime: CFAbsoluteTime = 0
-    private let maxTapDisableRetries = 3
-    private let tapDisableResetInterval: CFAbsoluteTime = 60  // Reset counter after 60s of stability
+    /// Tracks recovery and makes the CGEventTap → IOKit handoff exactly-once.
+    private var failureTracker = EventTapFailureTracker()
     
     /// Callback for when CGEventTap permanently fails and IOKit should take over
     public var onTapFailed: (@Sendable () -> Void)?
@@ -77,6 +74,9 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     @discardableResult
     public func start() -> Bool {
         guard eventTap == nil else {
+            // Enforce single ownership even if another caller redundantly starts the
+            // primary monitor after an IOKit fallback was active.
+            IOKitManager.shared.stop()
             DebugLogger.log("RightCommandSuppressor: Already running")
             return true
         }
@@ -107,10 +107,16 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             DebugLogger.log("RightCommandSuppressor: Failed to create event tap")
             return false
         }
+
+        failureTracker.reset()
         
         // Add to run loop
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+
+        // CGEventTap now owns keyboard monitoring. Stop a prior hardware fallback
+        // before enabling the tap so a physical press has only one active producer.
+        IOKitManager.shared.stop()
         CGEvent.tapEnable(tap: eventTap, enable: true)
         
         let config = ConfigurationManager.shared
@@ -128,6 +134,9 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         }
         eventTap = nil
         runLoopSource = nil
+        toggleModifierIsDown = false
+        hanjaModifierIsDown = false
+        controlIsDown = false
         DebugLogger.log("RightCommandSuppressor: Stopped")
     }
     
@@ -136,29 +145,23 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         // Re-enable tap if disabled by system
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            let now = CFAbsoluteTimeGetCurrent()
-            
-            // Reset counter if stable for 60+ seconds
-            if now - lastTapDisableTime > tapDisableResetInterval {
-                tapDisableCount = 0
-            }
-            lastTapDisableTime = now
-            tapDisableCount += 1
-            
-            if tapDisableCount >= maxTapDisableRetries {
-                // CGEventTap is repeatedly failing — switch to IOKit backup
-                DebugLogger.log("RightCommandSuppressor: Tap disabled \(tapDisableCount) times, switching to IOKit fallback")
+            switch failureTracker.recordDisable(at: CFAbsoluteTimeGetCurrent()) {
+            case .handoffToIOKit:
+                // Stop/remove the tap before notifying the owner. The callback starts
+                // IOKit on the main queue, so there is never an overlap window.
+                DebugLogger.log("RightCommandSuppressor: Tap repeatedly disabled; stopping before IOKit handoff")
                 let callback = onTapFailed
+                stop()
                 DispatchQueue.main.async {
                     callback?()
                 }
-                // Still try to re-enable in case IOKit also needs it
-            } else {
-                DebugLogger.log("RightCommandSuppressor: Tap disabled (\(tapDisableCount)/\(maxTapDisableRetries)), re-enabling")
-            }
-            
-            if let tap = eventTap {
-                CGEvent.tapEnable(tap: tap, enable: true)
+            case .reenable(let attempt):
+                DebugLogger.log("RightCommandSuppressor: Tap disabled (\(attempt)/\(failureTracker.maxRetries)), re-enabling")
+                if let tap = eventTap {
+                    CGEvent.tapEnable(tap: tap, enable: true)
+                }
+            case .ignore:
+                break
             }
             return Unmanaged.passUnretained(event)
         }
