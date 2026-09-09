@@ -470,6 +470,36 @@ struct DirectInsertionEndToEndTests {
         #expect(client.document == "ㄱ", "Backspace should leave ㄱ in place; got '\(client.document)'")
     }
 
+    @Test("Backspace decomposition stops at the committed boundary")
+    func backspaceStopsAtCommittedBoundary() {
+        let (composer, client) = makeComposer()
+        // Commit 가 with a space, then start a fresh syllable on top of it.
+        for (char, code): (String, UInt16) in [("r", 15), ("k", 40)] {
+            _ = composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: client)
+        }
+        _ = composer.handle(TestEventFactory.keyEvent(char: " ", keyCode: KeyCode.space)!, delegate: client)
+        let committed = client.document
+        #expect(committed.hasPrefix("가"))
+
+        for (char, code): (String, UInt16) in [("s", 1), ("k", 40)] {  // ㄴ, 나
+            _ = composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: client)
+        }
+        #expect(client.document == committed + "나")
+
+        // Decompose the live syllable away entirely. Direct insertion rewrites the
+        // preedit in the document, so the committed prefix must survive intact.
+        _ = composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: client)
+        #expect(client.document == committed + "ㄴ", "got '\(client.document)'")
+        _ = composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: client)
+        #expect(client.document == committed, "preedit removal must not eat committed text; got '\(client.document)'")
+        #expect(!composer.hasActiveComposition)
+
+        // The next backspace has no preedit left to consume, so it passes through
+        // to the host instead of PriType deleting committed text itself.
+        _ = composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: client)
+        #expect(client.document == committed, "got '\(client.document)'")
+    }
+
     @Test("Two committed syllables accumulate correctly")
     func twoSyllables() {
         let (composer, client) = makeComposer()

@@ -153,6 +153,53 @@ struct HangulComposerTests {
         #expect(composer.localTextBuffer == "대")
     }
 
+    @Test("Full preedit decomposition never touches committed text or the document")
+    func backspaceDecompositionKeepsCommittedText() {
+        let (composer, delegate, _) = makeComposer()
+        composer.localTextBuffer = "한글"
+        delegate.fullText = "한글"
+
+        // Build a three-jamo syllable on top of already committed text.
+        for (char, code): (String, UInt16) in [("d", 2), ("k", 40), ("s", 1)] {  // ㅇ, 아, 안
+            #expect(composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: delegate))
+        }
+        #expect(composer.hasActiveComposition)
+
+        // Every backspace consumed by the preedit must leave both the committed
+        // buffer and the host document untouched — only the marked text shrinks.
+        var seenMarked: [String] = []
+        while composer.hasActiveComposition {
+            #expect(composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate))
+            seenMarked.append(delegate.markedText)
+            #expect(composer.localTextBuffer == "한글")
+            #expect(delegate.fullText == "한글")
+        }
+        #expect(seenMarked.count >= 2, "expected stepwise decomposition, saw \(seenMarked)")
+        #expect(delegate.insertedTexts.isEmpty, "decomposition must not commit anything")
+    }
+
+    @Test("Backspace after an empty preedit never deletes host text itself")
+    func backspaceAfterEmptyPreeditDefersToHost() {
+        let (composer, delegate, _) = makeComposer()
+        composer.localTextBuffer = "가나"
+        delegate.fullText = "가나"
+
+        // With nothing composing the key is passed through: the host performs the
+        // deletion. PriType may only trim its own shadow buffer.
+        #expect(!composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate))
+        #expect(composer.localTextBuffer == "가")
+        #expect(delegate.fullText == "가나", "PriType must not delete host text on a passed-through backspace")
+
+        #expect(!composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate))
+        #expect(composer.localTextBuffer.isEmpty)
+        #expect(delegate.fullText == "가나")
+
+        // Underflow must stay safe once the shadow buffer is exhausted.
+        #expect(!composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate))
+        #expect(composer.localTextBuffer.isEmpty)
+        #expect(delegate.fullText == "가나")
+    }
+
     @Test("Idle Korean Space reaches host shortcuts")
     func idleSpacePassThrough() {
         let (composer, delegate, _) = makeComposer()
