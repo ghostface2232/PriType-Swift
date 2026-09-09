@@ -70,10 +70,16 @@ struct HIDShortcutState {
 
     static func timestamp() -> TimeInterval { Date().timeIntervalSinceReferenceDate }
 
-    mutating func removeDevice(_ device: UInt64) {
-        held = held.filter { $0.key.device != device }
-        // Disconnection is not a release and must never complete a toggle.
-        if pendingToggle?.device == device { pendingToggle = nil }
+    /// Drop every press when any keyboard is unplugged. Per-device cleanup would
+    /// need the removal callback's device to resolve to the same identity as the
+    /// input callback's, which cannot be verified without physically detaching a
+    /// keyboard, so do not depend on it: clearing everything needs no such match.
+    /// The cost is that unplugging one keyboard forgets what another was holding,
+    /// which the next transition on that keyboard restores. Disconnection is not
+    /// a release and must never complete a toggle, so the pending tap goes too.
+    mutating func handleDeviceRemoval() {
+        held.removeAll()
+        pendingToggle = nil
     }
 
     mutating func consume(usage: UInt32, pressed: Bool, device: UInt64 = 0,

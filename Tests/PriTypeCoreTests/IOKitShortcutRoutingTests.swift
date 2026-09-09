@@ -136,7 +136,7 @@ struct IOKitShortcutRoutingTests {
         var state = HIDShortcutState()
         #expect(press(&state, HIDUsage.a, true, device: 7,
                       toggle: rightCommandBinding, hanja: rightOptionBinding) == nil)
-        state.removeDevice(7)
+        state.handleDeviceRemoval()
         // The stale `A` must no longer count as an ordinary key held down.
         #expect(press(&state, HIDUsage.rightCommand, true, device: 1,
                       toggle: rightCommandBinding, hanja: rightOptionBinding) == nil)
@@ -243,9 +243,23 @@ struct IOKitShortcutRoutingTests {
         var state = HIDShortcutState()
         #expect(press(&state, HIDUsage.rightCommand, true, device: 7,
                       toggle: rightCommandBinding, hanja: rightOptionBinding) == nil)
-        state.removeDevice(7)
+        state.handleDeviceRemoval()
         #expect(press(&state, HIDUsage.rightCommand, false, device: 7,
                       toggle: rightCommandBinding, hanja: rightOptionBinding) == nil)
+    }
+
+    @Test("A keyboard still attached keeps working after another is unplugged")
+    func otherKeyboardRecoversAfterRemoval() {
+        var state = HIDShortcutState()
+        // Clearing every press is deliberate: identifying which keyboard went
+        // away would need the removal and input callbacks to agree on identity.
+        #expect(press(&state, HIDUsage.rightCommand, true, device: 2,
+                      toggle: rightCommandBinding, hanja: rightOptionBinding) == nil)
+        state.handleDeviceRemoval()
+        #expect(press(&state, HIDUsage.rightCommand, true, device: 2,
+                      toggle: rightCommandBinding, hanja: rightOptionBinding) == nil)
+        #expect(press(&state, HIDUsage.rightCommand, false, device: 2,
+                      toggle: rightCommandBinding, hanja: rightOptionBinding) == .toggle)
     }
 
     @Test("Rebinding mid-press drops the pending tap")

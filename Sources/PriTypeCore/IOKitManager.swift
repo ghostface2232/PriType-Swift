@@ -94,10 +94,10 @@ public final class IOKitManager: @unchecked Sendable {
             manager.handleInputValue(value)
         }, context)
         
-        IOHIDManagerRegisterDeviceRemovalCallback(hidManager, { context, _, _, device in
+        IOHIDManagerRegisterDeviceRemovalCallback(hidManager, { context, _, _, _ in
             guard let context else { return }
             let owner = Unmanaged<IOKitManager>.fromOpaque(context).takeUnretainedValue()
-            owner.shortcutState.removeDevice(UInt64(IOHIDDeviceGetService(device)))
+            owner.shortcutState.handleDeviceRemoval()
         }, context)
 
         // Schedule with current run loop (like Gureum)
@@ -129,6 +129,17 @@ public final class IOKitManager: @unchecked Sendable {
     }
     
     // MARK: - Input Handling
+
+    /// Identifies the keyboard an event came from. The manager retains its
+    /// IOHIDDevice objects for as long as the devices are present, so the
+    /// object's address distinguishes two keyboards holding the same key.
+    /// IOHIDDeviceGetService is the wrong key for this: it can be
+    /// MACH_PORT_NULL, which collapses every such keyboard onto one identity,
+    /// and mach port names are recycled once freed.
+    private static func identity(of device: IOHIDDevice) -> UInt64 {
+        UInt64(UInt(bitPattern: Unmanaged.passUnretained(device).toOpaque()))
+    }
+
     
     private func handleInputValue(_ value: IOHIDValue) {
         let element = IOHIDValueGetElement(value)
@@ -144,8 +155,8 @@ public final class IOKitManager: @unchecked Sendable {
         // arrive as ordinary elements and would otherwise be tracked as held keys.
         guard usage >= 0x04, usage <= 0xE7 else { return }
         
-        let device = IOHIDElementGetDevice(element)
-        handleKeyboardEvent(usage: usage, pressed: pressed, device: UInt64(IOHIDDeviceGetService(device)))
+        handleKeyboardEvent(usage: usage, pressed: pressed,
+                            device: Self.identity(of: IOHIDElementGetDevice(element)))
     }
 
     /// Internal entry point for hardware-event tests without opening devices.
