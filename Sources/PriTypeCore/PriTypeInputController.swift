@@ -94,8 +94,15 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         Self.sharedController = self
         if let pending = pendingSystemMode {
             pendingSystemMode = nil
-            if let mode = pending.resolve(currentRevision: composer.modeSelectionRevision), composer.inputMode != mode {
-                session?.finalize(reason: .systemModeSwitch)
+            if let mode = pending.resolve(currentRevision: composer.modeSelectionRevision) {
+                // Finalize only on a real mode change, but ALWAYS re-select: the
+                // selection bumps `modeSelectionRevision`, which is what retires the
+                // other controllers' pending values. Skipping the call for a no-op
+                // mode would leave an older pending (e.g. English) still resolvable,
+                // so a late-activating stale controller could re-apply it.
+                if composer.inputMode != mode {
+                    session?.finalize(reason: .systemModeSwitch)
+                }
                 composer.setInputMode(mode)
             }
         }

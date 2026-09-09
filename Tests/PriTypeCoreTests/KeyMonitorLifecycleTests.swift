@@ -105,4 +105,24 @@ struct ToggleRecoveryEventTests {
         composer.setInputMode(.korean)
         #expect(pending.resolve(currentRevision: composer.modeSelectionRevision) == nil)
     }
+
+    @Test("Applying a pending mode equal to the current one still retires older pendings")
+    func sameModePendingStillBumpsRevision() throws {
+        let composer = HangulComposer(statusBar: MockStatusBar(), configuration: MockConfiguration())
+        #expect(composer.inputMode == .korean)
+        // An old English value and a newer Korean value are both parked while
+        // neither controller owns the engine, so both carry the same revision.
+        let staleEnglish = DeferredInputMode(mode: .english, revision: composer.modeSelectionRevision)
+        let recentKorean = DeferredInputMode(mode: .korean, revision: composer.modeSelectionRevision)
+
+        // The newer controller activates first. Korean is already the current mode,
+        // but applying it must still count as an explicit selection.
+        let resolvedKorean = recentKorean.resolve(currentRevision: composer.modeSelectionRevision)
+        #expect(resolvedKorean == .korean)
+        composer.setInputMode(try #require(resolvedKorean))
+
+        // The older controller activates afterwards; its English value is now stale.
+        #expect(staleEnglish.resolve(currentRevision: composer.modeSelectionRevision) == nil)
+        #expect(composer.inputMode == .korean)
+    }
 }
