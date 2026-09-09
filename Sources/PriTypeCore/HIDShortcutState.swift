@@ -56,9 +56,17 @@ struct HIDShortcutState {
     /// a stuck modifier makes its bare trigger key match a combo binding.
     static let holdExpiry: TimeInterval = 30
 
+    /// A duplicate hanja trigger does not reopen the candidate window, it closes
+    /// it — `triggerHanjaLookup` toggles. The CGEventTap path has debounced this
+    /// since v2.3.0 because Right Option can report several DOWN transitions in
+    /// quick succession; mirror it so a fallback monitor cannot resurrect the
+    /// open-then-immediately-dismiss bug. Ordinary keys are left alone there too.
+    static let hanjaDebounce: TimeInterval = 0.5
+
     private var held: [Key: TimeInterval] = [:]
     private var pendingToggle: Key?
     private var lastBindings: [KeyBinding] = []
+    private var lastHanja: TimeInterval?
 
     static func timestamp() -> TimeInterval { Date().timeIntervalSinceReferenceDate }
 
@@ -110,8 +118,10 @@ struct HIDShortcutState {
             }
             return .toggle
         }
-        if matches(hanja) { return .hanja }
-        return nil
+        guard matches(hanja) else { return nil }
+        if hanja.isModifierKey, let last = lastHanja, now - last < Self.hanjaDebounce { return nil }
+        lastHanja = now
+        return .hanja
     }
 
     private mutating func expireStaleHolds(before cutoff: TimeInterval) {

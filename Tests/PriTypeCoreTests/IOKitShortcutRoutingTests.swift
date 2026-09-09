@@ -186,6 +186,38 @@ struct IOKitShortcutRoutingTests {
                       hanja: rightOptionBinding, at: HIDShortcutState.holdExpiry + 1) == nil)
     }
 
+    @Test("A modifier hanja key is debounced")
+    func modifierHanjaIsDebounced() {
+        var state = HIDShortcutState()
+        let debounce = HIDShortcutState.hanjaDebounce
+        #expect(press(&state, HIDUsage.rightOption, true, toggle: f13Binding,
+                      hanja: rightOptionBinding, at: 0) == .hanja)
+        #expect(press(&state, HIDUsage.rightOption, false, toggle: f13Binding,
+                      hanja: rightOptionBinding, at: debounce / 4) == nil)
+        // A duplicate DOWN would dismiss the candidate window that just opened.
+        #expect(press(&state, HIDUsage.rightOption, true, toggle: f13Binding,
+                      hanja: rightOptionBinding, at: debounce / 2) == nil)
+        #expect(press(&state, HIDUsage.rightOption, false, toggle: f13Binding,
+                      hanja: rightOptionBinding, at: debounce / 2) == nil)
+        #expect(press(&state, HIDUsage.rightOption, true, toggle: f13Binding,
+                      hanja: rightOptionBinding, at: debounce + 0.1) == .hanja)
+    }
+
+    @Test("An ordinary hanja key is not debounced")
+    func ordinaryHanjaIsNotDebounced() {
+        var state = HIDShortcutState()
+        // The CGEventTap path debounces its flagsChanged branch only, so an
+        // ordinary or combo binding must stay responsive on both monitors.
+        #expect(press(&state, HIDUsage.rightOption, true, toggle: f13Binding,
+                      hanja: optionSpaceBinding, at: 0) == nil)
+        #expect(press(&state, HIDUsage.space, true, toggle: f13Binding,
+                      hanja: optionSpaceBinding, at: 0) == .hanja)
+        #expect(press(&state, HIDUsage.space, false, toggle: f13Binding,
+                      hanja: optionSpaceBinding, at: 0.05) == nil)
+        #expect(press(&state, HIDUsage.space, true, toggle: f13Binding,
+                      hanja: optionSpaceBinding, at: 0.1) == .hanja)
+    }
+
     @Test("Every bare-bindable key has a HID usage")
     func mappingCoversBareBindableKeys() {
         for keyCode in Int64(0)...127 {
