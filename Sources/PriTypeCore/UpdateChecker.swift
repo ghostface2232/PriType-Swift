@@ -222,11 +222,35 @@ public final class UpdateChecker: @unchecked Sendable {
             }
     }
 
-    /// Check if `latest` is newer than `current` using numeric comparison
+    /// Check if `latest` is strictly newer than `current`.
     ///
-    /// Uses Foundation's `.numeric` comparison option which correctly handles
-    /// dotted version strings (e.g. "2.1" > "2.0.0", "2.10" > "2.9")
+    /// Compares dotted versions component by component, treating missing trailing
+    /// components as zero. A plain `.numeric` string compare cannot do this: it
+    /// ranks "2.1.0" above "2.1" because the shorter string is a prefix, which made
+    /// a `2.1.0` tag advertise an update to a machine already running `2.1`.
+    /// Component-wise comparison also makes "2.01" == "2.1" and "2.10" > "2.9".
     static func isNewer(_ latest: String, than current: String) -> Bool {
-        return latest.compare(current, options: .numeric) == .orderedDescending
+        let lhs = versionComponents(latest)
+        let rhs = versionComponents(current)
+        for index in 0..<max(lhs.count, rhs.count) {
+            let l = index < lhs.count ? lhs[index] : 0
+            let r = index < rhs.count ? rhs[index] : 0
+            if l != r { return l > r }
+        }
+        return false
+    }
+
+    /// Split a normalized version into numeric components.
+    ///
+    /// Non-numeric or overflowing segments degrade to 0 rather than throwing the
+    /// whole comparison away, so a malformed upstream tag can never be ranked
+    /// above a well-formed running version.
+    static func versionComponents(_ version: String) -> [Int] {
+        normalizeVersion(version)
+            .split(separator: ".", omittingEmptySubsequences: false)
+            .map { segment in
+                let digits = segment.prefix { $0.isNumber }
+                return Int(digits) ?? 0
+            }
     }
 }

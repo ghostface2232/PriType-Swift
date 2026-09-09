@@ -47,6 +47,49 @@ struct UpdateCheckerTests {
         #expect(!UpdateChecker.isNewer("2.4", than: "2.5"))
     }
 
+    @Test("Version comparison: differing component counts compare as equal-padded")
+    func componentCountBoundaries() {
+        // A "2.1.0" tag must NOT advertise an update to a machine running "2.1";
+        // trailing components are zero-padded rather than making the longer
+        // string win by prefix ordering.
+        #expect(!UpdateChecker.isNewer("2.1.0", than: "2.1"))
+        #expect(!UpdateChecker.isNewer("2.1", than: "2.1.0"))
+        #expect(!UpdateChecker.isNewer("2.1.0.0", than: "2.1"))
+        #expect(!UpdateChecker.isNewer("2", than: "2.0.0"))
+        // A real trailing bump is still newer in both directions.
+        #expect(UpdateChecker.isNewer("2.1.1", than: "2.1"))
+        #expect(!UpdateChecker.isNewer("2.1", than: "2.1.1"))
+    }
+
+    @Test("Version comparison: numeric segments beat lexicographic order")
+    func numericSegmentOrdering() {
+        #expect(UpdateChecker.isNewer("2.10", than: "2.9"))
+        #expect(!UpdateChecker.isNewer("2.9", than: "2.10"))
+        #expect(UpdateChecker.isNewer("10.0", than: "9.9"))
+        // Zero-padded segments are numerically equal, not distinct versions.
+        #expect(!UpdateChecker.isNewer("2.01", than: "2.1"))
+        #expect(!UpdateChecker.isNewer("2.1", than: "2.01"))
+    }
+
+    @Test("Version comparison: malformed tags never outrank a running version")
+    func malformedTagsAreNotNewer() {
+        #expect(!UpdateChecker.isNewer("", than: "2.4.2"))
+        #expect(!UpdateChecker.isNewer("abc", than: "2.4.2"))
+        #expect(!UpdateChecker.isNewer("..", than: "2.4.2"))
+        #expect(!UpdateChecker.isNewer("2.4.2-beta.9", than: "2.4.2"))
+        #expect(!UpdateChecker.isNewer("v2.4.2+build7", than: "2.4.2"))
+        // A malformed segment degrades to 0 instead of discarding the comparison.
+        #expect(UpdateChecker.isNewer("2.5.x", than: "2.4.9"))
+    }
+
+    @Test("Version components parse normalized numeric segments")
+    func versionComponentsParsing() {
+        #expect(UpdateChecker.versionComponents("v2.4.2-beta.1") == [2, 4, 2])
+        #expect(UpdateChecker.versionComponents("2.10") == [2, 10])
+        #expect(UpdateChecker.versionComponents("2.4.2+meta") == [2, 4, 2])
+        #expect(UpdateChecker.versionComponents("abc") == [0])
+    }
+
     @Test("Version normalization removes tag prefix and prerelease suffix")
     func versionNormalization() {
         #expect(UpdateChecker.normalizeVersion("v3.0.0-beta.1") == "3.0.0")
