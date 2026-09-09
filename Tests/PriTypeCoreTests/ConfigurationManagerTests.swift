@@ -166,12 +166,30 @@ struct ConfigurationManagerTests {
 @Suite("KeyBinding defaults migration")
 struct KeyBindingMigrationTests {
 
+    private let toggleKey = "com.pritype.toggleKeyBinding"
+    private let hanjaKey = "com.pritype.hanjaKeyBinding"
+    private let legacyKey = "com.pritype.toggleKey"
+
     /// Scratch domain so the migration never touches the developer's real defaults.
-    private func makeDefaults(_ name: String) -> UserDefaults {
+    ///
+    /// Scoped, not merely created: without the teardown every run left a populated
+    /// plist in ~/Library/Preferences forever (the suite name carries a fresh
+    /// UUID), and those files held real binding data. `removeSuite` is what
+    /// actually detaches the domain — `removePersistentDomain` alone leaves a stub.
+    private func withScratchDefaults(_ name: String, _ body: (UserDefaults) -> Void) {
         let suite = "com.pritype.tests.\(name).\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
-        return defaults
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            UserDefaults.standard.removeSuite(named: suite)
+            // removeSuite detaches the domain but cfprefsd still leaves the plist on
+            // disk; delete it so scratch suites do not accumulate in ~/Library/Preferences.
+            let plist = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Preferences/\(suite).plist")
+            try? FileManager.default.removeItem(at: plist)
+        }
+        body(defaults)
     }
 
     private func storedBinding(_ defaults: UserDefaults, _ key: String) -> KeyBinding? {
@@ -181,62 +199,96 @@ struct KeyBindingMigrationTests {
 
     @Test("Legacy toggleKey is written out as a KeyBinding and then dropped")
     func legacyToggleKeyIsPersisted() {
-        let defaults = makeDefaults("legacy")
-        defaults.set(ToggleKey.controlSpace.rawValue, forKey: "com.pritype.toggleKey")
+        withScratchDefaults("legacy") { defaults in
+            defaults.set(ToggleKey.controlSpace.rawValue, forKey: legacyKey)
 
-        #expect(ConfigurationManager.migrateKeyBindings(in: defaults))
+            #expect(ConfigurationManager.migrateKeyBindings(in: defaults))
 
-        let migrated = storedBinding(defaults, "com.pritype.toggleKeyBinding")
-        #expect(migrated?.keyCode == ToggleKey.controlSpace.asKeyBinding.keyCode)
-        #expect(migrated?.modifiers == ToggleKey.controlSpace.asKeyBinding.modifiers)
-        // The legacy key has no readers left; leaving it would let it resurface.
-        #expect(defaults.object(forKey: "com.pritype.toggleKey") == nil)
+            let migrated = storedBinding(defaults, toggleKey)
+            #expect(migrated?.keyCode == ToggleKey.controlSpace.asKeyBinding.keyCode)
+            #expect(migrated?.modifiers == ToggleKey.controlSpace.asKeyBinding.modifiers)
+            // The legacy key has no readers left; leaving it would let it resurface.
+            #expect(defaults.object(forKey: legacyKey) == nil)
+        }
     }
 
     @Test("Migration is idempotent and leaves an explicit binding alone")
     func migrationIsIdempotent() {
-        let defaults = makeDefaults("idempotent")
-        let chosen = KeyBinding(keyCode: 122, modifiers: 0, displayName: "F1")
-        defaults.set(try! JSONEncoder().encode(chosen), forKey: "com.pritype.toggleKeyBinding")
+        withScratchDefaults("idempotent") { defaults in
+            let chosen = KeyBinding(keyCode: 122, modifiers: 0, displayName: "F1")
+            defaults.set(try! JSONEncoder().encode(chosen), forKey: toggleKey)
 
-        #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
-        #expect(storedBinding(defaults, "com.pritype.toggleKeyBinding")?.keyCode == 122)
-        #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
+            #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
+            #expect(storedBinding(defaults, toggleKey)?.keyCode == 122)
+            #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
+        }
     }
 
     @Test("A stored binding is preferred over a leftover legacy value")
     func storedBindingWinsOverLegacy() {
-        let defaults = makeDefaults("both")
-        let chosen = KeyBinding(keyCode: 122, modifiers: 0, displayName: "F1")
-        defaults.set(try! JSONEncoder().encode(chosen), forKey: "com.pritype.toggleKeyBinding")
-        defaults.set(ToggleKey.controlSpace.rawValue, forKey: "com.pritype.toggleKey")
+        withScratchDefaults("both") { defaults in
+            let chosen = KeyBinding(keyCode: 122, modifiers: 0, displayName: "F1")
+            defaults.set(try! JSONEncoder().encode(chosen), forKey: toggleKey)
+            defaults.set(ToggleKey.controlSpace.rawValue, forKey: legacyKey)
 
-        #expect(ConfigurationManager.migrateKeyBindings(in: defaults))
-        #expect(storedBinding(defaults, "com.pritype.toggleKeyBinding")?.keyCode == 122)
-        #expect(defaults.object(forKey: "com.pritype.toggleKey") == nil)
+            #expect(ConfigurationManager.migrateKeyBindings(in: defaults))
+            #expect(storedBinding(defaults, toggleKey)?.keyCode == 122)
+            #expect(defaults.object(forKey: legacyKey) == nil)
+        }
+    }
+
+    @Test("An unreadable blob falls back to the legacy value, not to the default")
+    func corruptBlobRecoversFromLegacy() {
+        withScratchDefaults("corrupt") { defaults in
+            // The getter treats "undecodable" and "absent" identically and uses the
+            // legacy enum for both, so the running app was on Control+Space.
+            // Splitting on `data != nil` would overwrite it with Right Command and
+            // then delete the legacy key — silent, irrecoverable preference loss.
+            defaults.set(Data("not json".utf8), forKey: toggleKey)
+            defaults.set(ToggleKey.controlSpace.rawValue, forKey: legacyKey)
+
+            #expect(ConfigurationManager.migrateKeyBindings(in: defaults))
+            let migrated = storedBinding(defaults, toggleKey)
+            #expect(migrated?.keyCode == ToggleKey.controlSpace.asKeyBinding.keyCode)
+            #expect(migrated?.keyCode != KeyBinding.defaultToggle.keyCode)
+            #expect(defaults.object(forKey: legacyKey) == nil)
+        }
     }
 
     @Test("Unsafe and unreadable stored bindings are repaired on disk")
     func unsafeStoredBindingsAreRepaired() {
-        let defaults = makeDefaults("unsafe")
-        // A bare letter key would swallow ordinary typing globally.
-        let unsafe = KeyBinding(keyCode: 0, modifiers: 0, displayName: "A")
-        #expect(!unsafe.isSafeGlobalBinding)
-        defaults.set(try! JSONEncoder().encode(unsafe), forKey: "com.pritype.toggleKeyBinding")
-        defaults.set(Data("not json".utf8), forKey: "com.pritype.hanjaKeyBinding")
+        withScratchDefaults("unsafe") { defaults in
+            // A bare letter key would swallow ordinary typing globally.
+            let unsafe = KeyBinding(keyCode: 0, modifiers: 0, displayName: "A")
+            #expect(!unsafe.isSafeGlobalBinding)
+            defaults.set(try! JSONEncoder().encode(unsafe), forKey: toggleKey)
+            defaults.set(Data("not json".utf8), forKey: hanjaKey)
 
-        #expect(ConfigurationManager.migrateKeyBindings(in: defaults))
-        #expect(storedBinding(defaults, "com.pritype.toggleKeyBinding")?.keyCode == KeyBinding.defaultToggle.keyCode)
-        #expect(storedBinding(defaults, "com.pritype.hanjaKeyBinding")?.keyCode == KeyBinding.defaultHanja.keyCode)
-        // Repaired values are now safe, so a second pass is a no-op.
-        #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
+            #expect(ConfigurationManager.migrateKeyBindings(in: defaults))
+            #expect(storedBinding(defaults, toggleKey)?.keyCode == KeyBinding.defaultToggle.keyCode)
+            #expect(storedBinding(defaults, hanjaKey)?.keyCode == KeyBinding.defaultHanja.keyCode)
+            // Repaired values are now safe, so a second pass is a no-op.
+            #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
+        }
+    }
+
+    @Test("An unreadable blob with no legacy source falls back to the default")
+    func corruptBlobWithoutLegacyUsesDefault() {
+        withScratchDefaults("corruptOnly") { defaults in
+            defaults.set(Data("not json".utf8), forKey: toggleKey)
+
+            #expect(ConfigurationManager.migrateKeyBindings(in: defaults))
+            #expect(storedBinding(defaults, toggleKey)?.keyCode == KeyBinding.defaultToggle.keyCode)
+            #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
+        }
     }
 
     @Test("A clean install needs no migration")
     func cleanInstallIsUntouched() {
-        let defaults = makeDefaults("clean")
-        #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
-        #expect(defaults.data(forKey: "com.pritype.toggleKeyBinding") == nil)
+        withScratchDefaults("clean") { defaults in
+            #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
+            #expect(defaults.data(forKey: toggleKey) == nil)
+        }
     }
 }
 

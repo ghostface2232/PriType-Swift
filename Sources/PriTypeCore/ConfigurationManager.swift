@@ -585,23 +585,33 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     static func migrateKeyBindings(in defaults: UserDefaults) -> Bool {
         var changed = false
 
-        // Toggle: repair an unusable stored value, else adopt the legacy enum.
-        if let data = defaults.data(forKey: Keys.toggleKeyBinding) {
-            let decoded = try? JSONDecoder().decode(KeyBinding.self, from: data)
-            if decoded?.isSafeGlobalBinding != true {
-                store(.defaultToggle, forKey: Keys.toggleKeyBinding, in: defaults)
-                changed = true
+        // Toggle. The three cases must resolve exactly as the getter does, or the
+        // migration would persist something the running app was not using.
+        let storedToggle = defaults.data(forKey: Keys.toggleKeyBinding)
+            .flatMap { try? JSONDecoder().decode(KeyBinding.self, from: $0) }
+        if let storedToggle {
+            // Decodable but unusable ⇒ repair to the default.
+            if !storedToggle.isSafeGlobalBinding {
+                changed = store(.defaultToggle, forKey: Keys.toggleKeyBinding, in: defaults) || changed
             }
         } else if let rawValue = defaults.string(forKey: Keys.toggleKey) {
+            // Absent OR undecodable, with a legacy value present. The getter falls
+            // back to the legacy enum in BOTH cases, so the migration must too —
+            // splitting on `data != nil` would overwrite a user's Control+Space
+            // with the default and then delete the legacy key that proved it.
             let legacy = ToggleKey(rawValue: rawValue)?.asKeyBinding ?? .defaultToggle
-            store(legacy.isSafeGlobalBinding ? legacy : .defaultToggle,
-                  forKey: Keys.toggleKeyBinding, in: defaults)
-            changed = true
+            changed = store(legacy.isSafeGlobalBinding ? legacy : .defaultToggle,
+                            forKey: Keys.toggleKeyBinding, in: defaults) || changed
+        } else if defaults.data(forKey: Keys.toggleKeyBinding) != nil {
+            // Undecodable with no legacy source to recover from.
+            changed = store(.defaultToggle, forKey: Keys.toggleKeyBinding, in: defaults) || changed
         }
 
-        // The legacy key has no readers left once a binding is stored.
-        if defaults.data(forKey: Keys.toggleKeyBinding) != nil,
-           defaults.object(forKey: Keys.toggleKey) != nil {
+        // Drop the legacy key only once a DECODABLE binding stands in for it.
+        // Removing it next to an unreadable blob would destroy the preference.
+        let toggleNowReadable = defaults.data(forKey: Keys.toggleKeyBinding)
+            .flatMap { try? JSONDecoder().decode(KeyBinding.self, from: $0) } != nil
+        if toggleNowReadable, defaults.object(forKey: Keys.toggleKey) != nil {
             defaults.removeObject(forKey: Keys.toggleKey)
             changed = true
         }
@@ -610,17 +620,21 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         if let data = defaults.data(forKey: Keys.hanjaKeyBinding) {
             let decoded = try? JSONDecoder().decode(KeyBinding.self, from: data)
             if decoded?.isSafeGlobalBinding != true {
-                store(.defaultHanja, forKey: Keys.hanjaKeyBinding, in: defaults)
-                changed = true
+                changed = store(.defaultHanja, forKey: Keys.hanjaKeyBinding, in: defaults) || changed
             }
         }
 
         return changed
     }
 
-    private static func store(_ binding: KeyBinding, forKey key: String, in defaults: UserDefaults) {
-        guard let data = try? JSONEncoder().encode(binding) else { return }
+    /// - Returns: `true` only if the value actually reached `defaults`. Reporting a
+    ///   change that did not happen would let the caller drop the legacy key on the
+    ///   strength of a binding that was never written.
+    @discardableResult
+    private static func store(_ binding: KeyBinding, forKey key: String, in defaults: UserDefaults) -> Bool {
+        guard let data = try? JSONEncoder().encode(binding) else { return false }
         defaults.set(data, forKey: key)
+        return true
     }
 
     // MARK: - Convenience Properties
