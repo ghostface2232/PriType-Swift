@@ -82,54 +82,100 @@ public final class InputSourceManager: @unchecked Sendable {
         return sources.contains { $0.id.contains("US") || $0.name == "U.S." }
     }
 
+    /// Keys whose sanitized copies must land together or not at all.
+    static let managedInputSourceKeys = [
+        "AppleEnabledInputSources",
+        "AppleSelectedInputSources",
+        "AppleInputSourceHistory"
+    ]
+
+    /// Outcome of an explicit input-source cleanup.
+    ///
+    /// Cleanup rewrites system preferences, so callers need to know whether the
+    /// write actually landed — HIToolbox defaults can silently reject or drop a
+    /// write, which is how a "removed" entry appears to come back.
+    public enum CleanupResult: Equatable {
+        /// Preferences already matched the sanitized form; nothing was written.
+        case noChangeNeeded
+        /// Every managed key was written and verified by re-reading it.
+        case cleaned(keys: [String])
+        /// Nothing was left changed: either no write was attempted, or the
+        /// verification failed and the originals were restored.
+        case failed(reason: String)
+    }
+
     /// Remove stale legacy entries without enabling or selecting input sources.
     ///
     /// This intentionally does not enable PriType itself. Calling
     /// `TISEnableInputSource` for the running input method can make macOS show
     /// an "add input source" confirmation again on startup.
-    public func cleanupStaleInputSources() {
+    ///
+    /// This is an explicit maintenance action, not a startup step: PriType must not
+    /// rewrite HIToolbox snapshots on every launch (see ARCHITECTURE). The write is
+    /// all-or-nothing across `managedInputSourceKeys` and is verified by re-reading
+    /// each key; on any mismatch the originals are restored so a partial rewrite can
+    /// never be left behind.
+    @discardableResult
+    public func cleanupStaleInputSources() -> CleanupResult {
         guard let defaults = UserDefaults(suiteName: "com.apple.HIToolbox") else {
             DebugLogger.log("InputSourceManager: failed to open HIToolbox defaults")
-            return
+            return .failed(reason: "HIToolbox defaults unavailable")
         }
-
-        var enabledSources = defaults.array(forKey: "AppleEnabledInputSources") as? [[String: Any]] ?? []
-        let originalEnabledSources = enabledSources
-
-        enabledSources = Self.sanitizedInputSources(
-            enabledSources,
-            removeAppleKoreanInputModes: false,
-            allowsPriTypeParentEntry: true
-        )
-
-        var didChange = !Self.inputSourcesEqual(enabledSources, originalEnabledSources)
-        if didChange {
-            defaults.set(enabledSources, forKey: "AppleEnabledInputSources")
+        let result = Self.cleanupStaleInputSources(in: defaults)
+        switch result {
+        case .noChangeNeeded:
+            DebugLogger.log("InputSourceManager: Apple ABC and legacy input-source cleanup already current")
+        case .cleaned(let keys):
+            CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
+            DebugLogger.log("InputSourceManager: cleaned stale PriType input-source entries (\(keys.joined(separator: ", ")))")
+        case .failed(let reason):
+            DebugLogger.log("InputSourceManager: input-source cleanup failed and was rolled back — \(reason)")
         }
+        return result
+    }
 
-        for key in ["AppleSelectedInputSources", "AppleInputSourceHistory"] {
-            guard let originalSources = defaults.array(forKey: key) as? [[String: Any]] else {
-                continue
-            }
-            let sanitizedSources = Self.sanitizedInputSources(
-                originalSources,
+    /// Pure defaults-level cleanup, separated so it can be exercised against a
+    /// scratch domain instead of the live HIToolbox preferences.
+    static func cleanupStaleInputSources(in defaults: UserDefaults) -> CleanupResult {
+        // 1. Plan every write before touching anything.
+        var originals: [String: [[String: Any]]] = [:]
+        var planned: [String: [[String: Any]]] = [:]
+
+        for key in managedInputSourceKeys {
+            guard let original = defaults.array(forKey: key) as? [[String: Any]] else { continue }
+            let sanitized = sanitizedInputSources(
+                original,
                 removeAppleKoreanInputModes: false,
                 allowsPriTypeParentEntry: true
             )
-            if !Self.inputSourcesEqual(sanitizedSources, originalSources) {
-                defaults.set(sanitizedSources, forKey: key)
-                didChange = true
+            originals[key] = original
+            if !inputSourcesEqual(sanitized, original) {
+                planned[key] = sanitized
             }
         }
 
-        guard didChange else {
-            DebugLogger.log("InputSourceManager: Apple ABC and legacy input-source cleanup already current")
-            return
+        guard !planned.isEmpty else { return .noChangeNeeded }
+
+        // 2. Apply the whole plan, then force it out before reading back.
+        for (key, sanitized) in planned {
+            defaults.set(sanitized, forKey: key)
+        }
+        defaults.synchronize()
+
+        // 3. Verify by re-reading. A key that did not take the write is a failure
+        //    for the whole operation, not a partial success.
+        for (key, expected) in planned {
+            let actual = defaults.array(forKey: key) as? [[String: Any]]
+            guard let actual, inputSourcesEqual(actual, expected) else {
+                for (rollbackKey, original) in originals where planned[rollbackKey] != nil {
+                    defaults.set(original, forKey: rollbackKey)
+                }
+                defaults.synchronize()
+                return .failed(reason: "verification failed for \(key)")
+            }
         }
 
-        defaults.synchronize()
-        CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
-        DebugLogger.log("InputSourceManager: cleaned stale PriType input-source entries")
+        return .cleaned(keys: planned.keys.sorted())
     }
 
     private static func inputSourcesEqual(_ lhs: [[String: Any]], _ rhs: [[String: Any]]) -> Bool {
