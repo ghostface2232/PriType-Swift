@@ -114,6 +114,7 @@ struct SettingsView: View {
     @State private var removeABCStatus: RemoveABCStatus = .idle
     // Pending status reset, replaced on each finish so timers cannot interleave.
     @State private var removeABCResetWorkItem: DispatchWorkItem?
+    @State private var removeABCTask: Task<Void, Never>?
 
     // Experimental Windows-style direct insertion (Phase 3). Default OFF.
     @State private var experimentalDirectInsertion = false
@@ -183,6 +184,11 @@ struct SettingsView: View {
             Text(L10n.keyBinding.capsLockBlockedMessage)
         }
         .onDisappear {
+            removeABCTask?.cancel()
+            removeABCTask = nil
+            removeABCResetWorkItem?.cancel()
+            removeABCResetWorkItem = nil
+            removeABCStatus = .idle
             accessibilityPollTimer?.invalidate()
             accessibilityPollTimer = nil
         }
@@ -746,39 +752,29 @@ struct SettingsView: View {
     /// preferences and then confirmed against live TIS state before the UI claims
     /// success.
     private func removeABCKeyboard() {
-        guard removeABCStatus != .working else { return }  // no overlapping attempts
+        guard removeABCStatus != .working else { return }
+        removeABCResetWorkItem?.cancel()
+        removeABCResetWorkItem = nil
         withAnimation { removeABCStatus = .working }
 
-        switch InputSourceManager.shared.disableABCKeyboardLayout() {
-        case .failed(let reason):
-            DebugLogger.log("SettingsView: disable ABC failed — \(reason)")
-            finishRemoveABC(.error)
-        case .alreadyAbsent:
-            // The preference-level end state is already what the user asked for, so
-            // this is a success regardless of what TIS says. Reporting failure here
-            // would blame the user's action for a stale system list.
-            finishRemoveABC(.success)
-        case .removed:
-            confirmABCDisabled(deadline: Date().addingTimeInterval(3))
-        }
-    }
-
-    /// Poll TIS until it agrees the layout is gone, or the deadline expires.
-    ///
-    /// A single fixed sample is not a sound basis for a verdict: propagation runs
-    /// through cfprefsd, a distributed notification and the `TextInputMenuAgent`
-    /// restart this action just triggered, which under load easily exceeds any
-    /// short delay — and the UI would then report failure for a removal that
-    /// worked. Resolve on the first agreeing sample; only the deadline fails.
-    private func confirmABCDisabled(deadline: Date) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            if InputSourceManager.shared.isABCDisabledAccordingToTIS() {
-                finishRemoveABC(.success)
-            } else if Date() >= deadline {
-                DebugLogger.log("SettingsView: TIS still reports ABC enabled after removal")
+        let manager = InputSourceManager.shared
+        let result = manager.disableABCKeyboardLayout()
+        removeABCTask = Task { @MainActor in
+            do {
+                let confirmed = try await ABCRemovalVerification.confirm(
+                    result: result,
+                    isDisabled: { manager.isABCDisabledAccordingToTIS() }
+                )
+                try Task.checkCancellation()
+                if !confirmed {
+                    DebugLogger.log("SettingsView: ABC removal not confirmed, preferences=\(result)")
+                }
+                finishRemoveABC(confirmed ? .success : .error)
+            } catch is CancellationError {
+                // Closing settings cancels the old attempt; it must not update
+                // a reopened view or finish a newer attempt.
+            } catch {
                 finishRemoveABC(.error)
-            } else {
-                confirmABCDisabled(deadline: deadline)
             }
         }
     }

@@ -413,6 +413,32 @@ struct DisableABCTests {
         }
     }
 
+    @Test("Preference removal followed by a stale-TIS retry remains unconfirmed")
+    @MainActor
+    func retryRequiresLiveRemoval() async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { Self.discard(defaults, suite) }
+        defaults.set([abcByName, priType], forKey: "AppleEnabledInputSources")
+
+        let first = InputSourceManager.disableABCKeyboardLayout(in: defaults)
+        #expect(first == .removed)
+        let firstConfirmed = try await ABCRemovalVerification.confirm(
+            result: first, isDisabled: { false }, wait: {}
+        )
+        #expect(!firstConfirmed)
+
+        let retry = InputSourceManager.disableABCKeyboardLayout(in: defaults)
+        #expect(retry == .alreadyAbsent)
+        let retryConfirmed = try await ABCRemovalVerification.confirm(
+            result: retry, isDisabled: { false }, wait: {}
+        )
+        #expect(!retryConfirmed)
+        let liveRemovalConfirmed = try await ABCRemovalVerification.confirm(
+            result: retry, isDisabled: { true }, wait: {}
+        )
+        #expect(liveRemovalConfirmed)
+    }
+
     @Test("Removal is idempotent")
     func removalIsIdempotent() {
         let (defaults, suite) = makeDefaults()

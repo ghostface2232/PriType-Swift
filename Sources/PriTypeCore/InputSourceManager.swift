@@ -131,9 +131,10 @@ public final class InputSourceManager: @unchecked Sendable {
             return .failed(reason: "HIToolbox defaults unavailable")
         }
         let result = Self.disableABCKeyboardLayout(in: defaults)
-        if result == .removed {
+        if result == .removed || result == .alreadyAbsent {
             CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
-            // Refresh the menu-bar input-source list so the change is visible now.
+            // A retry can find clean preferences while TIS still has ABC enabled.
+            // Refresh on both outcomes; neither is proof of live removal.
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
             task.arguments = ["TextInputMenuAgent"]
@@ -178,7 +179,26 @@ public final class InputSourceManager: @unchecked Sendable {
     /// the exact source ID — the confirmation must recognise exactly what the
     /// removal targets, or ABC-variant and Pinyin users fail forever.
     public func isABCDisabledAccordingToTIS() -> Bool {
-        !getEnabledKeyboardInputSources().contains { $0.id == Self.abcInputSourceID }
+        let filter: [String: Any] = [
+            kTISPropertyInputSourceCategory as String: kTISCategoryKeyboardInputSource as String,
+            kTISPropertyInputSourceIsEnabled as String: true
+        ]
+        guard let sources = TISCreateInputSourceList(filter as CFDictionary, false)?.takeRetainedValue() as? [TISInputSource] else {
+            return false // A failed query cannot prove absence.
+        }
+        var ids: [String] = []
+        for source in sources {
+            guard let pointer = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else {
+                return false
+            }
+            ids.append(Unmanaged<CFString>.fromOpaque(pointer).takeUnretainedValue() as String)
+        }
+        return Self.isABCDisabled(in: ids)
+    }
+
+    static func isABCDisabled(in enabledIDs: [String]?) -> Bool {
+        guard let enabledIDs else { return false }
+        return !enabledIDs.contains(abcInputSourceID)
     }
 
     /// Keys whose sanitized copies must land together or not at all.
