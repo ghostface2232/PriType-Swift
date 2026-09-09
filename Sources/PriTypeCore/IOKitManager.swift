@@ -35,38 +35,12 @@ public final class IOKitManager: @unchecked Sendable {
     /// Callback when toggle key is pressed
     public var onRightCommandToggle: (@Sendable () -> Void)?
     
-    /// Track toggle key state
-    private var toggleKeyIsDown = false
-    private var anyOtherKeyPressed = false
-    
-    /// Track hanja key state
-    private var hanjaKeyIsDown = false
-    
-    /// Debounce for Hanja trigger
-    private var lastHanjaTriggerTime: DispatchTime = .init(uptimeNanoseconds: 0)
-    
+    private var shortcutState = HIDShortcutState()
+
     /// Callback when hanja key is pressed
     public var onRightOptionHanja: (@Sendable () -> Void)?
     
-    private init() {}
-    
-    // MARK: - HID Usage Mapping
-    
-    /// Map macOS virtual key code to HID usage
-    private static func hidUsage(for keyCode: Int64) -> UInt32? {
-        switch keyCode {
-        case 54: return 0xE7  // Right GUI (Command)
-        case 55: return 0xE3  // Left GUI (Command)
-        case 61: return 0xE6  // Right Alt (Option)
-        case 58: return 0xE2  // Left Alt (Option)
-        case 62: return 0xE4  // Right Control
-        case 59: return 0xE0  // Left Control
-        case 56: return 0xE1  // Left Shift
-        case 60: return 0xE5  // Right Shift
-        case 57: return 0x39  // Caps Lock
-        default: return nil
-        }
-    }
+    init() {}
     
     // MARK: - Accessibility Permission
     
@@ -94,9 +68,7 @@ public final class IOKitManager: @unchecked Sendable {
 
         // A new ownership lifecycle must not inherit a half-pressed modifier from a
         // previous IOKit run; otherwise its first key-up could emit a phantom toggle.
-        toggleKeyIsDown = false
-        anyOtherKeyPressed = false
-        hanjaKeyIsDown = false
+        shortcutState = HIDShortcutState()
         
         DebugLogger.log("IOKitManager: Starting IOKit-only toggle detection...")
         
@@ -122,6 +94,12 @@ public final class IOKitManager: @unchecked Sendable {
             manager.handleInputValue(value)
         }, context)
         
+        IOHIDManagerRegisterDeviceRemovalCallback(hidManager, { context, _, _, device in
+            guard let context else { return }
+            let owner = Unmanaged<IOKitManager>.fromOpaque(context).takeUnretainedValue()
+            owner.shortcutState.removeDevice(UInt64(IOHIDDeviceGetService(device)))
+        }, context)
+
         // Schedule with current run loop (like Gureum)
         IOHIDManagerScheduleWithRunLoop(hidManager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
         
@@ -147,9 +125,7 @@ public final class IOKitManager: @unchecked Sendable {
             DebugLogger.log("IOKitManager: Stopped")
         }
 
-        toggleKeyIsDown = false
-        anyOtherKeyPressed = false
-        hanjaKeyIsDown = false
+        shortcutState = HIDShortcutState()
     }
     
     // MARK: - Input Handling
@@ -163,84 +139,33 @@ public final class IOKitManager: @unchecked Sendable {
         
         // Only interested in keyboard page
         guard usagePage == kHIDPage_KeyboardOrKeypad else { return }
+        // Reject the page's non-key usages. 0x00 (Reserved) and 0x01 (ErrorRollOver,
+        // reported on every slot when a boot-protocol keyboard exceeds rollover)
+        // arrive as ordinary elements and would otherwise be tracked as held keys.
+        guard usage >= 0x04, usage <= 0xE7 else { return }
         
-        // Log events for debugging (limit to modifiers to reduce noise)
-        if usage >= 0xE0 && usage <= 0xE7 {
-            DebugLogger.log("IOKitManager: Modifier key 0x\(String(usage, radix: 16)) \(pressed ? "DOWN" : "UP")")
-        }
-        
-        let config = ConfigurationManager.shared
-        let toggleBinding = config.toggleKeyBinding
-        let hanjaBinding = config.hanjaKeyBinding
-        // Same exclusion policy as the CGEventTap path: whichever monitor owns the
-        // keyboard, an app the user excluded must keep its own toggle key.
-        if ToggleExclusionPolicy.shared.isTogglePaused {
-            toggleKeyIsDown = false
-            anyOtherKeyPressed = false
-            hanjaKeyIsDown = false
-            return
-        }
-        let priTypeToggleEnabled = !config.capsLockInputSourceSwitchEnabled
-        if !priTypeToggleEnabled {
-            toggleKeyIsDown = false
-            anyOtherKeyPressed = false
-        }
-        
-        // Get HID usages for configured keys
-        let toggleUsage = Self.hidUsage(for: toggleBinding.keyCode)
-        let hanjaUsage = Self.hidUsage(for: hanjaBinding.keyCode)
+        let device = IOHIDElementGetDevice(element)
+        handleKeyboardEvent(usage: usage, pressed: pressed, device: UInt64(IOHIDDeviceGetService(device)))
+    }
 
-        // Check for toggle key (only for modifier-only bindings)
-        if priTypeToggleEnabled && toggleBinding.isModifierOnly, let expectedUsage = toggleUsage, usage == expectedUsage {
-            if pressed {
-                // Toggle key pressed
-                toggleKeyIsDown = true
-                anyOtherKeyPressed = false
-                DebugLogger.log("IOKitManager: Toggle key DOWN (\(toggleBinding.displayName))")
-            } else {
-                // Toggle key released
-                if toggleKeyIsDown && !anyOtherKeyPressed {
-                    // Toggle!
-                    DebugLogger.log("IOKitManager: TOGGLE triggered! (\(toggleBinding.displayName))")
-                    let callback = onRightCommandToggle
-                    DispatchQueue.main.async {
-                        callback?()
-                    }
-                } else if anyOtherKeyPressed {
-                    DebugLogger.log("IOKitManager: Toggle skipped (used with other key)")
-                }
-                toggleKeyIsDown = false
-                anyOtherKeyPressed = false
-            }
-        } else if let expectedUsage = hanjaUsage, usage == expectedUsage,
-                  hanjaBinding.keyCode != toggleBinding.keyCode {
-            // Hanja key (only if different from toggle key)
-            if pressed && !hanjaKeyIsDown {
-                hanjaKeyIsDown = true
-                
-                // Debounce: ignore if last trigger was within 500ms
-                let now = DispatchTime.now()
-                let elapsed = now.uptimeNanoseconds - lastHanjaTriggerTime.uptimeNanoseconds
-                let elapsedMs = elapsed / 1_000_000
-                if elapsedMs < 500 {
-                    DebugLogger.log("IOKitManager: Hanja key DEBOUNCED (\(elapsedMs)ms)")
-                    return
-                }
-                lastHanjaTriggerTime = now
-                
-                DebugLogger.log("IOKitManager: Hanja key DOWN (\(hanjaBinding.displayName)) - HANJA")
-                let callback = onRightOptionHanja
-                DispatchQueue.main.async {
-                    callback?()
-                }
-            } else if !pressed && hanjaKeyIsDown {
-                hanjaKeyIsDown = false
-                DebugLogger.log("IOKitManager: Hanja key UP (\(hanjaBinding.displayName))")
-            }
-        } else if priTypeToggleEnabled && toggleKeyIsDown && pressed && usage > 0 && usage < 0xE0 {
-            // Non-modifier key pressed while toggle key is down
-            anyOtherKeyPressed = true
-            DebugLogger.log("IOKitManager: Key pressed while toggle key is down (combo)")
+    /// Internal entry point for hardware-event tests without opening devices.
+    func handleKeyboardEvent(usage: UInt32, pressed: Bool, device: UInt64 = 0,
+                             toggle: KeyBinding? = nil, hanja: KeyBinding? = nil,
+                             toggleEnabled: Bool? = nil, paused: Bool? = nil) {
+        let config = ConfigurationManager.shared
+        let action = shortcutState.consume(
+            usage: usage, pressed: pressed, device: device,
+            toggle: toggle ?? config.toggleKeyBinding,
+            hanja: hanja ?? config.hanjaKeyBinding,
+            toggleEnabled: toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled,
+            paused: paused ?? (ToggleExclusionPolicy.shared.isTogglePaused || RightCommandSuppressor.shared.isRecordingKey)
+        )
+        let callback: (@Sendable () -> Void)?
+        switch action {
+        case .toggle: callback = onRightCommandToggle
+        case .hanja: callback = onRightOptionHanja
+        case nil: return
         }
+        DispatchQueue.main.async { callback?() }
     }
 }
