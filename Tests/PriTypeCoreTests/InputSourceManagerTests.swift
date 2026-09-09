@@ -194,3 +194,96 @@ struct InputSourceCleanupTests {
         #expect(InputSourceManager.cleanupStaleInputSources(in: defaults) == .noChangeNeeded)
     }
 }
+
+// MARK: - ABC Removal Tests
+
+@Suite("Disable ABC keyboard layout")
+struct DisableABCTests {
+
+    private func makeDefaults() -> (UserDefaults, String) {
+        let suite = "com.pritype.tests.abc.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        return (defaults, suite)
+    }
+
+    private let abcByName: [String: Any] = [
+        "InputSourceKind": "Keyboard Layout",
+        "KeyboardLayout Name": "ABC",
+        "KeyboardLayout ID": 252
+    ]
+    private let abcByIDOnly: [String: Any] = [
+        "InputSourceKind": "Keyboard Layout",
+        "KeyboardLayout ID": 252
+    ]
+    private let priType: [String: Any] = [
+        "Bundle ID": "com.pritype.inputmethod.v2",
+        "InputSourceKind": "Keyboard Input Method"
+    ]
+
+    @Test("ABC is matched by layout name and by layout ID")
+    func abcEntryMatching() {
+        #expect(InputSourceManager.isABCLayoutEntry(abcByName))
+        #expect(InputSourceManager.isABCLayoutEntry(abcByIDOnly))
+        #expect(!InputSourceManager.isABCLayoutEntry(priType))
+        #expect(!InputSourceManager.isABCLayoutEntry([
+            "KeyboardLayout Name": "U.S.", "KeyboardLayout ID": 0
+        ]))
+    }
+
+    @Test("Removing ABC leaves the other sources and verifies the write")
+    func removesABC() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set([abcByName, priType], forKey: "AppleEnabledInputSources")
+
+        #expect(InputSourceManager.disableABCKeyboardLayout(in: defaults) == .removed)
+        let after = defaults.array(forKey: "AppleEnabledInputSources") as? [[String: Any]] ?? []
+        #expect(after.count == 1)
+        #expect(!after.contains(where: InputSourceManager.isABCLayoutEntry))
+    }
+
+    @Test("An ID-only ABC entry is removed too")
+    func removesIDOnlyEntry() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set([abcByIDOnly, priType], forKey: "AppleEnabledInputSources")
+
+        #expect(InputSourceManager.disableABCKeyboardLayout(in: defaults) == .removed)
+        #expect((defaults.array(forKey: "AppleEnabledInputSources") as? [[String: Any]])?.count == 1)
+    }
+
+    @Test("An already-clean list is reported as alreadyAbsent, not as a write")
+    func alreadyAbsentIsDistinct() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set([priType], forKey: "AppleEnabledInputSources")
+
+        #expect(InputSourceManager.disableABCKeyboardLayout(in: defaults) == .alreadyAbsent)
+        #expect((defaults.array(forKey: "AppleEnabledInputSources") as? [[String: Any]])?.count == 1)
+    }
+
+    @Test("An unreadable list fails instead of silently succeeding")
+    func unreadableListFails() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        // The previous implementation reported success for every outcome, which is
+        // what made a failed write look like "ABC came back".
+        if case .failed = InputSourceManager.disableABCKeyboardLayout(in: defaults) {
+            // expected
+        } else {
+            Issue.record("missing AppleEnabledInputSources must be reported as a failure")
+        }
+    }
+
+    @Test("Removal is idempotent")
+    func removalIsIdempotent() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set([abcByName, priType], forKey: "AppleEnabledInputSources")
+
+        #expect(InputSourceManager.disableABCKeyboardLayout(in: defaults) == .removed)
+        #expect(InputSourceManager.disableABCKeyboardLayout(in: defaults) == .alreadyAbsent)
+    }
+}

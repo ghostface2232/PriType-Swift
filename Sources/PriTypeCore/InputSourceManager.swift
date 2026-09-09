@@ -82,6 +82,87 @@ public final class InputSourceManager: @unchecked Sendable {
         return sources.contains { $0.id.contains("US") || $0.name == "U.S." }
     }
 
+    // MARK: - Disable the default English (ABC) layout
+
+    /// Outcome of disabling the ABC keyboard layout.
+    public enum ABCRemovalResult: Equatable {
+        /// ABC was present and the removal was written and read back successfully.
+        case removed
+        /// ABC was not in the enabled list to begin with — the desired end state.
+        case alreadyAbsent
+        /// Nothing was changed, or the write did not survive a read-back.
+        case failed(reason: String)
+    }
+
+    /// Whether an `AppleEnabledInputSources` entry is the ABC keyboard layout.
+    ///
+    /// Matched on both the layout name and the layout ID: an entry carrying only
+    /// the numeric ID would otherwise survive a name-only filter and reappear in
+    /// the menu bar, which reads to the user as ABC coming back by itself.
+    static func isABCLayoutEntry(_ source: [String: Any]) -> Bool {
+        if (source["KeyboardLayout Name"] as? String) == "ABC" { return true }
+        if let layoutID = source["KeyboardLayout ID"] as? Int, layoutID == abcKeyboardLayoutID { return true }
+        return false
+    }
+
+    /// Disable the ABC layout in the enabled-input-source list, verifying the write.
+    ///
+    /// Reversible: the user can re-add ABC in System Settings (the login window
+    /// still needs it). This never selects or enables anything else.
+    @discardableResult
+    public func disableABCKeyboardLayout() -> ABCRemovalResult {
+        guard let defaults = UserDefaults(suiteName: "com.apple.HIToolbox") else {
+            return .failed(reason: "HIToolbox defaults unavailable")
+        }
+        let result = Self.disableABCKeyboardLayout(in: defaults)
+        if result == .removed {
+            CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
+            // Refresh the menu-bar input-source list so the change is visible now.
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+            task.arguments = ["TextInputMenuAgent"]
+            try? task.run()
+        }
+        DebugLogger.log("InputSourceManager: disable ABC → \(result)")
+        return result
+    }
+
+    /// Pure defaults-level ABC removal with read-back verification.
+    static func disableABCKeyboardLayout(in defaults: UserDefaults) -> ABCRemovalResult {
+        let key = "AppleEnabledInputSources"
+        guard let original = defaults.array(forKey: key) as? [[String: Any]] else {
+            return .failed(reason: "\(key) unreadable")
+        }
+
+        let remaining = original.filter { !isABCLayoutEntry($0) }
+        guard remaining.count != original.count else { return .alreadyAbsent }
+
+        defaults.set(remaining, forKey: key)
+        defaults.synchronize()
+
+        // Verify. A write that did not land is exactly the "ABC came back" report
+        // from the original issue, and must not be shown to the user as success.
+        guard let after = defaults.array(forKey: key) as? [[String: Any]] else {
+            defaults.set(original, forKey: key)
+            defaults.synchronize()
+            return .failed(reason: "\(key) unreadable after write")
+        }
+        guard !after.contains(where: isABCLayoutEntry) else {
+            defaults.set(original, forKey: key)
+            defaults.synchronize()
+            return .failed(reason: "ABC still present after write")
+        }
+        return .removed
+    }
+
+    /// Whether the live TIS state agrees that ABC is gone.
+    ///
+    /// The preference write can succeed while the running system still has ABC
+    /// enabled, so the UI confirms against TIS before claiming success.
+    public func isABCDisabledAccordingToTIS() -> Bool {
+        !isABCEnabled()
+    }
+
     /// Keys whose sanitized copies must land together or not at all.
     static let managedInputSourceKeys = [
         "AppleEnabledInputSources",
