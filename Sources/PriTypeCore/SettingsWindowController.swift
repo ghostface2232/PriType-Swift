@@ -1225,12 +1225,12 @@ struct KeyRecorderRow: View {
         }
     }
 
-    @State private var previousFlags: NSEvent.ModifierFlags = []
+    @State private var recordingState = KeyRecordingState()
 
     private func startRecording() {
         isRecording = true
         pulseAnimation = true
-        previousFlags = NSEvent.ModifierFlags(rawValue: 0)
+        recordingState = KeyRecordingState()
 
         let suppressor = RightCommandSuppressor.shared
         suppressor.onKeyRecorded = { keyCode, modifiers in
@@ -1238,57 +1238,13 @@ struct KeyRecorderRow: View {
         }
         suppressor.isRecordingKey = true
 
-        // Local fallback when the event tap is unavailable.
+        // Both producers use the same modifier-release/shortcut state machine.
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
-            if event.type == .flagsChanged {
-                let keyCode = Int64(event.keyCode)
-                let currentFlags = event.modifierFlags.intersection([.command, .option, .control, .shift, .capsLock])
-
-                // Detect key DOWN: current flags have MORE modifiers than previous
-                // This prevents capturing on modifier release. Caps Lock is a lock
-                // state, so capture its keyCode directly even when the flag toggles off.
-                let isNewModifier = (!currentFlags.isSubset(of: previousFlags) && !currentFlags.isEmpty) || keyCode == 57
-                previousFlags = currentFlags
-
-                if isNewModifier {
-                    // Fn key (63) is not supported in CGEventTap — ignore it
-                    guard keyCode != 63 else { return event }
-                    guard keyCode != 57 else {
-                        stopRecording()
-                        onCapsLockBlocked()
-                        return nil
-                    }
-                    let newBinding = KeyBinding(
-                        keyCode: keyCode,
-                        modifiers: 0,  // modifier-only binding
-                        displayName: KeyBinding.generateDisplayName(keyCode: keyCode, modifiers: 0)
-                    )
-                    guard newBinding.isSafeGlobalBinding else { NSSound.beep(); return nil }
-                    binding = newBinding
-                    stopRecording()
-                    return nil  // Consume event
-                }
-            } else if event.type == .keyDown {
-                // Escape cancels recording
-                if event.keyCode == 53 {
-                    stopRecording()
-                    return nil
-                }
-
-                // Regular key + optional modifiers
-                let keyCode = Int64(event.keyCode)
-                let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift]).rawValue
-                let newBinding = KeyBinding(
-                    keyCode: keyCode,
-                    modifiers: UInt64(modifiers),
-                    displayName: KeyBinding.generateDisplayName(keyCode: keyCode, modifiers: UInt64(modifiers))
-                )
-                guard newBinding.isSafeGlobalBinding else { NSSound.beep(); return nil }
-                binding = newBinding
-                stopRecording()
-                return nil  // Consume event
+            if let recorded = recordingState.consume(keyCode: Int64(event.keyCode),
+                flags: UInt64(event.modifierFlags.rawValue), isModifierChange: event.type == .flagsChanged) {
+                receiveBinding(keyCode: recorded.keyCode, modifiers: recorded.modifiers)
             }
-            return event
+            return nil
         }
     }
 

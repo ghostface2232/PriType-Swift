@@ -60,7 +60,10 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     public var onTapFailed: (@Sendable () -> Void)?
     
     /// Whether recording mode is active (for Key Recorder in settings)
-    public var isRecordingKey = false
+    public var isRecordingKey = false {
+        didSet { recordingState = KeyRecordingState() }
+    }
+    private var recordingState = KeyRecordingState()
     
     /// Callback for key recording (settings UI)
     public var onKeyRecorded: ((_ keyCode: Int64, _ modifiers: UInt64) -> Void)?
@@ -198,32 +201,19 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             }
         }
         
-        // Key recording mode — capture the next key press for settings UI
+        // Wait for modifier release or a regular key before deciding the binding.
         if isRecordingKey {
-            if type == .flagsChanged {
-                let flags = event.flags
-                // Only fire on key DOWN (when a new modifier appears).
-                // Caps Lock is special: its flag is the toggled lock state, so
-                // record the keyCode itself even when the flag is transitioning off.
-                let isModifierDown = ModifierKeyState.isDown(keyCode, flags: flags.rawValue) || keyCode == 57
-                if isModifierDown {
-                    let recordCallback = onKeyRecorded
-                    DispatchQueue.main.async {
-                        recordCallback?(keyCode, 0)  // modifier-only binding
-                    }
-                    return nil  // Suppress
+            if type == .flagsChanged || type == .keyDown {
+                if let recorded = recordingState.consume(keyCode: keyCode, flags: event.flags.rawValue,
+                                                         isModifierChange: type == .flagsChanged) {
+                    let callback = onKeyRecorded
+                    DispatchQueue.main.async { callback?(recorded.keyCode, recorded.modifiers) }
                 }
-            } else if type == .keyDown {
-                let modifiers = event.flags.rawValue & 0xFFFF0000  // Keep only modifier flags
-                let recordCallback = onKeyRecorded
-                DispatchQueue.main.async {
-                    recordCallback?(keyCode, modifiers)
-                }
-                return nil  // Suppress
+                return nil
             }
             return Unmanaged.passUnretained(event)
         }
-        
+
         // Handle flagsChanged (modifier keys)
         if type == .flagsChanged {
             let flags = event.flags
