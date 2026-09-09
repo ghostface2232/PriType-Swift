@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 추가 (2026-09-09)
+- 전환키 제외 앱 목록을 추가했습니다(원본 PR #12 후속). 지정한 앱이 앞에 있으면 전환키·한자키를 수정자까지 그대로 전달하므로, 자체 입력기를 쓰는 원격 데스크톱과 가상 머신에서 게스트 OS의 한/영 전환이 동작합니다. 판정은 CGEventTap·IOKit 대체 경로·비동기 토글 콜백 모두에 동일하게 적용됩니다. 앞선 앱은 NSWorkspace 활성화 알림으로 캐시하므로 tap 콜백에서 Accessibility나 워크스페이스를 조회하지 않습니다.
+
 ### 수정 (2026-09-09 리뷰 후속)
 - 원본 PR #11을 검토해 사용자 전환의 `selectInputMode:`를 제거하고, 영어 override를 이미 활성화된 ABC/US에 한정했습니다. 개선 계획과 PR #12 후속 평가를 `Docs/ImprovementPlan-2026-09-09.md`에 기록했습니다.
 - 앱 전환 후 빈 조합 속성 목록을 보안 입력으로 오인하여 한글을 계속 우회하는 경로를 수정했습니다. 전역 보안 입력 경고가 없는 일반 입력창은 조합을 허용합니다.

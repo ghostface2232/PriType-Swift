@@ -29,6 +29,14 @@ public final class InputModeCoordinator: @unchecked Sendable {
             return
         }
 
+        // Both monitors dispatch their toggle asynchronously, so re-check here: this
+        // is the one gate every key-driven toggle passes through, and it keeps a
+        // future caller from bypassing the user's app exclusion list.
+        guard !ToggleExclusionPolicy.shared.isTogglePaused else {
+            DebugLogger.log("InputModeCoordinator: ignored custom toggle because the frontmost app is excluded")
+            return
+        }
+
         guard let controller = PriTypeInputController.sharedController else {
             DebugLogger.log("InputModeCoordinator: ignored custom toggle because no active controller exists")
             return

@@ -70,3 +70,10 @@
 "system.removeABCButton" = "Turn Off";
 "system.removeABCSuccess" = "Disabled";
 "system.removeABCFailed" = "Failed";
+
+/* Toggle Key App Exclusions */
+"exclusions.title" = "Toggle Key Exclusions";
+"exclusions.subtitle" = "Pass the toggle and hanja keys straight through while these apps are frontmost. Use it for remote desktops and virtual machines that run their own input method.";
+"exclusions.addButton" = "Add App…";
+"exclusions.removeButton" = "Remove";
+"exclusions.empty" = "No excluded apps";

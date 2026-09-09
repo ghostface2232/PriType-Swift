@@ -129,4 +129,14 @@ public enum L10n {
         public static var removeABCSuccess: String { localized("system.removeABCSuccess") }
         public static var removeABCFailed: String { localized("system.removeABCFailed") }
     }
+
+    // MARK: - Toggle Key App Exclusions
+
+    public enum exclusions {
+        public static var title: String { localized("exclusions.title") }
+        public static var subtitle: String { localized("exclusions.subtitle") }
+        public static var addButton: String { localized("exclusions.addButton") }
+        public static var removeButton: String { localized("exclusions.removeButton") }
+        public static var empty: String { localized("exclusions.empty") }
+    }
 }

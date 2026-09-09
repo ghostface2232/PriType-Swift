@@ -218,6 +218,9 @@ public extension Notification.Name {
     static let keyboardLayoutChanged = Notification.Name("PriTypeKeyboardLayoutChanged")
     /// Posted when a key binding changes
     static let keyBindingChanged = Notification.Name("PriTypeKeyBindingChanged")
+
+    /// Posted when the toggle-key app exclusion list changes.
+    static let toggleExclusionsChanged = Notification.Name("PriTypeToggleExclusionsChanged")
 }
 
 // MARK: - ConfigurationProviding Protocol
@@ -272,12 +275,16 @@ public protocol ConfigurationProviding: AnyObject, Sendable {
     /// direct insertion) instead of marked text, on probe-verified allowlisted hosts.
     /// Default OFF. See Docs/KoreanWindowsInputFeasibility.md (Phase 3).
     var experimentalDirectInsertion: Bool { get }
+
+    /// Bundle IDs of apps where PriType must not consume the toggle/hanja keys.
+    var toggleExcludedBundleIDs: [String] { get }
 }
 
 public extension ConfigurationProviding {
     /// Default: experimental direct insertion disabled. Conformers (e.g. test mocks)
     /// inherit this unless they override it; only `ConfigurationManager` reads the flag.
     var experimentalDirectInsertion: Bool { false }
+    var toggleExcludedBundleIDs: [String] { [] }
 
     /// Default: enabled, matching macOS's normal text-input default.
     var autoCapitalizationEnabled: Bool { true }
@@ -353,6 +360,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         static let lastUpdateCheck = "com.pritype.lastUpdateCheck"
         static let autoUpdateCheck = "com.pritype.autoUpdateCheck"
         static let experimentalDirectInsertion = "com.pritype.experimentalDirectInsertion"
+        static let toggleExcludedBundleIDs = "com.pritype.toggleExcludedBundleIDs"
     }
 
     private enum SystemTextInputKeys {
@@ -484,6 +492,28 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         }
     }
     
+    // MARK: - Toggle Exclusions
+
+    /// Bundle IDs of apps that must receive the toggle/hanja key themselves.
+    ///
+    /// Remote-desktop clients and VMs run their own IME; swallowing the key leaves
+    /// the guest session unable to switch languages. Read through
+    /// `ToggleExclusionPolicy`, never from an event-tap callback directly.
+    public var toggleExcludedBundleIDs: [String] {
+        get {
+            (defaults.array(forKey: Keys.toggleExcludedBundleIDs) as? [String]) ?? []
+        }
+        set {
+            var deduped: [String] = []
+            for bundleID in newValue {
+                deduped = ToggleExclusionPolicy.adding(bundleID, to: deduped)
+            }
+            defaults.set(deduped, forKey: Keys.toggleExcludedBundleIDs)
+            ToggleExclusionPolicy.shared.refreshExcludedBundleIDs(from: self)
+            NotificationCenter.default.post(name: .toggleExclusionsChanged, object: nil)
+        }
+    }
+
     // MARK: - Key Binding Migration
 
     /// Persist the legacy `toggleKey` enum as a `KeyBinding`, and repair stored

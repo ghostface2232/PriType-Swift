@@ -25,6 +25,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         // running binding and the stored binding cannot disagree.
         ConfigurationManager.shared.migrateKeyBindingsIfNeeded()
 
+        // Track the frontmost app so the event-tap callback can consult the user's
+        // toggle exclusion list without querying the workspace on the hot path.
+        ToggleExclusionPolicy.shared.start()
+
         // Setup toggle key monitoring
         setupIOKit()
         

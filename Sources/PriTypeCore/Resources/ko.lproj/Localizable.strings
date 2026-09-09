@@ -70,3 +70,10 @@
 "system.removeABCButton" = "ABC 끄기";
 "system.removeABCSuccess" = "비활성화 완료";
 "system.removeABCFailed" = "비활성화 실패";
+
+/* Toggle Key App Exclusions */
+"exclusions.title" = "전환키 제외 앱";
+"exclusions.subtitle" = "선택한 앱이 앞에 있을 때는 전환키와 한자키를 그대로 전달합니다. 원격 데스크톱이나 가상 머신처럼 자체 입력기를 쓰는 앱에 사용하세요.";
+"exclusions.addButton" = "앱 추가…";
+"exclusions.removeButton" = "제거";
+"exclusions.empty" = "제외된 앱이 없습니다";

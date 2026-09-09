@@ -116,6 +116,9 @@ struct SettingsView: View {
     // Experimental Windows-style direct insertion (Phase 3). Default OFF.
     @State private var experimentalDirectInsertion = false
 
+    // Apps that must keep the toggle/hanja keys for themselves (remote desktop, VMs).
+    @State private var excludedApps: [ExcludedApp] = []
+
     private enum UpdateStatus: Equatable {
         case idle
         case checking
@@ -159,6 +162,7 @@ struct SettingsView: View {
             hanjaKeyBinding = ConfigurationManager.shared.hanjaKeyBinding
             autoUpdateCheckEnabled = ConfigurationManager.shared.autoUpdateCheckEnabled
             experimentalDirectInsertion = ConfigurationManager.shared.experimentalDirectInsertion
+            reloadExcludedApps()
             refreshCapsLockSwitchState()
             checkAccessibility()
         }
@@ -423,6 +427,78 @@ struct SettingsView: View {
             }
 
             SettingsSection(
+                title: L10n.exclusions.title,
+                icon: "rectangle.on.rectangle.slash"
+            ) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(L10n.exclusions.subtitle)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 10)
+                        .padding(.horizontal, 12)
+
+                    if excludedApps.isEmpty {
+                        Text(L10n.exclusions.empty)
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(.tertiary)
+                            .padding(.vertical, 10)
+                            .padding(.horizontal, 12)
+                    } else {
+                        ForEach(excludedApps) { app in
+                            Divider()
+                                .opacity(0.2)
+                                .padding(.horizontal, 12)
+
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(app.displayName)
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundStyle(.primary)
+                                    Text(app.bundleID)
+                                        .font(.system(size: 10, weight: .regular))
+                                        .foregroundStyle(.tertiary)
+                                }
+
+                                Spacer()
+
+                                Button(L10n.exclusions.removeButton) {
+                                    removeExcludedApp(app)
+                                }
+                                .buttonStyle(.bordered)
+                                .buttonBorderShape(.roundedRectangle(radius: 7))
+                                .controlSize(.small)
+                            }
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                        }
+                    }
+
+                    Divider()
+                        .opacity(0.2)
+                        .padding(.horizontal, 12)
+
+                    HStack {
+                        Button(action: { addExcludedApp() }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 12, weight: .medium))
+                                Text(L10n.exclusions.addButton)
+                                    .font(.system(size: 13, weight: .medium))
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.roundedRectangle(radius: 7))
+                        .controlSize(.small)
+
+                        Spacer()
+                    }
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
+                }
+            }
+
+            SettingsSection(
                 title: "실험적 기능",
                 icon: "flask"
             ) {
@@ -648,6 +724,42 @@ struct SettingsView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             withAnimation { self.removeABCStatus = .idle }
         }
+    }
+
+    // MARK: - Toggle Exclusion Logic
+
+    private func reloadExcludedApps() {
+        excludedApps = ConfigurationManager.shared.toggleExcludedBundleIDs.map(ExcludedApp.init(bundleID:))
+    }
+
+    private func addExcludedApp() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.prompt = L10n.exclusions.addButton
+
+        guard panel.runModal() == .OK else { return }
+
+        // Resolve each pick to a bundle ID; a chosen file without one cannot be
+        // matched against the frontmost app, so it is skipped rather than stored.
+        var updated = ConfigurationManager.shared.toggleExcludedBundleIDs
+        for url in panel.urls {
+            guard let bundleID = Bundle(url: url)?.bundleIdentifier else { continue }
+            updated = ToggleExclusionPolicy.adding(bundleID, to: updated)
+        }
+        ConfigurationManager.shared.toggleExcludedBundleIDs = updated
+        reloadExcludedApps()
+    }
+
+    private func removeExcludedApp(_ app: ExcludedApp) {
+        ConfigurationManager.shared.toggleExcludedBundleIDs = ToggleExclusionPolicy.removing(
+            app.bundleID,
+            from: ConfigurationManager.shared.toggleExcludedBundleIDs
+        )
+        reloadExcludedApps()
     }
 
     private func requestAccessibility() {
@@ -1139,5 +1251,32 @@ struct KeyRecorderRow: View {
             NSEvent.removeMonitor(monitor)
         }
         monitor = nil
+    }
+}
+
+// MARK: - Excluded App Row Model
+
+/// One entry of the toggle-key exclusion list.
+///
+/// The bundle ID is what the policy matches on; the display name is resolved for
+/// the UI only, and falls back to the bundle ID when the app is not installed —
+/// an entry for an uninstalled app must stay visible so the user can remove it.
+struct ExcludedApp: Identifiable, Equatable {
+    let bundleID: String
+    let displayName: String
+
+    var id: String { bundleID }
+
+    init(bundleID: String) {
+        self.bundleID = bundleID
+        self.displayName = Self.resolveDisplayName(for: bundleID) ?? bundleID
+    }
+
+    private static func resolveDisplayName(for bundleID: String) -> String? {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            return nil
+        }
+        return FileManager.default.displayName(atPath: url.path)
+            .replacingOccurrences(of: ".app", with: "")
     }
 }

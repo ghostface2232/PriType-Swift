@@ -172,6 +172,14 @@ public final class IOKitManager: @unchecked Sendable {
         let config = ConfigurationManager.shared
         let toggleBinding = config.toggleKeyBinding
         let hanjaBinding = config.hanjaKeyBinding
+        // Same exclusion policy as the CGEventTap path: whichever monitor owns the
+        // keyboard, an app the user excluded must keep its own toggle key.
+        if ToggleExclusionPolicy.shared.isTogglePaused {
+            toggleKeyIsDown = false
+            anyOtherKeyPressed = false
+            hanjaKeyIsDown = false
+            return
+        }
         let priTypeToggleEnabled = !config.capsLockInputSourceSwitchEnabled
         if !priTypeToggleEnabled {
             toggleKeyIsDown = false

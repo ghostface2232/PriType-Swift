@@ -146,7 +146,8 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     // Internal entry point permits event-sequence tests without installing a tap.
     func handleEvent(type: CGEventType, event: CGEvent,
                      toggle: KeyBinding? = nil, hanja: KeyBinding? = nil,
-                     toggleEnabled: Bool? = nil, recoveryFlags: UInt64? = nil) -> Unmanaged<CGEvent>? {
+                     toggleEnabled: Bool? = nil, recoveryFlags: UInt64? = nil,
+                     excludedOverride: Bool? = nil) -> Unmanaged<CGEvent>? {
         // Re-enable tap if disabled by system
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             switch failureTracker.recordDisable(at: CFAbsoluteTimeGetCurrent()) {
@@ -177,9 +178,21 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         let config = ConfigurationManager.shared
         let toggleBinding = toggle ?? config.toggleKeyBinding
         let hanjaBinding = hanja ?? config.hanjaKeyBinding
-        let priTypeToggleEnabled = toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled
+        // The frontmost app may be excluded by the user (remote desktop / VM, which
+        // runs its own IME and needs the physical key). This is a cached lookup —
+        // never query the workspace or Accessibility from a tap callback.
+        let excluded = excludedOverride ?? ToggleExclusionPolicy.shared.isTogglePaused
+        let priTypeToggleEnabled = (toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled) && !excluded
         if !priTypeToggleEnabled {
             toggleModifierIsDown = false
+        }
+        if excluded {
+            // Recording still needs the key; everything else — including modifier
+            // stripping — must leave the event exactly as the app expects it.
+            hanjaModifierIsDown = false
+            if !isRecordingKey {
+                return Unmanaged.passUnretained(event)
+            }
         }
         
         // Key recording mode — capture the next key press for settings UI
@@ -238,7 +251,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             }
             
             // Dynamic hanja key — modifier key, single-key binding (only if different from toggle key)
-            if hanjaBinding.isModifierKey && hanjaBinding.isModifierOnly && keyCode == hanjaBinding.keyCode && keyCode != toggleBinding.keyCode {
+            if !excluded && hanjaBinding.isModifierKey && hanjaBinding.isModifierOnly && keyCode == hanjaBinding.keyCode && keyCode != toggleBinding.keyCode {
                 let isPressed = ModifierKeyState.isDown(keyCode, flags: flags.rawValue)
                 
                 if isPressed && !hanjaModifierIsDown {
@@ -291,7 +304,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             }
             
             // Regular key (non-modifier) as hanja — single key or combo
-            if keyCode == hanjaBinding.keyCode && !hanjaBinding.isModifierKey && keyCode != toggleBinding.keyCode {
+            if !excluded && keyCode == hanjaBinding.keyCode && !hanjaBinding.isModifierKey && keyCode != toggleBinding.keyCode {
                 if hanjaBinding.isModifierOnly || Self.hasRequiredModifiers(flags: event.flags, required: CGEventFlags(rawValue: hanjaBinding.modifiers)) {
                     DebugLogger.log("RightCommandSuppressor: Regular key hanja (\(hanjaBinding.displayName)) - HANJA")
                     triggerHanjaLookup()
