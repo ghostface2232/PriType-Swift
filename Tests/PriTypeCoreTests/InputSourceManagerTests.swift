@@ -277,6 +277,75 @@ struct DisableABCTests {
         }
     }
 
+    @Test("ABC variants and Pinyin are left alone")
+    func abcFamilyIsPreserved() {
+        // These all satisfy the loose `id.contains("ABC")` test, and none is the
+        // plain ABC layout. Removing or mis-confirming them is finding #1 of the
+        // review: a permanent false failure for anyone who keeps one enabled.
+        for variant in ["ABC – QWERTZ", "ABC – AZERTY", "ABC – India"] {
+            #expect(!InputSourceManager.isABCLayoutEntry([
+                "InputSourceKind": "Keyboard Layout",
+                "KeyboardLayout Name": variant,
+                "KeyboardLayout ID": -2
+            ]), "\(variant) must be preserved")
+        }
+        #expect(!InputSourceManager.isABCLayoutEntry([
+            "InputSourceKind": "Input Mode",
+            "Bundle ID": "com.apple.inputmethod.SCIM.ITABC"
+        ]))
+    }
+
+    @Test("Layout ID 252 only matches an unnamed keyboard-layout entry")
+    func layoutIDBranchIsNarrow() {
+        // A third-party .keylayout reusing resource ID 252 must not be deleted.
+        #expect(!InputSourceManager.isABCLayoutEntry([
+            "InputSourceKind": "Keyboard Layout",
+            "KeyboardLayout Name": "My Custom Layout",
+            "KeyboardLayout ID": 252
+        ]))
+        #expect(!InputSourceManager.isABCLayoutEntry([
+            "InputSourceKind": "Input Mode",
+            "KeyboardLayout ID": 252
+        ]))
+        // The narrow case the branch exists for: a layout entry with no name.
+        #expect(InputSourceManager.isABCLayoutEntry([
+            "InputSourceKind": "Keyboard Layout",
+            "KeyboardLayout ID": 252
+        ]))
+    }
+
+    @Test("Removal keeps the surviving entries, not merely the count")
+    func survivingEntriesAreIdentified() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let variant: [String: Any] = [
+            "InputSourceKind": "Keyboard Layout",
+            "KeyboardLayout Name": "ABC – QWERTZ",
+            "KeyboardLayout ID": -2
+        ]
+        defaults.set([abcByName, variant, priType], forKey: "AppleEnabledInputSources")
+
+        #expect(InputSourceManager.disableABCKeyboardLayout(in: defaults) == .removed)
+        let after = defaults.array(forKey: "AppleEnabledInputSources") as? [[String: Any]] ?? []
+        // Order is preserved and exactly the plain ABC entry is gone.
+        #expect((after.first?["KeyboardLayout Name"] as? String) == "ABC – QWERTZ")
+        #expect((after.last?["Bundle ID"] as? String) == "com.pritype.inputmethod.v2")
+        #expect(after.count == 2)
+    }
+
+    @Test("A value of the wrong shape fails rather than reporting no change")
+    func wrongShapedValueFails() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["not-a-dictionary"], forKey: "AppleEnabledInputSources")
+
+        if case .failed = InputSourceManager.disableABCKeyboardLayout(in: defaults) {
+            // expected
+        } else {
+            Issue.record("a non-[[String: Any]] value must be reported as a failure")
+        }
+    }
+
     @Test("Removal is idempotent")
     func removalIsIdempotent() {
         let (defaults, suite) = makeDefaults()

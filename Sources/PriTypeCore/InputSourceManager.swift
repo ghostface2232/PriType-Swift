@@ -90,19 +90,35 @@ public final class InputSourceManager: @unchecked Sendable {
         case removed
         /// ABC was not in the enabled list to begin with — the desired end state.
         case alreadyAbsent
-        /// Nothing was changed, or the write did not survive a read-back.
+        /// The write did not survive a read-back and a restore was attempted.
+        /// The restore is not itself verified, so this does not promise the
+        /// preferences are byte-identical to their prior state.
         case failed(reason: String)
     }
 
-    /// Whether an `AppleEnabledInputSources` entry is the ABC keyboard layout.
+    /// The exact input-source ID of the plain ABC layout.
     ///
-    /// Matched on both the layout name and the layout ID: an entry carrying only
-    /// the numeric ID would otherwise survive a name-only filter and reappear in
-    /// the menu bar, which reads to the user as ABC coming back by itself.
+    /// Must be matched exactly. `id.contains("ABC")` also catches ABC-AZERTY,
+    /// ABC-QWERTZ, ABC-India and even Chinese Pinyin (`…SCIM.ITABC`), none of which
+    /// this action removes — using the loose form to confirm removal reports a
+    /// permanent failure to anyone who keeps one of those enabled.
+    static let abcInputSourceID = "com.apple.keylayout.ABC"
+
+    /// Whether an `AppleEnabledInputSources` entry is the plain ABC keyboard layout.
+    ///
+    /// The layout ID is accepted only as a fallback for an entry that carries no
+    /// name, and only for a keyboard-layout entry. Matching ID 252 on its own would
+    /// delete any third-party `.keylayout` that happens to reuse that resource ID —
+    /// an unbounded false-positive surface for a malformed-entry case that is not
+    /// demonstrated. The ABC *variants* carry different names and IDs and are
+    /// deliberately left alone.
     static func isABCLayoutEntry(_ source: [String: Any]) -> Bool {
-        if (source["KeyboardLayout Name"] as? String) == "ABC" { return true }
-        if let layoutID = source["KeyboardLayout ID"] as? Int, layoutID == abcKeyboardLayoutID { return true }
-        return false
+        let name = source["KeyboardLayout Name"] as? String
+        if name == "ABC" { return true }
+        guard name == nil,
+              (source["InputSourceKind"] as? String) == "Keyboard Layout",
+              let layoutID = source["KeyboardLayout ID"] as? Int else { return false }
+        return layoutID == abcKeyboardLayoutID
     }
 
     /// Disable the ABC layout in the enabled-input-source list, verifying the write.
@@ -155,12 +171,14 @@ public final class InputSourceManager: @unchecked Sendable {
         return .removed
     }
 
-    /// Whether the live TIS state agrees that ABC is gone.
+    /// Whether the live TIS state agrees that the plain ABC layout is gone.
     ///
     /// The preference write can succeed while the running system still has ABC
-    /// enabled, so the UI confirms against TIS before claiming success.
+    /// enabled, so the UI confirms against TIS before claiming success. This uses
+    /// the exact source ID — the confirmation must recognise exactly what the
+    /// removal targets, or ABC-variant and Pinyin users fail forever.
     public func isABCDisabledAccordingToTIS() -> Bool {
-        !isABCEnabled()
+        !getEnabledKeyboardInputSources().contains { $0.id == Self.abcInputSourceID }
     }
 
     /// Keys whose sanitized copies must land together or not at all.

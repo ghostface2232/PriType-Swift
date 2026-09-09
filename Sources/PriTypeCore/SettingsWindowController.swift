@@ -112,6 +112,8 @@ struct SettingsView: View {
 
     // Disable-default-English (ABC) action state (restored 2.6.5 feature)
     @State private var removeABCStatus: RemoveABCStatus = .idle
+    // Pending status reset, replaced on each finish so timers cannot interleave.
+    @State private var removeABCResetWorkItem: DispatchWorkItem?
 
     // Experimental Windows-style direct insertion (Phase 3). Default OFF.
     @State private var experimentalDirectInsertion = false
@@ -129,6 +131,8 @@ struct SettingsView: View {
 
     private enum RemoveABCStatus: Equatable {
         case idle
+        /// Removal issued; waiting for TIS to agree. Blocks re-entry.
+        case working
         case success
         case error
     }
@@ -413,6 +417,9 @@ struct SettingsView: View {
                         Spacer()
 
                         switch removeABCStatus {
+                        case .working:
+                            ProgressView()
+                                .controlSize(.small)
                         case .success:
                             StatusPill(
                                 title: L10n.system.removeABCSuccess,
@@ -436,6 +443,9 @@ struct SettingsView: View {
                             .buttonBorderShape(.roundedRectangle(radius: 7))
                             .controlSize(.small)
                             .frame(minWidth: 70)
+                            // Overlapping attempts would spawn competing killalls
+                            // and competing status resets.
+                            .disabled(removeABCStatus == .working)
                         }
                     }
                     .padding(.vertical, 10)
@@ -727,42 +737,56 @@ struct SettingsView: View {
     ///
     /// The previous version reported success unconditionally — even when the
     /// preference write never landed — which is indistinguishable from the
-    /// reported "ABC comes back on its own" symptom. The write is now verified in
+    /// reported "ABC comes back on its own" symptom. The write is now checked in
     /// preferences and then confirmed against live TIS state before the UI claims
     /// success.
     private func removeABCKeyboard() {
-        let result = InputSourceManager.shared.disableABCKeyboardLayout()
+        guard removeABCStatus != .working else { return }  // no overlapping attempts
+        withAnimation { removeABCStatus = .working }
 
-        switch result {
+        switch InputSourceManager.shared.disableABCKeyboardLayout() {
         case .failed(let reason):
             DebugLogger.log("SettingsView: disable ABC failed — \(reason)")
             finishRemoveABC(.error)
         case .alreadyAbsent:
-            // Desired end state already; still confirm TIS agrees.
-            confirmABCDisabled()
+            // The preference-level end state is already what the user asked for, so
+            // this is a success regardless of what TIS says. Reporting failure here
+            // would blame the user's action for a stale system list.
+            finishRemoveABC(.success)
         case .removed:
-            confirmABCDisabled()
+            confirmABCDisabled(deadline: Date().addingTimeInterval(3))
         }
     }
 
-    /// TIS refreshes shortly after the preference change, so give it a moment and
-    /// only then decide what to show. A stale menu-bar list is precisely what the
-    /// user perceives as the layout coming back.
-    private func confirmABCDisabled() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            let disabled = InputSourceManager.shared.isABCDisabledAccordingToTIS()
-            if !disabled {
+    /// Poll TIS until it agrees the layout is gone, or the deadline expires.
+    ///
+    /// A single fixed sample is not a sound basis for a verdict: propagation runs
+    /// through cfprefsd, a distributed notification and the `TextInputMenuAgent`
+    /// restart this action just triggered, which under load easily exceeds any
+    /// short delay — and the UI would then report failure for a removal that
+    /// worked. Resolve on the first agreeing sample; only the deadline fails.
+    private func confirmABCDisabled(deadline: Date) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            if InputSourceManager.shared.isABCDisabledAccordingToTIS() {
+                finishRemoveABC(.success)
+            } else if Date() >= deadline {
                 DebugLogger.log("SettingsView: TIS still reports ABC enabled after removal")
+                finishRemoveABC(.error)
+            } else {
+                confirmABCDisabled(deadline: deadline)
             }
-            finishRemoveABC(disabled ? .success : .error)
         }
     }
 
     private func finishRemoveABC(_ status: RemoveABCStatus) {
         withAnimation { removeABCStatus = status }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            withAnimation { self.removeABCStatus = .idle }
+        // Replace any in-flight reset so an older timer cannot clear a newer status.
+        removeABCResetWorkItem?.cancel()
+        let reset = DispatchWorkItem {
+            withAnimation { removeABCStatus = .idle }
         }
+        removeABCResetWorkItem = reset
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: reset)
     }
 
     // MARK: - Toggle Exclusion Logic
