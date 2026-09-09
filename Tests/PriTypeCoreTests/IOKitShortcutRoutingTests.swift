@@ -35,9 +35,10 @@ struct IOKitShortcutRoutingTests {
 
     private func press(_ state: inout HIDShortcutState, _ usage: UInt32, _ pressed: Bool,
                        device: UInt64 = 1, toggle: KeyBinding, hanja: KeyBinding,
-                       toggleEnabled: Bool = true, paused: Bool = false) -> HIDShortcutState.Action? {
+                       toggleEnabled: Bool = true, paused: Bool = false,
+                       at now: TimeInterval = 0) -> HIDShortcutState.Action? {
         state.consume(usage: usage, pressed: pressed, device: device, toggle: toggle, hanja: hanja,
-                      toggleEnabled: toggleEnabled, paused: paused)
+                      toggleEnabled: toggleEnabled, paused: paused, at: now)
     }
 
     @Test("A standalone ordinary key toggles on its own key down")
@@ -141,6 +142,48 @@ struct IOKitShortcutRoutingTests {
                       toggle: rightCommandBinding, hanja: rightOptionBinding) == nil)
         #expect(press(&state, HIDUsage.rightCommand, false, device: 1,
                       toggle: rightCommandBinding, hanja: rightOptionBinding) == .toggle)
+    }
+
+    @Test("A held key outliving the expiry window stops blocking the toggle")
+    func staleOrdinaryKeyStopsBlockingToggle() {
+        var state = HIDShortcutState()
+        let stale = HIDShortcutState.holdExpiry + 1
+        // The key-up for `A` never arrives — the host took the keyboard away
+        // mid-press. Without expiry this wedges the toggle permanently.
+        #expect(press(&state, HIDUsage.a, true, toggle: rightCommandBinding, hanja: rightOptionBinding,
+                      at: 0) == nil)
+        #expect(press(&state, HIDUsage.rightCommand, true, toggle: rightCommandBinding,
+                      hanja: rightOptionBinding, at: stale) == nil)
+        #expect(press(&state, HIDUsage.rightCommand, false, toggle: rightCommandBinding,
+                      hanja: rightOptionBinding, at: stale) == .toggle)
+    }
+
+    @Test("A stale modifier no longer satisfies a combo binding")
+    func staleModifierDoesNotSatisfyCombo() {
+        var state = HIDShortcutState()
+        #expect(press(&state, HIDUsage.leftControl, true, toggle: controlSpaceBinding,
+                      hanja: rightOptionBinding, at: 0) == nil)
+        // Otherwise every bare Space would switch the input source while typing.
+        #expect(press(&state, HIDUsage.space, true, toggle: controlSpaceBinding,
+                      hanja: rightOptionBinding, at: HIDShortcutState.holdExpiry + 1) == nil)
+    }
+
+    @Test("A modifier held inside the expiry window still satisfies a combo")
+    func recentModifierStillSatisfiesCombo() {
+        var state = HIDShortcutState()
+        #expect(press(&state, HIDUsage.leftControl, true, toggle: controlSpaceBinding,
+                      hanja: rightOptionBinding, at: 0) == nil)
+        #expect(press(&state, HIDUsage.space, true, toggle: controlSpaceBinding,
+                      hanja: rightOptionBinding, at: HIDShortcutState.holdExpiry - 1) == .toggle)
+    }
+
+    @Test("A tap whose own key went stale does not toggle on release")
+    func staleTapDoesNotToggle() {
+        var state = HIDShortcutState()
+        #expect(press(&state, HIDUsage.rightCommand, true, toggle: rightCommandBinding,
+                      hanja: rightOptionBinding, at: 0) == nil)
+        #expect(press(&state, HIDUsage.rightCommand, false, toggle: rightCommandBinding,
+                      hanja: rightOptionBinding, at: HIDShortcutState.holdExpiry + 1) == nil)
     }
 
     @Test("Every bare-bindable key has a HID usage")

@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// Physical keyboard-page usages (IOHIDUsageTables.h) corresponding to macOS
 /// virtual key positions (HIToolbox/Events.h). Characters/layouts are irrelevant.
@@ -44,28 +45,45 @@ enum HIDKeyMapping {
 struct HIDShortcutState {
     enum Action: Equatable { case toggle, hanja }
     private struct Key: Hashable { let device: UInt64; let usage: UInt32 }
-    private var held: Set<Key> = []
+
+    /// A key that is merely held emits no further HID reports, so a held entry
+    /// this old is far likelier to be a key-up the stream dropped than a finger
+    /// still on the key. The value stream is interrupted whenever the host takes
+    /// the keyboard away mid-press — a screen lock, a fast user switch, a secure
+    /// input field. Without this the CGEventTap path's per-event reconciliation
+    /// against `event.flags` has no counterpart here, and one lost key-up wedges
+    /// the monitor permanently: a stuck ordinary key blocks every later tap, and
+    /// a stuck modifier makes its bare trigger key match a combo binding.
+    static let holdExpiry: TimeInterval = 30
+
+    private var held: [Key: TimeInterval] = [:]
     private var pendingToggle: Key?
     private var lastBindings: [KeyBinding] = []
 
+    static func timestamp() -> TimeInterval { Date().timeIntervalSinceReferenceDate }
+
     mutating func removeDevice(_ device: UInt64) {
-        held = held.filter { $0.device != device }
+        held = held.filter { $0.key.device != device }
         // Disconnection is not a release and must never complete a toggle.
         if pendingToggle?.device == device { pendingToggle = nil }
     }
 
     mutating func consume(usage: UInt32, pressed: Bool, device: UInt64 = 0,
                           toggle: KeyBinding, hanja: KeyBinding,
-                          toggleEnabled: Bool = true, paused: Bool = false) -> Action? {
+                          toggleEnabled: Bool = true, paused: Bool = false,
+                          at now: TimeInterval = HIDShortcutState.timestamp()) -> Action? {
+        expireStaleHolds(before: now - Self.holdExpiry)
         if lastBindings != [toggle, hanja] {
             pendingToggle = nil
             lastBindings = [toggle, hanja]
         }
         let key = Key(device: device, usage: usage)
-        let transitioned = pressed ? held.insert(key).inserted : held.remove(key) != nil
+        let transitioned = pressed
+            ? held.updateValue(now, forKey: key) == nil
+            : held.removeValue(forKey: key) != nil
         if paused || !toggleEnabled { pendingToggle = nil }
         guard !paused, transitioned else { return nil }
-        let flags = held.reduce(UInt64(0)) { $0 | HIDKeyMapping.modifierMask(for: $1.usage) }
+        let flags = held.keys.reduce(UInt64(0)) { $0 | HIDKeyMapping.modifierMask(for: $1.usage) }
         if !pressed {
             guard toggleEnabled, pendingToggle == key else { return nil }
             pendingToggle = nil
@@ -85,7 +103,7 @@ struct HIDShortcutState {
             if toggle.isModifierKey {
                 // Only an ordinary key already held disqualifies the tap; the
                 // CGEventTap path toggles regardless of other modifiers.
-                if held.allSatisfy({ HIDKeyMapping.modifierMask(for: $0.usage) != 0 }) {
+                if held.keys.allSatisfy({ HIDKeyMapping.modifierMask(for: $0.usage) != 0 }) {
                     pendingToggle = key
                 }
                 return nil
@@ -94,5 +112,12 @@ struct HIDShortcutState {
         }
         if matches(hanja) { return .hanja }
         return nil
+    }
+
+    private mutating func expireStaleHolds(before cutoff: TimeInterval) {
+        guard held.contains(where: { $0.value < cutoff }) else { return }
+        held = held.filter { $0.value >= cutoff }
+        // A tap whose own key expired is no longer a tap.
+        if let pending = pendingToggle, held[pending] == nil { pendingToggle = nil }
     }
 }
