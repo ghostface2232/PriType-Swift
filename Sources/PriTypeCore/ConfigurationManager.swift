@@ -262,9 +262,6 @@ public extension Notification.Name {
     static let keyboardLayoutChanged = Notification.Name("PriTypeKeyboardLayoutChanged")
     /// Posted when a key binding changes
     static let keyBindingChanged = Notification.Name("PriTypeKeyBindingChanged")
-
-    /// Posted when the toggle-key app exclusion list changes.
-    static let toggleExclusionsChanged = Notification.Name("PriTypeToggleExclusionsChanged")
 }
 
 // MARK: - ConfigurationProviding Protocol
@@ -553,8 +550,9 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
                 deduped = ToggleExclusionPolicy.adding(bundleID, to: deduped)
             }
             defaults.set(deduped, forKey: Keys.toggleExcludedBundleIDs)
+            // The policy snapshot is the only consumer; the settings view reloads
+            // its own rows imperatively after each mutation.
             ToggleExclusionPolicy.shared.refreshExcludedBundleIDs(from: self)
-            NotificationCenter.default.post(name: .toggleExclusionsChanged, object: nil)
         }
     }
 

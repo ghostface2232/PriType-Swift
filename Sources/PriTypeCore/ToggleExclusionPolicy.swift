@@ -38,7 +38,13 @@ public final class ToggleExclusionPolicy: @unchecked Sendable {
     /// Begin tracking the frontmost application and the user's exclusion list.
     ///
     /// Safe to call more than once; later calls only refresh the snapshot.
+    ///
+    /// - Important: Main thread only. `isTogglePaused` and the snapshot setters are
+    ///   lock-protected and callable from the event-tap thread, but `observer` is
+    ///   not — the class is `@unchecked Sendable` for the hot-path read, which does
+    ///   not extend to lifecycle.
     public func start(configuration: ConfigurationProviding = ConfigurationManager.shared) {
+        dispatchPrecondition(condition: .onQueue(.main))
         refreshExcludedBundleIDs(from: configuration)
         updateFrontmostBundleID(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
 
@@ -53,15 +59,19 @@ public final class ToggleExclusionPolicy: @unchecked Sendable {
         }
     }
 
-    /// Stop tracking. Clears the cached frontmost app so a stale value can never
-    /// keep suppressing the toggle after monitoring ends.
+    /// Stop tracking. Clears both halves of the snapshot so no stale value can keep
+    /// suppressing the toggle after monitoring ends.
+    ///
+    /// - Important: Main thread only, for the same reason as `start()`.
     public func stop() {
+        dispatchPrecondition(condition: .onQueue(.main))
         if let observer {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
         observer = nil
         lock.lock()
         frontmostBundleID = nil
+        excludedBundleIDs = []
         lock.unlock()
     }
 

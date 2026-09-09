@@ -186,9 +186,12 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         if !priTypeToggleEnabled {
             toggleModifierIsDown = false
         }
+        // Exclusion is enforced by this single early return, NOT by per-branch
+        // guards below. Keep it that way: with two mechanisms, removing this return
+        // would silently leave the toggle branch unguarded while hanja stayed safe.
+        // Recording still needs the key; everything else — including modifier
+        // stripping — must leave the event exactly as the app expects it.
         if excluded {
-            // Recording still needs the key; everything else — including modifier
-            // stripping — must leave the event exactly as the app expects it.
             hanjaModifierIsDown = false
             if !isRecordingKey {
                 return Unmanaged.passUnretained(event)
@@ -251,7 +254,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             }
             
             // Dynamic hanja key — modifier key, single-key binding (only if different from toggle key)
-            if !excluded && hanjaBinding.isModifierKey && hanjaBinding.isModifierOnly && keyCode == hanjaBinding.keyCode && keyCode != toggleBinding.keyCode {
+            if hanjaBinding.isModifierKey && hanjaBinding.isModifierOnly && keyCode == hanjaBinding.keyCode && keyCode != toggleBinding.keyCode {
                 let isPressed = ModifierKeyState.isDown(keyCode, flags: flags.rawValue)
                 
                 if isPressed && !hanjaModifierIsDown {
@@ -304,7 +307,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             }
             
             // Regular key (non-modifier) as hanja — single key or combo
-            if !excluded && keyCode == hanjaBinding.keyCode && !hanjaBinding.isModifierKey && keyCode != toggleBinding.keyCode {
+            if keyCode == hanjaBinding.keyCode && !hanjaBinding.isModifierKey && keyCode != toggleBinding.keyCode {
                 if hanjaBinding.isModifierOnly || Self.hasRequiredModifiers(flags: event.flags, required: CGEventFlags(rawValue: hanjaBinding.modifiers)) {
                     DebugLogger.log("RightCommandSuppressor: Regular key hanja (\(hanjaBinding.displayName)) - HANJA")
                     triggerHanjaLookup()

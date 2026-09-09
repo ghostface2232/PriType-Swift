@@ -3,7 +3,11 @@ import Foundation
 import Cocoa
 @testable import PriTypeCore
 
-@Suite("Toggle exclusion policy")
+// Three of these tests mutate process-wide singletons (ConfigurationManager.shared
+// → UserDefaults.standard, and ToggleExclusionPolicy.shared). swift-testing runs a
+// suite's tests in parallel by default, which let one test's write land inside
+// another's assert — a reproducible ~25% failure rate.
+@Suite("Toggle exclusion policy", .serialized)
 struct ToggleExclusionPolicyTests {
 
     @Test("An excluded frontmost app pauses the toggle")

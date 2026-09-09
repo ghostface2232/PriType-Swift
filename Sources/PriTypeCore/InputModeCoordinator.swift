@@ -12,6 +12,19 @@ public final class InputModeCoordinator: @unchecked Sendable {
     public enum ToggleSource: Sendable {
         case customKey
         case iokitFallback
+
+        /// Whether the caller already consulted `ToggleExclusionPolicy` at key time.
+        ///
+        /// Both monitors decide before consuming the event, then hop to main. Asking
+        /// again here would re-decide against a *newer* frontmost app: if an excluded
+        /// app activates during that hop, the key has already been swallowed by the
+        /// tap and dropping the toggle too leaves the user with nothing — the one
+        /// outcome neither policy wants. A future non-key caller gets the check.
+        var isGatedAtKeyTime: Bool {
+            switch self {
+            case .customKey, .iokitFallback: return true
+            }
+        }
     }
 
     private init() {}
@@ -29,10 +42,9 @@ public final class InputModeCoordinator: @unchecked Sendable {
             return
         }
 
-        // Both monitors dispatch their toggle asynchronously, so re-check here: this
-        // is the one gate every key-driven toggle passes through, and it keeps a
-        // future caller from bypassing the user's app exclusion list.
-        guard !ToggleExclusionPolicy.shared.isTogglePaused else {
+        // Backstop for callers that did not already gate at key time, so the user's
+        // exclusion list cannot be bypassed by a future entry point.
+        guard source.isGatedAtKeyTime || !ToggleExclusionPolicy.shared.isTogglePaused else {
             DebugLogger.log("InputModeCoordinator: ignored custom toggle because the frontmost app is excluded")
             return
         }
