@@ -36,6 +36,50 @@ struct ShortcutRoutingTests {
         #expect(actions.snapshot == ["hanja", "toggle"])
     }
 
+    @Test("Holding an ordinary toggle key fires once and stays suppressed")
+    func autorepeatFiresOnce() async throws {
+        let tap = RightCommandSuppressor()
+        let actions = ShortcutActions()
+        tap.onToggle = { actions.record("toggle") }
+        tap.onHanjaLookup = { actions.record("hanja") }
+        let binding = KeyBinding(keyCode: 105, modifiers: 0, displayName: "F13")
+        let hanja = KeyBinding(keyCode: 61, modifiers: 0, displayName: "Right Option")
+        let first = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 105, keyDown: true))
+        #expect(tap.handleEvent(type: .keyDown, event: first, toggle: binding, hanja: hanja,
+            toggleEnabled: true, excludedOverride: false) == nil)
+        for _ in 0..<3 {
+            let repeated = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 105, keyDown: true))
+            repeated.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+            // Still swallowed, so the key never reaches the app, but no new toggle.
+            #expect(tap.handleEvent(type: .keyDown, event: repeated, toggle: binding, hanja: hanja,
+                toggleEnabled: true, excludedOverride: false) == nil)
+        }
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        #expect(actions.snapshot == ["toggle"])
+    }
+
+    @Test("An unrelated held key is still delivered")
+    func autorepeatOfUnboundKeyPassesThrough() async throws {
+        let tap = RightCommandSuppressor()
+        let actions = ShortcutActions()
+        tap.onToggle = { actions.record("toggle") }
+        tap.onHanjaLookup = { actions.record("hanja") }
+        // Space alone does not match Control+Space, so holding it must type.
+        let toggle = KeyBinding(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue, displayName: "Control Space")
+        let hanja = KeyBinding(keyCode: 61, modifiers: 0, displayName: "Right Option")
+        let repeated = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 49, keyDown: true))
+        repeated.flags = []
+        repeated.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+        #expect(tap.handleEvent(type: .keyDown, event: repeated, toggle: toggle, hanja: hanja,
+            toggleEnabled: true, excludedOverride: false) != nil)
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        #expect(actions.snapshot.isEmpty)
+    }
+
     @Test("An identical binding fires once, with toggle priority")
     func identicalBindings() async throws {
         let tap = RightCommandSuppressor()

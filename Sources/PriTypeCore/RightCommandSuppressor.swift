@@ -278,9 +278,17 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             // Reconcile on every key: a release may have been lost while disabled.
             toggleModifierIsDown = ModifierKeyState.isDown(toggleBinding.keyCode, flags: event.flags.rawValue)
             hanjaModifierIsDown = ModifierKeyState.isDown(hanjaBinding.keyCode, flags: event.flags.rawValue)
+            // The window server keeps generating keyDown while an ordinary key is
+            // held, so acting on every one flaps the input source for as long as
+            // the user leans on it. Keep suppressing the repeats — the key must
+            // still never reach the app — but act only on the first press. Each
+            // binding checks this after it has matched, so an unrelated held key
+            // is delivered normally.
+            let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
             // Regular key (non-modifier) as toggle — single key or combo
             if priTypeToggleEnabled && keyCode == toggleBinding.keyCode && !toggleBinding.isModifierKey {
                 if toggleBinding.isModifierOnly {
+                    if isAutorepeat { return nil }
                     // Single regular key as toggle (e.g., F13, Caps Lock via keyDown)
                     DebugLogger.log("RightCommandSuppressor: Regular key toggle (\(toggleBinding.displayName)) - TOGGLE")
                     triggerToggle()
@@ -289,6 +297,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                     // Combo toggle (e.g., Control+Space, Option+G)
                     let requiredFlags = CGEventFlags(rawValue: toggleBinding.modifiers)
                     if Self.hasRequiredModifiers(flags: event.flags, required: requiredFlags) {
+                        if isAutorepeat { return nil }
                         DebugLogger.log("RightCommandSuppressor: Combo toggle (\(toggleBinding.displayName)) - TOGGLE triggered")
                         triggerToggle()
                         return nil
@@ -301,6 +310,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             // valid when the two bindings require different modifiers.
             if keyCode == hanjaBinding.keyCode && !hanjaBinding.isModifierKey {
                 if hanjaBinding.isModifierOnly || Self.hasRequiredModifiers(flags: event.flags, required: CGEventFlags(rawValue: hanjaBinding.modifiers)) {
+                    if isAutorepeat { return nil }
                     DebugLogger.log("RightCommandSuppressor: Regular key hanja (\(hanjaBinding.displayName)) - HANJA")
                     triggerHanjaLookup()
                     return nil
