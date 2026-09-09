@@ -1145,6 +1145,7 @@ struct KeyRecorderRow: View {
     let onCapsLockBlocked: () -> Void
 
     @State private var isRecording = false
+    @State private var recordingOwner = UUID()
     @State private var isHovering = false
     @State private var monitor: Any?
     @State private var pulseAnimation = false
@@ -1228,18 +1229,23 @@ struct KeyRecorderRow: View {
     @State private var recordingState = KeyRecordingState()
 
     private func startRecording() {
+        let owner = UUID()
+        KeyRecordingSessions.shared.begin(owner: owner) { stopRecording() }
+        recordingOwner = owner
         isRecording = true
         pulseAnimation = true
         recordingState = KeyRecordingState()
 
         let suppressor = RightCommandSuppressor.shared
         suppressor.onKeyRecorded = { keyCode, modifiers in
+            guard KeyRecordingSessions.shared.owns(owner) else { return }
             receiveBinding(keyCode: keyCode, modifiers: modifiers)
         }
         suppressor.isRecordingKey = true
 
         // Both producers use the same modifier-release/shortcut state machine.
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+            guard KeyRecordingSessions.shared.owns(owner) else { return event }
             if let recorded = recordingState.consume(keyCode: Int64(event.keyCode),
                 flags: UInt64(event.modifierFlags.rawValue), isModifierChange: event.type == .flagsChanged) {
                 receiveBinding(keyCode: recorded.keyCode, modifiers: recorded.modifiers)
@@ -1265,7 +1271,7 @@ struct KeyRecorderRow: View {
     }
 
     private func stopRecording() {
-        if isRecording {
+        if KeyRecordingSessions.shared.end(owner: recordingOwner) {
             RightCommandSuppressor.shared.isRecordingKey = false
             RightCommandSuppressor.shared.onKeyRecorded = nil
         }
