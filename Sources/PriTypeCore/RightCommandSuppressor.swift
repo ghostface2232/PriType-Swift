@@ -307,7 +307,9 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             }
             
             // Regular key (non-modifier) as hanja — single key or combo
-            if keyCode == hanjaBinding.keyCode && !hanjaBinding.isModifierKey && keyCode != toggleBinding.keyCode {
+            // A matching toggle already returned above. Sharing a physical key is
+            // valid when the two bindings require different modifiers.
+            if keyCode == hanjaBinding.keyCode && !hanjaBinding.isModifierKey {
                 if hanjaBinding.isModifierOnly || Self.hasRequiredModifiers(flags: event.flags, required: CGEventFlags(rawValue: hanjaBinding.modifiers)) {
                     DebugLogger.log("RightCommandSuppressor: Regular key hanja (\(hanjaBinding.displayName)) - HANJA")
                     triggerHanjaLookup()
