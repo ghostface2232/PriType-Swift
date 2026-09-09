@@ -82,6 +82,56 @@ struct UpdateCheckerTests {
         #expect(UpdateChecker.isNewer("2.5.x", than: "2.4.9"))
     }
 
+    @Test("Malformed segments degrade individually, not version-wide")
+    func malformedSegmentsDegradePerSegment() {
+        // Only the bad segment becomes 0; the earlier ones still decide the order.
+        #expect(UpdateChecker.versionComponents("2.5.x") == [2, 5, 0])
+        #expect(UpdateChecker.isNewer("2.5.x", than: "2.4.9"))
+        // A non-ASCII numeral must not collapse the whole segment.
+        #expect(UpdateChecker.versionComponents("2.5\u{0665}.0") == [2, 5, 0])
+    }
+
+    @Test("An overflowing segment saturates instead of wrapping to zero")
+    func overflowingSegmentSaturates() {
+        let huge = "99999999999999999999"
+        #expect(UpdateChecker.versionComponents("\(huge).0") == [Int.max, 0])
+        // Wrapping to 0 would have inverted this comparison.
+        #expect(UpdateChecker.isNewer("\(huge).0.0", than: "2.7.4"))
+        #expect(!UpdateChecker.isNewer("2.7.4", than: "\(huge).0.0"))
+    }
+
+    @Test("Version normalization is idempotent")
+    func normalizationIsIdempotent() {
+        for raw in ["v2.5", "v 2.5", " v2.5 ", "V2.5.0-beta.1", "2.5+build"] {
+            let once = UpdateChecker.normalizeVersion(raw)
+            #expect(UpdateChecker.normalizeVersion(once) == once, "not idempotent for '\(raw)'")
+        }
+        // Callers normalize before isNewer normalizes again; that must be a no-op.
+        #expect(UpdateChecker.versionComponents("v 2.5") == [2, 5])
+    }
+
+    @Test("Equal-comparing tags resolve to the most recently published release")
+    func tiedVersionsPreferNewestPublished() {
+        // GitHub returns releases newest-first, and "2.7" == "2.7.0" under
+        // component-wise comparison, so the first of the tie must win.
+        func release(_ tag: String) -> UpdateChecker.GitHubRelease {
+            UpdateChecker.GitHubRelease(
+                tagName: tag, htmlUrl: "https://example.invalid", name: tag, body: "",
+                draft: false, prerelease: false, assets: []
+            )
+        }
+        let newestFirst = [release("v2.7.0"), release("v2.7"), release("v2.6.5")]
+        #expect(UpdateChecker.latestStableRelease(in: newestFirst)?.tagName == "v2.7.0")
+
+        // Ordering is the only tie-breaker, so the reversed list picks the other —
+        // this pins the dependency rather than leaving it silent.
+        #expect(UpdateChecker.latestStableRelease(in: newestFirst.reversed())?.tagName == "v2.7")
+
+        // A genuine version difference is never decided by ordering.
+        let outOfOrder = [release("v2.6.5"), release("v2.7.1"), release("v2.7")]
+        #expect(UpdateChecker.latestStableRelease(in: outOfOrder)?.tagName == "v2.7.1")
+    }
+
     @Test("Version components parse normalized numeric segments")
     func versionComponentsParsing() {
         #expect(UpdateChecker.versionComponents("v2.4.2-beta.1") == [2, 4, 2])
