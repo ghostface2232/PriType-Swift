@@ -707,8 +707,13 @@ struct SettingsView: View {
     /// Deduplicated so binding both keys to the same shortcut family does not
     /// print the same sentence twice.
     private var systemShortcutWarnings: [String] {
+        // Only warn about bindings PriType actually intercepts. When Caps Lock owns
+        // switching, the toggle key is not consumed at all (the row is disabled and
+        // reads "managed by macOS"), so warning about it would tell the user to
+        // reassign a system shortcut for no reason.
+        let active = capsLockSwitchEnabled ? [hanjaKeyBinding] : [toggleKeyBinding, hanjaKeyBinding]
         var seen = Set<String>()
-        return [toggleKeyBinding, hanjaKeyBinding]
+        return active
             .compactMap { $0.systemShortcutConflict }
             .compactMap { conflict in
                 guard seen.insert(conflict.nameKey).inserted else { return nil }
@@ -1295,6 +1300,10 @@ struct KeyRecorderRow: View {
         guard isRecording else { return }
         if keyCode == 53 { stopRecording(); return }
         if keyCode == 57 { stopRecording(); onCapsLockBlocked(); return }
+        // Narrow to the four bare masks. `KeyBinding.SystemShortcut.matches` compares
+        // modifiers with `==`, so widening this would leave device-specific bits
+        // (NX_DEVICEL/RCMDKEYMASK…), maskNonCoalesced or Caps Lock in the stored
+        // value and silently stop every shortcut-conflict warning from matching.
         let relevant = modifiers & (CGEventFlags.maskCommand.rawValue | CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue | CGEventFlags.maskShift.rawValue)
         let candidate = KeyBinding(keyCode: keyCode, modifiers: relevant,
             displayName: KeyBinding.generateDisplayName(keyCode: keyCode, modifiers: relevant))

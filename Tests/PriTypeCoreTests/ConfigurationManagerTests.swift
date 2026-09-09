@@ -337,6 +337,32 @@ struct SystemShortcutConflictTests {
         #expect(binding(48, .maskControl).systemShortcutConflict == nil)
     }
 
+    @Test("Realistic dirty recorder flags still resolve to a conflict")
+    func normalizedRecordedModifiersStillConflict() {
+        // What a CGEventTap actually delivers for Control+Space: the bare mask plus
+        // the device-specific left-control bit, maskNonCoalesced and a latched Caps
+        // Lock. The recorder narrows this to the four bare masks; if that ever
+        // stops happening, the exact `==` in `matches` fails and the whole feature
+        // dies silently. This is the test standing between those two facts.
+        let dirty = CGEventFlags.maskControl.rawValue
+            | 0x0001                                   // NX_DEVICELCTLKEYMASK
+            | 0x0100                                   // maskNonCoalesced
+            | CGEventFlags.maskAlphaShift.rawValue     // latched Caps Lock
+        let normalized = dirty & (CGEventFlags.maskCommand.rawValue
+            | CGEventFlags.maskControl.rawValue
+            | CGEventFlags.maskAlternate.rawValue
+            | CGEventFlags.maskShift.rawValue)
+
+        #expect(normalized == CGEventFlags.maskControl.rawValue)
+        let recorded = KeyBinding(keyCode: 49, modifiers: normalized,
+                                  displayName: KeyBinding.generateDisplayName(keyCode: 49, modifiers: normalized))
+        #expect(recorded.systemShortcutConflict?.nameKey == "shortcut.previousInputSource")
+
+        // The un-normalized value must NOT match — that is the failure being guarded.
+        let unnormalized = KeyBinding(keyCode: 49, modifiers: dirty, displayName: "Control + Space")
+        #expect(unnormalized.systemShortcutConflict == nil)
+    }
+
     @Test("Every catalogued shortcut has a distinct localization key")
     func shortcutCatalogIsWellFormed() {
         let keys = KeyBinding.SystemShortcut.all.map(\.nameKey)

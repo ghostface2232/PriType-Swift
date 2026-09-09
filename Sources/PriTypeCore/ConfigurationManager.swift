@@ -100,6 +100,12 @@ public struct KeyBinding: Codable, Equatable, Sendable {
         /// Localization key for the shortcut's name.
         public let nameKey: String
 
+        /// Exact match. This is only safe because recorded bindings are normalized
+        /// to the four bare modifier masks at record time
+        /// (`SettingsWindowController.receiveBinding`, which strips the
+        /// device-specific left/right bits, `maskNonCoalesced`, Caps Lock, numeric
+        /// pad and Fn). Widening that mask would silently kill this feature with no
+        /// test failure — `normalizedRecordedModifiersStillConflict` pins it.
         func matches(_ binding: KeyBinding) -> Bool {
             binding.keyCode == keyCode && binding.modifiers == modifiers
         }

@@ -85,6 +85,6 @@
 "shortcut.spotlight" = "Spotlight search";
 "shortcut.finderSearch" = "Finder search window";
 "shortcut.emojiPicker" = "Emoji & Symbols";
-"shortcut.screenshot" = "Screenshot of the screen";
-"shortcut.screenshotRegion" = "Screenshot of a selection";
-"shortcut.screenshotUI" = "Screenshot options";
+"shortcut.screenshot" = "Save picture of screen as a file";
+"shortcut.screenshotRegion" = "Save picture of selected area as a file";
+"shortcut.screenshotUI" = "Screenshot and recording options";
