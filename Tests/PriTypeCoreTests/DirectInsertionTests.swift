@@ -342,6 +342,13 @@ struct KeyEventDedupTests {
         #expect(!KeyEventDedup.isDuplicate(snap(100.01, 51, false), previous: snap(100.0, 51, true)))
     }
 
+    @Test("Different characters or modifiers survive the dedup window")
+    func differentInput() {
+        let previous = KeyDownSnapshot(timestamp: 100, keyCode: 0, isARepeat: false, characters: "a", modifiers: 0)
+        let shifted = KeyDownSnapshot(timestamp: 100.01, keyCode: 0, isARepeat: false, characters: "A", modifiers: 0x20000)
+        #expect(!KeyEventDedup.isDuplicate(shifted, previous: previous))
+    }
+
     @Test("No previous event ⇒ not a duplicate")
     func noPrevious() {
         #expect(!KeyEventDedup.isDuplicate(snap(100.0, 51), previous: nil))
@@ -475,5 +482,33 @@ struct DirectInsertionEndToEndTests {
             _ = composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: client)
         }
         #expect(client.document == "가 나", "Got '\(client.document)'")
+    }
+}
+
+@Suite("Legacy client focus recovery")
+struct LegacyClientFocusRecoveryTests {
+    @Test("Empty supported attributes survive activation and repeated context refresh")
+    func reactivationKeepsKoreanWorking() {
+        let client = FakeIMKTextInput()
+        let composer = HangulComposer(statusBar: MockStatusBar(), configuration: MockConfiguration())
+        let session = InputSession(client: client,
+            context: ClientContextDetector.analyzeForActivation(client: client), composer: composer)
+        #expect(session.context.bundleId == client.bundleIdentifier())
+        for _ in 0..<3 {
+            session.markContextStale()
+            session.refreshContext(ClientContextDetector.analyze(client: client))
+            #expect(!session.context.hasTextInputCapability)
+            #expect(!SecureInputPolicy.shouldPassThrough(SecureInputSignals(
+                bundleId: session.context.bundleId,
+                hasTextInputCapability: session.context.hasTextInputCapability,
+                hasInvalidSelection: false, hasGlobalSecureInput: false)))
+            composer.setInputMode(.english)
+            composer.setInputMode(.korean)
+            #expect(composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: session.adapter))
+            #expect(composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: session.adapter))
+            #expect(composer.hasActiveComposition)
+            session.finalize(reason: .deactivateServer)
+        }
+        #expect(client.document == "가가가")
     }
 }

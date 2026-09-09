@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 수정 (2026-09-09 리뷰 후속)
+- 원본 PR #11을 검토해 사용자 전환의 `selectInputMode:`를 제거하고, 영어 override를 이미 활성화된 ABC/US에 한정했습니다. 개선 계획과 PR #12 후속 평가를 `Docs/ImprovementPlan-2026-09-09.md`에 기록했습니다.
+- 앱 전환 후 빈 조합 속성 목록을 보안 입력으로 오인하여 한글을 계속 우회하는 경로를 수정했습니다. 전역 보안 입력 경고가 없는 일반 입력창은 조합을 허용합니다.
+- 지연된 이전 컨트롤러 종료 콜백이 새 조합을 확정하지 않도록 소유권을 확인하고, 첫 키가 활성화보다 먼저 와도 활성 컨트롤러를 복구합니다. 중복 활성화는 기존 세션을 유지합니다.
+- 전환키 좌우 수정자 상태를 구분하고 탭 복구·일반 키 입력에서 상태를 재동기화합니다. 반대쪽 Command를 누른 단축키는 보존합니다.
+- 확정 글자의 백스페이스 버퍼 손상, 영문 자동 변환, 빈 조합의 Space 소비를 수정했습니다.
+- 위험한 단독 문자/편집키 바인딩을 차단하고 기존 저장값을 기본값으로 복구합니다. 녹음 중 현재 전환키도 캡처합니다.
+- 설정 캐시를 주기적으로 갱신하고, 디버그 이벤트 로그에서 원문 문자를 제거했습니다. Blink 직접 삽입 거부 정책을 통합하고 시작 시 HIToolbox 설정을 자동으로 덮어쓰지 않습니다.
+
 ### 조사 (한글 조합 밑줄 — macOS 26에서는 marked text로 제거 불가)
 - 조합 밑줄을 모든 앱에서 없애기 위해 marked text 속성을 엔진별로 조정했으나(`PreeditUnderline`: Blink는 `underlineStyle 1 + alpha 1/255`, 그 외는 `underlineStyle 0 + NSColor.clear`), **macOS 26에서는 효과가 없음을 실측으로 확인했습니다**. NSTextInputClient 프로브로 실제 IMK 전송 경로를 측정한 결과, IME가 보내는 모든 속성 조합 — underline 0+clear, alpha 1/255, `NSMarkedClauseSegment` 1~9(kNoHilite 포함 전체 TSM hilite 카테고리), 심지어 속성 없는 문자열까지 13종 전부 — 이 앱에는 동일한 `NSUnderline=2 + 액센트 블루`로 재생성되어 도착합니다. 수신 측 프레임워크가 IME 스타일을 폐기하고 시스템 표준 스타일을 합성하므로, **macOS 26에서는 어떤 IME도 marked text 밑줄을 숨길 수 없습니다**(애플 한글 IME도 동일한 밑줄). 엔진별 속성 튜닝은 속성이 통과되는 구버전 macOS에서만 유효하며 코드에 유지합니다(오분류·부작용 없음). 밑줄 없는 입력은 marked text를 쓰지 않는 직접 삽입 모드(`com.pritype.experimentalDirectInsertion`)로 제공됩니다. 측정 과정은 `PreeditUnderline` 주석에 기록했습니다.
 

@@ -2,7 +2,7 @@
 
 /// Pure policy for deciding whether a secure-input-looking client should bypass IMK composition.
 ///
-/// `IsSecureEventInputEnabled()` is process-global, not scoped to the focused field.
+/// `IsSecureEventInputEnabled()` is system-wide, not scoped to the focused field.
 /// Treat it as a warning signal: fail closed when the current client is incapable or
 /// has no selection, but allow a normal marked-text-capable field to recover from a
 /// stale flag left behind by another app. Avoid Accessibility probing on the hot path.
@@ -25,19 +25,10 @@ struct SecureInputPolicy: Sendable {
             return true
         }
 
-        // These are field-local signals. Never attempt marked text or document edits
-        // when the current client cannot prove both capabilities.
-        if signals.hasInvalidSelection || !signals.hasTextInputCapability {
-            return true
-        }
-
-        if signals.hasGlobalSecureInput {
-            // At this point the current client is a capable field with a valid
-            // selection. The process-global flag can be stale after another app leaves
-            // secure input enabled, so it must not disable Korean input system-wide.
-            return false
-        }
-
-        return false
+        // An empty supported-attributes list is not proof of a secure field.
+        // Only combine these heuristics with a live global secure-input warning.
+        // This also permits legacy clients with no document-range API to compose.
+        return signals.hasGlobalSecureInput &&
+            (signals.hasInvalidSelection || !signals.hasTextInputCapability)
     }
 }

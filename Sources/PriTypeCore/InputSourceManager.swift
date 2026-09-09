@@ -65,6 +65,11 @@ public final class InputSourceManager: @unchecked Sendable {
         return result
     }
     
+    /// Never resurrect a disabled ABC/US layout merely to override a client.
+    static func enabledRomanKeyboardLayoutID(in enabledIDs: [String]) -> String? {
+        ["com.apple.keylayout.ABC", "com.apple.keylayout.US"].first { enabledIDs.contains($0) }
+    }
+
     /// Check if ABC is enabled via TIS API
     public func isABCEnabled() -> Bool {
         let sources = getEnabledKeyboardInputSources()

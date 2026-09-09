@@ -74,6 +74,15 @@ public struct KeyBinding: Codable, Equatable, Sendable {
         }
     }
     
+    /// Reject bindings that swallow ordinary typing globally, including Shift+letter.
+    public var isSafeGlobalBinding: Bool {
+        if keyCode == 57 || keyCode == 63 { return false }
+        if isModifierKey { return modifiers == 0 }
+        let shortcuts = CGEventFlags.maskCommand.rawValue | CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue
+        if modifiers & shortcuts != 0 { return true }
+        return [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90].contains(keyCode)
+    }
+
     /// Default toggle key: Right Command
     public static let defaultToggle = KeyBinding(keyCode: 54, modifiers: 0, displayName: "우측 Command")
     
@@ -311,6 +320,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     
     private let defaults = UserDefaults.standard
     private let systemTextFeatureLock = NSLock()
+    private var lastSystemTextRefresh: TimeInterval = 0
     private var cachedDoubleSpacePeriodEnabled: Bool = ConfigurationManager.readSystemTextFeature(
         key: SystemTextInputKeys.automaticPeriodSubstitution,
         defaultValue: true
@@ -420,7 +430,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
             if let data = defaults.data(forKey: Keys.toggleKeyBinding),
                let decoded = try? JSONDecoder().decode(KeyBinding.self, from: data) {
                 // Fn and Caps Lock are not supported as PriType custom toggle keys.
-                binding = (decoded.keyCode == 63 || decoded.keyCode == 57) ? .defaultToggle : decoded
+                binding = decoded.isSafeGlobalBinding ? decoded : .defaultToggle
             } else {
                 // Migrate from legacy toggleKey
                 binding = toggleKey.asKeyBinding
@@ -429,6 +439,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
             return binding
         }
         set {
+            guard newValue.isSafeGlobalBinding else { return }
             keyBindingLock.lock()
             _cachedToggleBinding = newValue
             keyBindingLock.unlock()
@@ -454,7 +465,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
             if let data = defaults.data(forKey: Keys.hanjaKeyBinding),
                let decoded = try? JSONDecoder().decode(KeyBinding.self, from: data) {
                 // Sanitize: Fn key (63) is not supported in CGEventTap
-                binding = decoded.keyCode == 63 ? .defaultHanja : decoded
+                binding = decoded.isSafeGlobalBinding ? decoded : .defaultHanja
             } else {
                 binding = .defaultHanja
             }
@@ -462,6 +473,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
             return binding
         }
         set {
+            guard newValue.isSafeGlobalBinding else { return }
             keyBindingLock.lock()
             _cachedHanjaBinding = newValue
             keyBindingLock.unlock()
@@ -513,8 +525,21 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     
     // MARK: - Text Input Features
     
+    private func refreshSystemTextFeaturesIfNeeded() {
+        systemTextFeatureLock.withLock {
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - lastSystemTextRefresh >= 2 else { return }
+            lastSystemTextRefresh = now
+            cachedDoubleSpacePeriodEnabled = Self.readSystemTextFeature(key: SystemTextInputKeys.automaticPeriodSubstitution, defaultValue: true)
+            cachedAutoCapitalizationEnabled = Self.readSystemTextFeature(key: SystemTextInputKeys.automaticCapitalization, defaultValue: true)
+            cachedSmartQuoteSubstitutionEnabled = Self.readSystemTextFeature(key: SystemTextInputKeys.automaticQuoteSubstitution, defaultValue: true)
+            cachedSmartDashSubstitutionEnabled = Self.readSystemTextFeature(key: SystemTextInputKeys.automaticDashSubstitution, defaultValue: true)
+        }
+    }
+
     /// Mirrors macOS "Add period with double-space" for PriType Korean input.
     public var doubleSpacePeriodEnabled: Bool {
+        refreshSystemTextFeaturesIfNeeded()
         return systemTextFeatureLock.withLock { cachedDoubleSpacePeriodEnabled }
     }
 
@@ -524,16 +549,19 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     /// apply it in Korean composition. English mode passes through to macOS, so
     /// the system handles capitalization without PriType tracking text context.
     public var autoCapitalizationEnabled: Bool {
+        refreshSystemTextFeaturesIfNeeded()
         return systemTextFeatureLock.withLock { cachedAutoCapitalizationEnabled }
     }
 
     /// Mirrors macOS "Use smart quotes".
     public var smartQuoteSubstitutionEnabled: Bool {
+        refreshSystemTextFeaturesIfNeeded()
         return systemTextFeatureLock.withLock { cachedSmartQuoteSubstitutionEnabled }
     }
 
     /// Mirrors macOS "Use smart dashes".
     public var smartDashSubstitutionEnabled: Bool {
+        refreshSystemTextFeaturesIfNeeded()
         return systemTextFeatureLock.withLock { cachedSmartDashSubstitutionEnabled }
     }
 

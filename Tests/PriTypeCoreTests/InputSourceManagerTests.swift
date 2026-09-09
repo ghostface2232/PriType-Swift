@@ -72,3 +72,14 @@ struct InputSourceManagerTests {
         #expect(sanitized.contains { ($0["Bundle ID"] as? String) == "com.apple.PressAndHold" })
     }
 }
+
+@Suite("Enabled Roman override policy")
+struct RomanOverridePolicyTests {
+    @Test("Disabled ABC is never revived by a keyboard override")
+    func onlyEnabledLayouts() {
+        #expect(InputSourceManager.enabledRomanKeyboardLayoutID(in: []) == nil)
+        #expect(InputSourceManager.enabledRomanKeyboardLayoutID(in: ["com.pritype.inputmethod.v2.english"]) == nil)
+        #expect(InputSourceManager.enabledRomanKeyboardLayoutID(in: ["com.apple.keylayout.US"]) == "com.apple.keylayout.US")
+        #expect(InputSourceManager.enabledRomanKeyboardLayoutID(in: ["com.apple.keylayout.US", "com.apple.keylayout.ABC"]) == "com.apple.keylayout.ABC")
+    }
+}

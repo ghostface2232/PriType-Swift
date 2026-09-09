@@ -15,6 +15,8 @@ struct KeyDownSnapshot: Equatable {
     let timestamp: TimeInterval
     let keyCode: UInt16
     let isARepeat: Bool
+    var characters: String? = nil
+    var modifiers: UInt = 0
 }
 
 enum KeyEventDedup {
@@ -24,7 +26,9 @@ enum KeyEventDedup {
     static func isDuplicate(_ event: KeyDownSnapshot, previous: KeyDownSnapshot?) -> Bool {
         guard let previous,
               !event.isARepeat, !previous.isARepeat,
-              event.keyCode == previous.keyCode else { return false }
+              event.keyCode == previous.keyCode,
+              event.characters == previous.characters,
+              event.modifiers == previous.modifiers else { return false }
         let dt = event.timestamp - previous.timestamp
         return dt >= 0 && dt < duplicateWindow
     }

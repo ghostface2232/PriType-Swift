@@ -37,3 +37,14 @@ public final class InputModeCoordinator: @unchecked Sendable {
         controller.performPriTypeModeTransition(source: source)
     }
 }
+
+/// A mode notification received before its controller owns the engine is only
+/// valid until another explicit mode selection supersedes it.
+struct DeferredInputMode {
+    let mode: InputMode
+    let revision: UInt64
+
+    func resolve(currentRevision: UInt64) -> InputMode? {
+        revision == currentRevision ? mode : nil
+    }
+}

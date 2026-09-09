@@ -1038,6 +1038,12 @@ struct KeyRecorderRow: View {
                 stopRecording()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            stopRecording()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            stopRecording()
+        }
         .onDisappear {
             stopRecording()
         }
@@ -1050,7 +1056,13 @@ struct KeyRecorderRow: View {
         pulseAnimation = true
         previousFlags = NSEvent.ModifierFlags(rawValue: 0)
 
-        // Use local event monitor to capture key events in the settings window
+        let suppressor = RightCommandSuppressor.shared
+        suppressor.onKeyRecorded = { keyCode, modifiers in
+            receiveBinding(keyCode: keyCode, modifiers: modifiers)
+        }
+        suppressor.isRecordingKey = true
+
+        // Local fallback when the event tap is unavailable.
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
             if event.type == .flagsChanged {
                 let keyCode = Int64(event.keyCode)
@@ -1075,6 +1087,7 @@ struct KeyRecorderRow: View {
                         modifiers: 0,  // modifier-only binding
                         displayName: KeyBinding.generateDisplayName(keyCode: keyCode, modifiers: 0)
                     )
+                    guard newBinding.isSafeGlobalBinding else { NSSound.beep(); return nil }
                     binding = newBinding
                     stopRecording()
                     return nil  // Consume event
@@ -1094,6 +1107,7 @@ struct KeyRecorderRow: View {
                     modifiers: UInt64(modifiers),
                     displayName: KeyBinding.generateDisplayName(keyCode: keyCode, modifiers: UInt64(modifiers))
                 )
+                guard newBinding.isSafeGlobalBinding else { NSSound.beep(); return nil }
                 binding = newBinding
                 stopRecording()
                 return nil  // Consume event
@@ -1102,7 +1116,23 @@ struct KeyRecorderRow: View {
         }
     }
 
+    private func receiveBinding(keyCode: Int64, modifiers: UInt64) {
+        guard isRecording else { return }
+        if keyCode == 53 { stopRecording(); return }
+        if keyCode == 57 { stopRecording(); onCapsLockBlocked(); return }
+        let relevant = modifiers & (CGEventFlags.maskCommand.rawValue | CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue | CGEventFlags.maskShift.rawValue)
+        let candidate = KeyBinding(keyCode: keyCode, modifiers: relevant,
+            displayName: KeyBinding.generateDisplayName(keyCode: keyCode, modifiers: relevant))
+        guard candidate.isSafeGlobalBinding else { NSSound.beep(); return }
+        binding = candidate
+        stopRecording()
+    }
+
     private func stopRecording() {
+        if isRecording {
+            RightCommandSuppressor.shared.isRecordingKey = false
+            RightCommandSuppressor.shared.onKeyRecorded = nil
+        }
         isRecording = false
         pulseAnimation = false
         if let monitor = monitor {

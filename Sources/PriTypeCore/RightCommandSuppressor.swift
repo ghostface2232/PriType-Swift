@@ -33,7 +33,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     private var runLoopSource: CFRunLoopSource?
     
     /// Whether the event tap is currently running
-    public var isRunning: Bool { eventTap != nil }
+    public var isRunning: Bool { eventTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
     
     /// Callback for toggle
     public var onToggle: (@Sendable () -> Void)?
@@ -65,7 +65,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     /// Callback for key recording (settings UI)
     public var onKeyRecorded: ((_ keyCode: Int64, _ modifiers: UInt64) -> Void)?
     
-    private init() {}
+    init() {}
     
     // MARK: - Start/Stop
     
@@ -73,6 +73,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     /// - Returns: `true` if CGEventTap was created successfully, `false` otherwise
     @discardableResult
     public func start() -> Bool {
+        if eventTap != nil && !isRunning { stop() }
         guard eventTap == nil else {
             // Enforce single ownership even if another caller redundantly starts the
             // primary monitor after an IOKit fallback was active.
@@ -98,7 +99,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             callback: { proxy, type, event, refcon in
                 guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
                 let suppressor = Unmanaged<RightCommandSuppressor>.fromOpaque(refcon).takeUnretainedValue()
-                return suppressor.handleEvent(proxy: proxy, type: type, event: event)
+                return suppressor.handleEvent(type: type, event: event)
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         )
@@ -142,7 +143,10 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     
     // MARK: - Event Handling
     
-    private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    // Internal entry point permits event-sequence tests without installing a tap.
+    func handleEvent(type: CGEventType, event: CGEvent,
+                     toggle: KeyBinding? = nil, hanja: KeyBinding? = nil,
+                     toggleEnabled: Bool? = nil, recoveryFlags: UInt64? = nil) -> Unmanaged<CGEvent>? {
         // Re-enable tap if disabled by system
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             switch failureTracker.recordDisable(at: CFAbsoluteTimeGetCurrent()) {
@@ -157,6 +161,9 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                 }
             case .reenable(let attempt):
                 DebugLogger.log("RightCommandSuppressor: Tap disabled (\(attempt)/\(failureTracker.maxRetries)), re-enabling")
+                let flags = recoveryFlags ?? CGEventSource.flagsState(.combinedSessionState).rawValue
+                toggleModifierIsDown = ModifierKeyState.isDown((toggle ?? ConfigurationManager.shared.toggleKeyBinding).keyCode, flags: flags)
+                hanjaModifierIsDown = ModifierKeyState.isDown((hanja ?? ConfigurationManager.shared.hanjaKeyBinding).keyCode, flags: flags)
                 if let tap = eventTap {
                     CGEvent.tapEnable(tap: tap, enable: true)
                 }
@@ -168,9 +175,9 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let config = ConfigurationManager.shared
-        let toggleBinding = config.toggleKeyBinding
-        let hanjaBinding = config.hanjaKeyBinding
-        let priTypeToggleEnabled = !config.capsLockInputSourceSwitchEnabled
+        let toggleBinding = toggle ?? config.toggleKeyBinding
+        let hanjaBinding = hanja ?? config.hanjaKeyBinding
+        let priTypeToggleEnabled = toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled
         if !priTypeToggleEnabled {
             toggleModifierIsDown = false
         }
@@ -182,7 +189,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                 // Only fire on key DOWN (when a new modifier appears).
                 // Caps Lock is special: its flag is the toggled lock state, so
                 // record the keyCode itself even when the flag is transitioning off.
-                let isModifierDown = flags.rawValue & 0xFFFF0000 != 0 || keyCode == 57
+                let isModifierDown = ModifierKeyState.isDown(keyCode, flags: flags.rawValue) || keyCode == 57
                 if isModifierDown {
                     let recordCallback = onKeyRecorded
                     DispatchQueue.main.async {
@@ -214,8 +221,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             
             // Dynamic toggle key — modifier key, single-key binding
             if priTypeToggleEnabled && toggleBinding.isModifierKey && toggleBinding.isModifierOnly && keyCode == toggleBinding.keyCode {
-                let modifierMask = Self.modifierMask(for: keyCode)
-                let isPressed = flags.contains(modifierMask)
+                let isPressed = ModifierKeyState.isDown(keyCode, flags: flags.rawValue)
                 
                 if isPressed && !toggleModifierIsDown {
                     // Toggle modifier pressed - toggle immediately!
@@ -233,8 +239,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             
             // Dynamic hanja key — modifier key, single-key binding (only if different from toggle key)
             if hanjaBinding.isModifierKey && hanjaBinding.isModifierOnly && keyCode == hanjaBinding.keyCode && keyCode != toggleBinding.keyCode {
-                let modifierMask = Self.modifierMask(for: keyCode)
-                let isPressed = flags.contains(modifierMask)
+                let isPressed = ModifierKeyState.isDown(keyCode, flags: flags.rawValue)
                 
                 if isPressed && !hanjaModifierIsDown {
                     hanjaModifierIsDown = true
@@ -264,6 +269,9 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         
         // Handle keyDown
         if type == .keyDown {
+            // Reconcile on every key: a release may have been lost while disabled.
+            toggleModifierIsDown = ModifierKeyState.isDown(toggleBinding.keyCode, flags: event.flags.rawValue)
+            hanjaModifierIsDown = ModifierKeyState.isDown(hanjaBinding.keyCode, flags: event.flags.rawValue)
             // Regular key (non-modifier) as toggle — single key or combo
             if priTypeToggleEnabled && keyCode == toggleBinding.keyCode && !toggleBinding.isModifierKey {
                 if toggleBinding.isModifierOnly {
@@ -296,7 +304,10 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             if priTypeToggleEnabled && toggleModifierIsDown && toggleBinding.isModifierKey {
                 let modifierMask = Self.modifierMask(for: toggleBinding.keyCode)
                 var newFlags = event.flags
-                newFlags.remove(modifierMask)
+                newFlags.remove(CGEventFlags(rawValue: ModifierKeyState.mask(for: toggleBinding.keyCode)))
+                if !ModifierKeyState.isDown(ModifierKeyState.opposite(toggleBinding.keyCode), flags: event.flags.rawValue) {
+                    newFlags.remove(modifierMask)
+                }
                 event.flags = newFlags
                 DebugLogger.log("RightCommandSuppressor: Key with toggle modifier - stripped modifier (normal input)")
                 return Unmanaged.passUnretained(event)

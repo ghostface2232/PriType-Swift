@@ -18,9 +18,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         _ = IMKServer(name: kConnectionName, bundleIdentifier: Bundle.main.bundleIdentifier)
         DebugLogger.log("IMKServer initialized")
         
-        Task.detached(priority: .utility) {
-            InputSourceManager.shared.cleanupStaleInputSources()
-        }
+        // Do not rewrite HIToolbox preference snapshots on every launch.
+        // Registration/migration belongs to installation, while TIS owns live state.
         
         // Setup toggle key monitoring
         setupIOKit()

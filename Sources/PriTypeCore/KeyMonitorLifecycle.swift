@@ -47,3 +47,39 @@ struct EventTapFailureTracker {
         lastDisableTime = 0
     }
 }
+
+/// Device-specific masks from IOKit hidsystem/IOLLEvent.h. Aggregate Command
+/// cannot distinguish releasing Right Command while Left Command stays down.
+enum ModifierKeyState {
+    static func mask(for key: Int64) -> UInt64 {
+        switch key {
+        case 54: return 0x10
+        case 55: return 0x08
+        case 61: return 0x40
+        case 58: return 0x20
+        case 62: return 0x2000
+        case 59: return 0x01
+        case 56: return 0x02
+        case 60: return 0x04
+        default: return 0
+        }
+    }
+
+    static func isDown(_ key: Int64, flags: UInt64) -> Bool {
+        flags & mask(for: key) != 0
+    }
+
+    static func opposite(_ key: Int64) -> Int64 {
+        switch key {
+        case 54: return 55
+        case 55: return 54
+        case 61: return 58
+        case 58: return 61
+        case 62: return 59
+        case 59: return 62
+        case 56: return 60
+        case 60: return 56
+        default: return -1
+        }
+    }
+}

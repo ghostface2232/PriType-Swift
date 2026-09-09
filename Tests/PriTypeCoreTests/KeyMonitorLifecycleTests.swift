@@ -1,4 +1,5 @@
 import Testing
+import Cocoa
 @testable import PriTypeCore
 
 @Suite("Event tap failure handoff")
@@ -32,5 +33,76 @@ struct EventTapFailureTrackerTests {
         tracker.reset()
 
         #expect(tracker.recordDisable(at: 2) == .handoffToIOKit)
+    }
+}
+
+@Suite("Modifier physical state")
+struct ModifierKeyStateTests {
+    @Test("Right Command release is detected while Left Command stays held")
+    func sidesAreIndependent() {
+        let both: UInt64 = 0x100018
+        #expect(ModifierKeyState.isDown(54, flags: both))
+        #expect(!ModifierKeyState.isDown(54, flags: 0x100008))
+        #expect(ModifierKeyState.isDown(55, flags: 0x100008))
+        #expect(!ModifierKeyState.isDown(54, flags: 0))
+    }
+
+    @Test("Ordinary typing cannot become a global single-key binding")
+    func rejectsTyping() {
+        for code: Int64 in [0, 18, 49, 36, 51, 48, 117, 57, 63] {
+            #expect(!KeyBinding(keyCode: code, modifiers: 0, displayName: "test").isSafeGlobalBinding)
+        }
+        #expect(!KeyBinding(keyCode: 0, modifiers: 0x20000, displayName: "Shift A").isSafeGlobalBinding)
+        #expect(KeyBinding.defaultToggle.isSafeGlobalBinding)
+        #expect(KeyBinding.defaultHanja.isSafeGlobalBinding)
+        #expect(ToggleKey.controlSpace.asKeyBinding.isSafeGlobalBinding)
+        #expect(KeyBinding(keyCode: 105, modifiers: 0, displayName: "F13").isSafeGlobalBinding)
+    }
+}
+
+@Suite("Toggle recovery event sequences")
+struct ToggleRecoveryEventTests {
+    @Test("Lost right release never strips a left Command shortcut")
+    func lostRelease() throws {
+        let tap = RightCommandSuppressor()
+        let press = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 54, keyDown: true))
+        press.flags = CGEventFlags(rawValue: 0x100010)
+        #expect(tap.handleEvent(type: .flagsChanged, event: press,
+            toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true) == nil)
+        _ = tap.handleEvent(type: .tapDisabledByTimeout, event: press,
+            toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true, recoveryFlags: 0)
+        let shortcut = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 8, keyDown: true))
+        shortcut.flags = CGEventFlags(rawValue: 0x100008)
+        #expect(tap.handleEvent(type: .keyDown, event: shortcut,
+            toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true) != nil)
+        #expect(shortcut.flags.contains(.maskCommand))
+        // A subsequent right press is recognized, rather than stuck in held state.
+        #expect(tap.handleEvent(type: .flagsChanged, event: press,
+            toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true) == nil)
+    }
+
+    @Test("Holding both Commands preserves left shortcut semantics")
+    func bothCommands() throws {
+        let tap = RightCommandSuppressor()
+        let key = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 8, keyDown: true))
+        key.flags = CGEventFlags(rawValue: 0x100018)
+        _ = tap.handleEvent(type: .keyDown, event: key,
+            toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true)
+        #expect(key.flags.contains(.maskCommand))
+        #expect(!ModifierKeyState.isDown(54, flags: key.flags.rawValue))
+        #expect(ModifierKeyState.isDown(55, flags: key.flags.rawValue))
+        key.flags = CGEventFlags(rawValue: 0x100010)
+        _ = tap.handleEvent(type: .keyDown, event: key,
+            toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true)
+        #expect(!key.flags.contains(.maskCommand))
+    }
+
+    @Test("Later explicit mode selection invalidates a delayed old controller value")
+    func oldModeCannotOverrideNewSelection() {
+        let composer = HangulComposer(statusBar: MockStatusBar(), configuration: MockConfiguration())
+        let pending = DeferredInputMode(mode: .english, revision: composer.modeSelectionRevision)
+        #expect(pending.resolve(currentRevision: composer.modeSelectionRevision) == .english)
+        composer.setInputMode(.korean)
+        #expect(pending.resolve(currentRevision: composer.modeSelectionRevision) == nil)
     }
 }

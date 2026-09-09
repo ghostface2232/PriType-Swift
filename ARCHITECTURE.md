@@ -101,7 +101,7 @@ flowchart TD
 | 실제 조합 모드 | `HangulComposer.inputMode` | 2.6.5처럼 PriType 내부 mode의 source of truth다. |
 | host input mode 표시 | macOS TIS | custom 전환키에서는 입력 소스를 바꾸지 않으므로 메뉴바 source는 PriType 단일 항목으로 유지한다. |
 | macOS 실제 입력 소스 | macOS TIS | custom 전환키에서는 건드리지 않는다. Caps Lock 경로에서만 시스템이 소유한다. |
-| 영어 레이아웃 | IMK session | `overrideKeyboardWithKeyboardNamed`로 ABC/US 계열 layout을 요청한다. |
+| 영어 레이아웃 | IMK session | 영어 모드에서 이미 활성화된 ABC/US에만 `overrideKeyboardWithKeyboardNamed`를 요청한다. 사용자 전환에는 `selectInputMode:`를 호출하지 않는다. |
 
 PriType의 `ComponentInputModeDict`는 단일 mode `com.pritype.inputmethod.v2`만 등록한다. 내부 한/영 상태는 `HangulComposer.inputMode`가 들고, custom 전환키는 실제 Apple `ABC` source나 별도 English input mode를 선택하지 않는다.
 
@@ -215,7 +215,7 @@ macOS의 `IsSecureEventInputEnabled()`는 프로세스 단위가 아닌 **시스
 
 PriType은 2단계 검증으로 이를 처리한다:
 1. **번들 ID 확인**: `SecurityAgent`, `loginwindow`, `screencaptureui`이면 즉시 pass-through.
-2. **필드 속성 확인**: 위 목록에 없으면 `validAttributesForMarkedText()`가 빈 배열인지 검사. 빈 배열이면 비밀번호 필드로 간주하여 pass-through. 그 외에는 오래된(stale) 플래그로 판단하고 정상 입력 처리.
+2. **전역 경고와 필드 신호 조합**: 전역 Secure Input이 켜져 있을 때만 selection을 확인하고, selection이 유효하지 않거나 지원 속성이 없으면 pass-through한다. 전역 경고가 없으면 빈 `validAttributesForMarkedText()`나 범위 API 미지원만으로 한글 조합을 막지 않는다. 이 API는 텍스트 입력 가능 여부가 아닌 지원 속성 목록을 반환한다. 정상 속성·selection을 가진 필드는 기존 stale 플래그 복구 정책을 유지한다.
 
 ## 동시성 (Concurrency) 및 스레드 안전성
 

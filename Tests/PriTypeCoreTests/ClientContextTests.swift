@@ -75,9 +75,9 @@ struct ClientContextTests {
         )))
     }
 
-    @Test("Secure input policy fails closed for invalid selections")
-    func secureInputPolicyFailsClosedForInvalidSelections() {
-        #expect(SecureInputPolicy.shouldPassThrough(SecureInputSignals(
+    @Test("Invalid selections alone are not proof of secure input")
+    func secureInputPolicyRequiresSecureWarningForInvalidSelections() {
+        #expect(!SecureInputPolicy.shouldPassThrough(SecureInputSignals(
             bundleId: "com.example.PasswordPanel",
             hasTextInputCapability: false,
             hasInvalidSelection: true,
@@ -93,9 +93,9 @@ struct ClientContextTests {
 
     }
 
-    @Test("Secure input policy fails closed for a capability-less field")
+    @Test("Empty attributes do not disable Korean unless secure input is active")
     func secureInputPolicyFailsClosedForCapabilityLessField() {
-        #expect(SecureInputPolicy.shouldPassThrough(SecureInputSignals(
+        #expect(!SecureInputPolicy.shouldPassThrough(SecureInputSignals(
             bundleId: "com.example.LegacyEditor",
             hasTextInputCapability: false,
             hasInvalidSelection: false,

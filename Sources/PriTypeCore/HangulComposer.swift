@@ -35,6 +35,7 @@ public class HangulComposer: @unchecked Sendable {
     ///
     /// When in `.english` mode, all keystrokes are passed through unchanged.
     public private(set) var inputMode: InputMode = .korean
+    private(set) var modeSelectionRevision: UInt64 = 0
 
     /// Whether the underlying Hangul engine currently has active composition.
     public var hasActiveComposition: Bool {
@@ -171,6 +172,7 @@ public class HangulComposer: @unchecked Sendable {
     ///   PriType source, which always lands back in `.korean`). No other path —
     ///   including `activateServer` focus changes — may mutate the mode.
     public func setInputMode(_ mode: InputMode) {
+        modeSelectionRevision &+= 1
         guard inputMode != mode else {
             return
         }
@@ -232,6 +234,10 @@ public class HangulComposer: @unchecked Sendable {
         
         // Space - handle double-space period
         if keyCode == KeyCode.space {
+            guard !context.isEmpty() || !localTextBuffer.isEmpty else {
+                textConvenience.resetSpaceState()
+                return false
+            }
             commitComposition(delegate: delegate)
             let result = textConvenience.handleDoubleSpacePeriod(buffer: &localTextBuffer, delegate: delegate, checkHangul: true)
             if result == .convertedToPeriod {
@@ -263,9 +269,6 @@ public class HangulComposer: @unchecked Sendable {
         
         // Backspace
         if keyCode == KeyCode.backspace {
-            if !localTextBuffer.isEmpty {
-                localTextBuffer.removeLast()
-            }
             if !context.isEmpty() {
                 if context.backspace() {
                     updateComposition(delegate: delegate)
@@ -275,6 +278,7 @@ public class HangulComposer: @unchecked Sendable {
                     return true
                 }
             }
+            if !localTextBuffer.isEmpty { localTextBuffer.removeLast() }
             return false
         }
         
@@ -373,20 +377,14 @@ public class HangulComposer: @unchecked Sendable {
         // composition. Most keys pass through to the host app unchanged.
         // - Roman characters come from the keyboard layout that the controller
         //   installs via `overrideKeyboardWithKeyboardNamed(ABC/US)`.
-        // - Some macOS text conveniences do not fire for this internal English
-        //   mode in every host, so PriType supplies a narrow fallback for only
-        //   the transformed cases (double-space period and auto-capitalization).
-        // Keeping this path mostly pass-through avoids the classic buffer-vs-
-        // cursor desync that a PriType-side English buffer invites.
+        // Text conveniences belong to the host, which knows the field's opt-in
+        // settings. English printable keys always pass through unchanged.
         if inputMode == .english {
             if !context.isEmpty() {
                 commitComposition(delegate: delegate)
                 delegate.setMarkedText("")
             }
             localTextBuffer = ""
-            if textConvenience.handleEnglishModeInput(event, delegate: delegate) {
-                return true
-            }
             return false
         }
         
