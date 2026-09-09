@@ -190,16 +190,20 @@ public final class InputSourceManager: @unchecked Sendable {
 
     /// Outcome of an explicit input-source cleanup.
     ///
-    /// Cleanup rewrites system preferences, so callers need to know whether the
-    /// write actually landed — HIToolbox defaults can silently reject or drop a
-    /// write, which is how a "removed" entry appears to come back.
+    /// Cleanup rewrites system preferences, so callers need a result rather than a
+    /// silent success. Note what the read-back can and cannot establish: it detects
+    /// a write rejected or reverted at the storage layer, but NOT macOS re-adding
+    /// an entry afterwards — the deferred rewrite is what users perceive as an
+    /// entry "coming back", and no synchronous check can see it. Confirming that
+    /// requires the live TIS state (see `isABCDisabledAccordingToTIS`).
     public enum CleanupResult: Equatable {
         /// Preferences already matched the sanitized form; nothing was written.
         case noChangeNeeded
-        /// Every managed key was written and verified by re-reading it.
+        /// Every managed key was written and read back unchanged.
         case cleaned(keys: [String])
-        /// Nothing was left changed: either no write was attempted, or the
-        /// verification failed and the originals were restored.
+        /// A write did not survive the read-back. A restore of the written keys was
+        /// attempted but is not itself verified, so this does not promise the
+        /// preferences are byte-identical to their prior state.
         case failed(reason: String)
     }
 
@@ -210,10 +214,12 @@ public final class InputSourceManager: @unchecked Sendable {
     /// an "add input source" confirmation again on startup.
     ///
     /// This is an explicit maintenance action, not a startup step: PriType must not
-    /// rewrite HIToolbox snapshots on every launch (see ARCHITECTURE). The write is
-    /// all-or-nothing across `managedInputSourceKeys` and is verified by re-reading
-    /// each key; on any mismatch the originals are restored so a partial rewrite can
-    /// never be left behind.
+    /// rewrite HIToolbox snapshots on every launch (see ARCHITECTURE). The value of
+    /// this path is the all-or-nothing planning across `managedInputSourceKeys`:
+    /// every key is planned before anything is written, so a mismatch on the last
+    /// key still restores the earlier ones and no partially-cleaned state is left
+    /// behind. The read-back is a cheap storage-layer guard, not proof the cleanup
+    /// stuck — see `CleanupResult`.
     @discardableResult
     public func cleanupStaleInputSources() -> CleanupResult {
         guard let defaults = UserDefaults(suiteName: "com.apple.HIToolbox") else {
@@ -228,7 +234,10 @@ public final class InputSourceManager: @unchecked Sendable {
             CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
             DebugLogger.log("InputSourceManager: cleaned stale PriType input-source entries (\(keys.joined(separator: ", ")))")
         case .failed(let reason):
-            DebugLogger.log("InputSourceManager: input-source cleanup failed and was rolled back — \(reason)")
+            // Flush here too: the restore writes need it at least as much as the
+            // forward writes they undo.
+            CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
+            DebugLogger.log("InputSourceManager: input-source cleanup failed; restore attempted — \(reason)")
         }
         return result
     }
@@ -241,7 +250,13 @@ public final class InputSourceManager: @unchecked Sendable {
         var planned: [String: [[String: Any]]] = [:]
 
         for key in managedInputSourceKeys {
-            guard let original = defaults.array(forKey: key) as? [[String: Any]] else { continue }
+            // A key that is absent is simply not managed. A key that is PRESENT but
+            // of the wrong shape is a real problem and must not be reported as
+            // "already current" — that is what `disableABCKeyboardLayout` does too.
+            guard defaults.object(forKey: key) != nil else { continue }
+            guard let original = defaults.array(forKey: key) as? [[String: Any]] else {
+                return .failed(reason: "\(key) is present but not a list of entries")
+            }
             let sanitized = sanitizedInputSources(
                 original,
                 removeAppleKoreanInputModes: false,
@@ -255,14 +270,17 @@ public final class InputSourceManager: @unchecked Sendable {
 
         guard !planned.isEmpty else { return .noChangeNeeded }
 
-        // 2. Apply the whole plan, then force it out before reading back.
+        // 2. Apply the whole plan.
         for (key, sanitized) in planned {
             defaults.set(sanitized, forKey: key)
         }
         defaults.synchronize()
 
-        // 3. Verify by re-reading. A key that did not take the write is a failure
-        //    for the whole operation, not a partial success.
+        // 3. Read back. `UserDefaults` reflects out-of-band changes from cfprefsd,
+        //    so this does catch a write rejected or reverted by another process —
+        //    but a key compared against the value we just derived from it agrees by
+        //    construction otherwise. A mismatch fails the WHOLE operation rather
+        //    than leaving some keys cleaned.
         for (key, expected) in planned {
             let actual = defaults.array(forKey: key) as? [[String: Any]]
             guard let actual, inputSourcesEqual(actual, expected) else {

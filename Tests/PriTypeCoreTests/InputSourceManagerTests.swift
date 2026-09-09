@@ -195,6 +195,37 @@ struct InputSourceCleanupTests {
         #expect(after.count == 2)
     }
 
+    @Test("A key of the wrong shape fails rather than reporting no change")
+    func wrongShapedKeyFails() {
+        let (defaults, suite) = makeDefaults()
+        defer { Self.discard(defaults, suite) }
+        defaults.set(["not-a-dictionary"], forKey: "AppleEnabledInputSources")
+
+        if case .failed = InputSourceManager.cleanupStaleInputSources(in: defaults) {
+            // expected — previously this was skipped and logged as "already current"
+        } else {
+            Issue.record("a present-but-malformed key must not be reported as clean")
+        }
+    }
+
+    @Test("A malformed key aborts before anything is written")
+    func malformedKeyAbortsBeforeWriting() {
+        let (defaults, suite) = makeDefaults()
+        defer { Self.discard(defaults, suite) }
+        // A key that WOULD be cleaned, alongside a malformed one.
+        defaults.set([priTypeParent(), priTypeMode("com.pritype.inputmethod.v2.korean")],
+                     forKey: "AppleEnabledInputSources")
+        defaults.set("not-a-list", forKey: "AppleInputSourceHistory")
+
+        if case .failed = InputSourceManager.cleanupStaleInputSources(in: defaults) {
+            // The cleanable key must be untouched: planning aborts before any write.
+            let after = defaults.array(forKey: "AppleEnabledInputSources") as? [[String: Any]] ?? []
+            #expect(after.count == 2, "no key may be written when the plan is abandoned")
+        } else {
+            Issue.record("expected .failed")
+        }
+    }
+
     @Test("Cleanup is idempotent")
     func cleanupIsIdempotent() {
         let (defaults, suite) = makeDefaults()

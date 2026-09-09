@@ -103,7 +103,7 @@ flowchart TD
 | macOS 실제 입력 소스 | macOS TIS | custom 전환키에서는 건드리지 않는다. Caps Lock 경로에서만 시스템이 소유한다. |
 | 영어 레이아웃 | IMK session | 영어 모드에서 이미 활성화된 ABC/US에만 `overrideKeyboardWithKeyboardNamed`를 요청한다. 사용자 전환에는 `selectInputMode:`를 호출하지 않는다. |
 
-`cleanupStaleInputSources()`는 시작 시 자동 실행하지 않는 명시적 유지보수 동작이다. `AppleEnabledInputSources`, `AppleSelectedInputSources`, `AppleInputSourceHistory`의 정리본을 먼저 계획하고 함께 기록한 뒤 다시 읽어 검증한다. 한 키라도 검증에 실패하면 원본을 되돌리고 `.failed`를 반환하므로 일부 키만 정리된 상태가 남지 않는다.
+`cleanupStaleInputSources()`는 시작 시 자동 실행하지 않는 명시적 유지보수 동작이다. `AppleEnabledInputSources`, `AppleSelectedInputSources`, `AppleInputSourceHistory`의 정리본을 **모두 계획한 뒤** 함께 기록하므로, 마지막 키에서 실패해도 앞서 쓴 키를 되돌려 일부만 정리된 상태가 남지 않는다. 되읽기 검증이 잡는 것은 저장 계층의 거부·되돌림뿐이다. 사용자가 체감하는 "껐는데 다시 살아남"은 macOS가 **나중에** 스냅샷을 다시 쓰는 것이며, 동기 검사로는 관측할 수 없다. 그 확인은 살아 있는 TIS 상태(`isABCDisabledAccordingToTIS`)의 몫이고, 이때 판정 술어는 제거 술어와 정확히 같아야 한다 — `id.contains("ABC")`는 ABC-QWERTZ/AZERTY/India와 중국어 병음까지 매칭해 영구 오탐을 만든다.
 
 PriType의 `ComponentInputModeDict`는 단일 mode `com.pritype.inputmethod.v2`만 등록한다. 내부 한/영 상태는 `HangulComposer.inputMode`가 들고, custom 전환키는 실제 Apple `ABC` source나 별도 English input mode를 선택하지 않는다.
 
