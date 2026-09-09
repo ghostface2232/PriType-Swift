@@ -159,3 +159,82 @@ struct ConfigurationManagerTests {
     }
 
 }
+
+// MARK: - Key Binding Migration Tests
+
+@Suite("KeyBinding defaults migration")
+struct KeyBindingMigrationTests {
+
+    /// Scratch domain so the migration never touches the developer's real defaults.
+    private func makeDefaults(_ name: String) -> UserDefaults {
+        let suite = "com.pritype.tests.\(name).\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        return defaults
+    }
+
+    private func storedBinding(_ defaults: UserDefaults, _ key: String) -> KeyBinding? {
+        guard let data = defaults.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(KeyBinding.self, from: data)
+    }
+
+    @Test("Legacy toggleKey is written out as a KeyBinding and then dropped")
+    func legacyToggleKeyIsPersisted() {
+        let defaults = makeDefaults("legacy")
+        defaults.set(ToggleKey.controlSpace.rawValue, forKey: "com.pritype.toggleKey")
+
+        #expect(ConfigurationManager.migrateKeyBindings(in: defaults))
+
+        let migrated = storedBinding(defaults, "com.pritype.toggleKeyBinding")
+        #expect(migrated?.keyCode == ToggleKey.controlSpace.asKeyBinding.keyCode)
+        #expect(migrated?.modifiers == ToggleKey.controlSpace.asKeyBinding.modifiers)
+        // The legacy key has no readers left; leaving it would let it resurface.
+        #expect(defaults.object(forKey: "com.pritype.toggleKey") == nil)
+    }
+
+    @Test("Migration is idempotent and leaves an explicit binding alone")
+    func migrationIsIdempotent() {
+        let defaults = makeDefaults("idempotent")
+        let chosen = KeyBinding(keyCode: 122, modifiers: 0, displayName: "F1")
+        defaults.set(try! JSONEncoder().encode(chosen), forKey: "com.pritype.toggleKeyBinding")
+
+        #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
+        #expect(storedBinding(defaults, "com.pritype.toggleKeyBinding")?.keyCode == 122)
+        #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
+    }
+
+    @Test("A stored binding is preferred over a leftover legacy value")
+    func storedBindingWinsOverLegacy() {
+        let defaults = makeDefaults("both")
+        let chosen = KeyBinding(keyCode: 122, modifiers: 0, displayName: "F1")
+        defaults.set(try! JSONEncoder().encode(chosen), forKey: "com.pritype.toggleKeyBinding")
+        defaults.set(ToggleKey.controlSpace.rawValue, forKey: "com.pritype.toggleKey")
+
+        #expect(ConfigurationManager.migrateKeyBindings(in: defaults))
+        #expect(storedBinding(defaults, "com.pritype.toggleKeyBinding")?.keyCode == 122)
+        #expect(defaults.object(forKey: "com.pritype.toggleKey") == nil)
+    }
+
+    @Test("Unsafe and unreadable stored bindings are repaired on disk")
+    func unsafeStoredBindingsAreRepaired() {
+        let defaults = makeDefaults("unsafe")
+        // A bare letter key would swallow ordinary typing globally.
+        let unsafe = KeyBinding(keyCode: 0, modifiers: 0, displayName: "A")
+        #expect(!unsafe.isSafeGlobalBinding)
+        defaults.set(try! JSONEncoder().encode(unsafe), forKey: "com.pritype.toggleKeyBinding")
+        defaults.set(Data("not json".utf8), forKey: "com.pritype.hanjaKeyBinding")
+
+        #expect(ConfigurationManager.migrateKeyBindings(in: defaults))
+        #expect(storedBinding(defaults, "com.pritype.toggleKeyBinding")?.keyCode == KeyBinding.defaultToggle.keyCode)
+        #expect(storedBinding(defaults, "com.pritype.hanjaKeyBinding")?.keyCode == KeyBinding.defaultHanja.keyCode)
+        // Repaired values are now safe, so a second pass is a no-op.
+        #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
+    }
+
+    @Test("A clean install needs no migration")
+    func cleanInstallIsUntouched() {
+        let defaults = makeDefaults("clean")
+        #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
+        #expect(defaults.data(forKey: "com.pritype.toggleKeyBinding") == nil)
+    }
+}

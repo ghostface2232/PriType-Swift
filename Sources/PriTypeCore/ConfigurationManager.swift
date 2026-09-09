@@ -484,6 +484,73 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         }
     }
     
+    // MARK: - Key Binding Migration
+
+    /// Persist the legacy `toggleKey` enum as a `KeyBinding`, and repair stored
+    /// bindings that are unreadable or no longer safe as global bindings.
+    ///
+    /// The getters above fall back in memory, but never wrote the result back, so a
+    /// legacy install re-derived its binding on every launch and an unsafe stored
+    /// value (e.g. a bare letter key from an older build) stayed on disk forever —
+    /// it would come back the moment the sanitizing fallback changed. Run this once
+    /// at startup so what is stored is what is used.
+    /// - Returns: `true` if anything on disk was rewritten.
+    @discardableResult
+    public func migrateKeyBindingsIfNeeded() -> Bool {
+        let changed = Self.migrateKeyBindings(in: defaults)
+        if changed {
+            keyBindingLock.lock()
+            _cachedToggleBinding = nil
+            _cachedHanjaBinding = nil
+            keyBindingLock.unlock()
+            NotificationCenter.default.post(name: .keyBindingChanged, object: nil)
+        }
+        return changed
+    }
+
+    /// Pure migration step, separated from the singleton so it can be exercised
+    /// against a scratch `UserDefaults` domain.
+    static func migrateKeyBindings(in defaults: UserDefaults) -> Bool {
+        var changed = false
+
+        // Toggle: repair an unusable stored value, else adopt the legacy enum.
+        if let data = defaults.data(forKey: Keys.toggleKeyBinding) {
+            let decoded = try? JSONDecoder().decode(KeyBinding.self, from: data)
+            if decoded?.isSafeGlobalBinding != true {
+                store(.defaultToggle, forKey: Keys.toggleKeyBinding, in: defaults)
+                changed = true
+            }
+        } else if let rawValue = defaults.string(forKey: Keys.toggleKey) {
+            let legacy = ToggleKey(rawValue: rawValue)?.asKeyBinding ?? .defaultToggle
+            store(legacy.isSafeGlobalBinding ? legacy : .defaultToggle,
+                  forKey: Keys.toggleKeyBinding, in: defaults)
+            changed = true
+        }
+
+        // The legacy key has no readers left once a binding is stored.
+        if defaults.data(forKey: Keys.toggleKeyBinding) != nil,
+           defaults.object(forKey: Keys.toggleKey) != nil {
+            defaults.removeObject(forKey: Keys.toggleKey)
+            changed = true
+        }
+
+        // Hanja has no legacy source; only repair an unusable stored value.
+        if let data = defaults.data(forKey: Keys.hanjaKeyBinding) {
+            let decoded = try? JSONDecoder().decode(KeyBinding.self, from: data)
+            if decoded?.isSafeGlobalBinding != true {
+                store(.defaultHanja, forKey: Keys.hanjaKeyBinding, in: defaults)
+                changed = true
+            }
+        }
+
+        return changed
+    }
+
+    private static func store(_ binding: KeyBinding, forKey key: String, in defaults: UserDefaults) {
+        guard let data = try? JSONEncoder().encode(binding) else { return }
+        defaults.set(data, forKey: key)
+    }
+
     // MARK: - Convenience Properties
     
     /// Whether Right Command key is configured as the toggle key

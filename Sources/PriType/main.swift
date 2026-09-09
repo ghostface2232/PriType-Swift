@@ -21,6 +21,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         // Do not rewrite HIToolbox preference snapshots on every launch.
         // Registration/migration belongs to installation, while TIS owns live state.
         
+        // Persist legacy/unsafe key bindings before any monitor reads them, so the
+        // running binding and the stored binding cannot disagree.
+        ConfigurationManager.shared.migrateKeyBindingsIfNeeded()
+
         // Setup toggle key monitoring
         setupIOKit()
         
