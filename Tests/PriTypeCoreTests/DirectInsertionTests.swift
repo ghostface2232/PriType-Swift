@@ -222,6 +222,55 @@ struct DirectInsertionSessionTests {
         return (composer, client, InputSession(client: client, context: context, composer: composer))
     }
 
+    @Test("Backspace decomposition stops at the committed boundary")
+    func backspaceStopsAtCommittedBoundary() {
+        // Exercised against the REAL DirectInsertionAdapter (not a mock mirror),
+        // so the adapter's live-range tracking and state machine are covered.
+        let (composer, client, session) = makeSession()
+        #expect(session.adapter is DirectInsertionAdapter)
+
+        // Commit 가 with a space, then start a fresh syllable on top of it.
+        for (char, code): (String, UInt16) in [("r", 15), ("k", 40)] {
+            _ = composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: session.adapter)
+        }
+        _ = composer.handle(TestEventFactory.keyEvent(char: " ", keyCode: KeyCode.space)!, delegate: session.adapter)
+        let committed = client.document
+        #expect(committed == "가 ", "setup produced '\(committed)'")
+
+        let callsAfterCommit = client.insertCalls.count
+        for (char, code): (String, UInt16) in [("s", 1), ("k", 40)] {  // ㄴ, 나
+            _ = composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: session.adapter)
+        }
+        #expect(client.document == committed + "나")
+
+        // Decompose the live syllable away. The committed prefix must survive, and
+        // the adapter must only ever rewrite its own tracked live range — any write
+        // reaching further back would show up as a replacement spanning it.
+        #expect(composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: session.adapter))
+        #expect(client.document == committed + "ㄴ", "got '\(client.document)'")
+        #expect(composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: session.adapter))
+        #expect(client.document == committed, "preedit removal must not eat committed text; got '\(client.document)'")
+        #expect(!composer.hasActiveComposition)
+
+        // Every write the adapter made after the commit must start at or after the
+        // committed boundary. A destructive implementation that deleted committed
+        // text would land a replacement range reaching in front of it — the
+        // assertion the previous mock-based version could not actually make.
+        let writesDuringComposition = client.insertCalls.dropFirst(callsAfterCommit)
+        #expect(!writesDuringComposition.isEmpty, "adapter performed no writes")
+        for (text, range) in writesDuringComposition {
+            #expect(range.location != NSNotFound,
+                    "direct insertion must target an explicit range, wrote '\(text)'")
+            #expect(range.location >= committed.utf16.count,
+                    "write '\(text)' at \(range) reached into committed text")
+        }
+
+        // With no preedit left the key passes through to the host rather than
+        // PriType deleting committed text itself.
+        #expect(!composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: session.adapter))
+        #expect(client.document == committed, "got '\(client.document)'")
+    }
+
     @Test("Invalid selection commits old real text and finalizes fallback on mode/focus changes")
     func invalidSelectionFallbackFinalize() {
         for reason in [CompositionFinalizeReason.modeTransition, .appDeactivate] {
@@ -468,36 +517,6 @@ struct DirectInsertionEndToEndTests {
 
         _ = composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: client)
         #expect(client.document == "ㄱ", "Backspace should leave ㄱ in place; got '\(client.document)'")
-    }
-
-    @Test("Backspace decomposition stops at the committed boundary")
-    func backspaceStopsAtCommittedBoundary() {
-        let (composer, client) = makeComposer()
-        // Commit 가 with a space, then start a fresh syllable on top of it.
-        for (char, code): (String, UInt16) in [("r", 15), ("k", 40)] {
-            _ = composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: client)
-        }
-        _ = composer.handle(TestEventFactory.keyEvent(char: " ", keyCode: KeyCode.space)!, delegate: client)
-        let committed = client.document
-        #expect(committed.hasPrefix("가"))
-
-        for (char, code): (String, UInt16) in [("s", 1), ("k", 40)] {  // ㄴ, 나
-            _ = composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: client)
-        }
-        #expect(client.document == committed + "나")
-
-        // Decompose the live syllable away entirely. Direct insertion rewrites the
-        // preedit in the document, so the committed prefix must survive intact.
-        _ = composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: client)
-        #expect(client.document == committed + "ㄴ", "got '\(client.document)'")
-        _ = composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: client)
-        #expect(client.document == committed, "preedit removal must not eat committed text; got '\(client.document)'")
-        #expect(!composer.hasActiveComposition)
-
-        // The next backspace has no preedit left to consume, so it passes through
-        // to the host instead of PriType deleting committed text itself.
-        _ = composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: client)
-        #expect(client.document == committed, "got '\(client.document)'")
     }
 
     @Test("Two committed syllables accumulate correctly")

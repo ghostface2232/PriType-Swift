@@ -167,13 +167,17 @@ struct HangulComposerTests {
 
         // Every backspace consumed by the preedit must leave both the committed
         // buffer and the host document untouched — only the marked text shrinks.
+        // Bounded: an engine backspace that stops consuming would otherwise spin
+        // here forever and wedge the run instead of failing.
         var seenMarked: [String] = []
-        while composer.hasActiveComposition {
+        for _ in 0..<8 {
+            guard composer.hasActiveComposition else { break }
             #expect(composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate))
             seenMarked.append(delegate.markedText)
             #expect(composer.localTextBuffer == "한글")
             #expect(delegate.fullText == "한글")
         }
+        #expect(!composer.hasActiveComposition, "composition did not drain within 8 backspaces")
         #expect(seenMarked.count >= 2, "expected stepwise decomposition, saw \(seenMarked)")
         #expect(delegate.insertedTexts.isEmpty, "decomposition must not commit anything")
     }
