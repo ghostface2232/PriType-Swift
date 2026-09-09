@@ -163,7 +163,7 @@ struct ConfigurationManagerTests {
 
 // MARK: - Key Binding Migration Tests
 
-@Suite("KeyBinding defaults migration")
+@Suite("KeyBinding defaults migration", .serialized)
 struct KeyBindingMigrationTests {
 
     private let toggleKey = "com.pritype.toggleKeyBinding"
@@ -177,7 +177,11 @@ struct KeyBindingMigrationTests {
     /// UUID), and those files held real binding data. `removeSuite` is what
     /// actually detaches the domain — `removePersistentDomain` alone leaves a stub.
     private func withScratchDefaults(_ name: String, _ body: (UserDefaults) -> Void) {
-        let suite = "com.pritype.tests.\(name).\(UUID().uuidString)"
+        // A FIXED name per test, not a UUID: cfprefsd recreates an empty stub plist
+        // after the domain is removed, so a fresh name per run grows the user's
+        // ~/Library/Preferences without bound. The suite is `.serialized`, so a
+        // fixed name cannot collide, and the file count stays constant.
+        let suite = "com.pritype.tests.\(name)"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer {

@@ -87,14 +87,21 @@ struct RomanOverridePolicyTests {
 
 // MARK: - Cleanup Atomicity / Verification Tests
 
-@Suite("Input source cleanup")
+@Suite("Input source cleanup", .serialized)
 struct InputSourceCleanupTests {
 
-    private func makeDefaults() -> (UserDefaults, String) {
-        let suite = "com.pritype.tests.hitoolbox.\(UUID().uuidString)"
+    private func makeDefaults(_ name: String = #function) -> (UserDefaults, String) {
+        // Fixed per test (see KeyBindingMigrationTests): cfprefsd leaves an empty
+        // stub behind, so UUID names accumulate files forever.
+        let suite = "com.pritype.tests.hitoolbox.\(Self.slug(name))"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         return (defaults, suite)
+    }
+
+    /// `#function` arrives as "name()"; strip what cannot appear in a domain name.
+    static func slug(_ name: String) -> String {
+        name.filter { $0.isLetter || $0.isNumber }
     }
 
     /// `removePersistentDomain` alone leaves a stub plist behind; `removeSuite` is
@@ -240,14 +247,19 @@ struct InputSourceCleanupTests {
 
 // MARK: - ABC Removal Tests
 
-@Suite("Disable ABC keyboard layout")
+@Suite("Disable ABC keyboard layout", .serialized)
 struct DisableABCTests {
 
-    private func makeDefaults() -> (UserDefaults, String) {
-        let suite = "com.pritype.tests.abc.\(UUID().uuidString)"
+    private func makeDefaults(_ name: String = #function) -> (UserDefaults, String) {
+        let suite = "com.pritype.tests.abc.\(Self.slug(name))"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         return (defaults, suite)
+    }
+
+    /// `#function` arrives as "name()"; strip what cannot appear in a domain name.
+    static func slug(_ name: String) -> String {
+        name.filter { $0.isLetter || $0.isNumber }
     }
 
     /// `removePersistentDomain` alone leaves a stub plist behind; `removeSuite` is
