@@ -77,3 +77,14 @@
 "exclusions.addButton" = "앱 추가…";
 "exclusions.removeButton" = "제거";
 "exclusions.empty" = "제외된 앱이 없습니다";
+
+/* System Shortcut Conflicts */
+"shortcut.conflictWarning" = "이 조합은 macOS의 “%@”와 겹칩니다. 그대로 두면 PriType이 먼저 가져가므로, 시스템 설정에서 해당 단축키를 바꾸는 것이 좋습니다.";
+"shortcut.previousInputSource" = "이전 입력 소스 선택";
+"shortcut.nextInputSource" = "다음 입력 소스 선택";
+"shortcut.spotlight" = "Spotlight 검색";
+"shortcut.finderSearch" = "Finder 검색 창";
+"shortcut.emojiPicker" = "이모티콘 및 기호";
+"shortcut.screenshot" = "화면 전체 캡처";
+"shortcut.screenshotRegion" = "선택 영역 캡처";
+"shortcut.screenshotUI" = "스크린샷 옵션";

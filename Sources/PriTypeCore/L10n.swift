@@ -130,6 +130,17 @@ public enum L10n {
         public static var removeABCFailed: String { localized("system.removeABCFailed") }
     }
 
+    // MARK: - System Shortcut Conflicts
+
+    public enum shortcut {
+        /// Warning shown when a binding shadows a macOS shortcut.
+        public static func conflictWarning(_ shortcutName: String) -> String {
+            String(format: localized("shortcut.conflictWarning"), shortcutName)
+        }
+
+        public static func name(_ key: String) -> String { localized(key) }
+    }
+
     // MARK: - Toggle Key App Exclusions
 
     public enum exclusions {

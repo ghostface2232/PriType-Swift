@@ -83,6 +83,50 @@ public struct KeyBinding: Codable, Equatable, Sendable {
         return [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90].contains(keyCode)
     }
 
+    /// A well-known macOS shortcut this binding would shadow, if any.
+    ///
+    /// These bindings are still allowed — a user may genuinely prefer PriType to
+    /// win, and macOS lets the shortcut be reassigned — but taking one silently
+    /// looks like the system shortcut broke. The settings UI warns instead.
+    /// Only exact matches are reported, so an unrelated combo never nags.
+    public var systemShortcutConflict: SystemShortcut? {
+        SystemShortcut.all.first { $0.matches(self) }
+    }
+
+    /// A macOS shortcut PriType can shadow when bound to the same keys.
+    public struct SystemShortcut: Equatable, Sendable {
+        public let keyCode: Int64
+        public let modifiers: UInt64
+        /// Localization key for the shortcut's name.
+        public let nameKey: String
+
+        func matches(_ binding: KeyBinding) -> Bool {
+            binding.keyCode == keyCode && binding.modifiers == modifiers
+        }
+
+        static let all: [SystemShortcut] = [
+            // Space combos own input-source switching and Spotlight on a default
+            // macOS install — the exact area a user is configuring here.
+            SystemShortcut(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue,
+                           nameKey: "shortcut.previousInputSource"),
+            SystemShortcut(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue,
+                           nameKey: "shortcut.nextInputSource"),
+            SystemShortcut(keyCode: 49, modifiers: CGEventFlags.maskCommand.rawValue,
+                           nameKey: "shortcut.spotlight"),
+            SystemShortcut(keyCode: 49, modifiers: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskAlternate.rawValue,
+                           nameKey: "shortcut.finderSearch"),
+            SystemShortcut(keyCode: 49, modifiers: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskControl.rawValue,
+                           nameKey: "shortcut.emojiPicker"),
+            // Screenshot family.
+            SystemShortcut(keyCode: 20, modifiers: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue,
+                           nameKey: "shortcut.screenshot"),
+            SystemShortcut(keyCode: 21, modifiers: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue,
+                           nameKey: "shortcut.screenshotRegion"),
+            SystemShortcut(keyCode: 23, modifiers: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue,
+                           nameKey: "shortcut.screenshotUI")
+        ]
+    }
+
     /// Default toggle key: Right Command
     public static let defaultToggle = KeyBinding(keyCode: 54, modifiers: 0, displayName: "우측 Command")
     

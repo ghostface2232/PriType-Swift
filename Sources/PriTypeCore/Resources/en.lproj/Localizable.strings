@@ -77,3 +77,14 @@
 "exclusions.addButton" = "Add App…";
 "exclusions.removeButton" = "Remove";
 "exclusions.empty" = "No excluded apps";
+
+/* System Shortcut Conflicts */
+"shortcut.conflictWarning" = "This combination is also macOS’s “%@”. PriType will take it first — consider reassigning that shortcut in System Settings.";
+"shortcut.previousInputSource" = "Select the previous input source";
+"shortcut.nextInputSource" = "Select the next input source";
+"shortcut.spotlight" = "Spotlight search";
+"shortcut.finderSearch" = "Finder search window";
+"shortcut.emojiPicker" = "Emoji & Symbols";
+"shortcut.screenshot" = "Screenshot of the screen";
+"shortcut.screenshotRegion" = "Screenshot of a selection";
+"shortcut.screenshotUI" = "Screenshot options";

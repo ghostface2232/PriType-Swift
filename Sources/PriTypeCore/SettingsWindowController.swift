@@ -255,6 +255,23 @@ struct SettingsView: View {
                         .padding(.horizontal, 12)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
+
+                    // A binding that shadows a macOS shortcut is allowed, but the
+                    // user should know why that shortcut stopped responding.
+                    ForEach(systemShortcutWarnings, id: \.self) { warning in
+                        HStack(alignment: .top, spacing: 4) {
+                            Image(systemName: "info.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.orange)
+                            Text(warning)
+                                .font(.system(size: 11, weight: .regular))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
                 }
             }
             .onChange(of: toggleKeyBinding) { _, newValue in
@@ -673,6 +690,20 @@ struct SettingsView: View {
                 showKeyConflictRestored = false
             }
         }
+    }
+
+    /// Warnings for bindings that shadow a well-known macOS shortcut.
+    ///
+    /// Deduplicated so binding both keys to the same shortcut family does not
+    /// print the same sentence twice.
+    private var systemShortcutWarnings: [String] {
+        var seen = Set<String>()
+        return [toggleKeyBinding, hanjaKeyBinding]
+            .compactMap { $0.systemShortcutConflict }
+            .compactMap { conflict in
+                guard seen.insert(conflict.nameKey).inserted else { return nil }
+                return L10n.shortcut.conflictWarning(L10n.shortcut.name(conflict.nameKey))
+            }
     }
 
     private func clearKeyConflict() {

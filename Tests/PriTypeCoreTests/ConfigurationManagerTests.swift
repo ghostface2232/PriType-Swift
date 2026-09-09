@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import CoreGraphics
 @testable import PriTypeCore
 
 // MARK: - ConfigurationManager Tests
@@ -236,5 +237,58 @@ struct KeyBindingMigrationTests {
         let defaults = makeDefaults("clean")
         #expect(!ConfigurationManager.migrateKeyBindings(in: defaults))
         #expect(defaults.data(forKey: "com.pritype.toggleKeyBinding") == nil)
+    }
+}
+
+// MARK: - System Shortcut Conflict Tests
+
+@Suite("System shortcut conflicts")
+struct SystemShortcutConflictTests {
+
+    private func binding(_ keyCode: Int64, _ modifiers: CGEventFlags...) -> KeyBinding {
+        let mask = modifiers.reduce(UInt64(0)) { $0 | $1.rawValue }
+        return KeyBinding(keyCode: keyCode, modifiers: mask,
+                          displayName: KeyBinding.generateDisplayName(keyCode: keyCode, modifiers: mask))
+    }
+
+    @Test("Input-source and Spotlight space combos are reported")
+    func spaceCombosConflict() {
+        #expect(binding(49, .maskControl).systemShortcutConflict?.nameKey == "shortcut.previousInputSource")
+        #expect(binding(49, .maskControl, .maskAlternate).systemShortcutConflict?.nameKey == "shortcut.nextInputSource")
+        #expect(binding(49, .maskCommand).systemShortcutConflict?.nameKey == "shortcut.spotlight")
+        #expect(binding(49, .maskCommand, .maskControl).systemShortcutConflict?.nameKey == "shortcut.emojiPicker")
+    }
+
+    @Test("Screenshot combos are reported")
+    func screenshotCombosConflict() {
+        #expect(binding(20, .maskCommand, .maskShift).systemShortcutConflict?.nameKey == "shortcut.screenshot")
+        #expect(binding(21, .maskCommand, .maskShift).systemShortcutConflict?.nameKey == "shortcut.screenshotRegion")
+        #expect(binding(23, .maskCommand, .maskShift).systemShortcutConflict?.nameKey == "shortcut.screenshotUI")
+    }
+
+    @Test("Defaults and unrelated combos never warn")
+    func nonConflictingBindings() {
+        // The shipped defaults must be silent, or the warning becomes noise.
+        #expect(KeyBinding.defaultToggle.systemShortcutConflict == nil)
+        #expect(KeyBinding.defaultHanja.systemShortcutConflict == nil)
+        #expect(binding(122).systemShortcutConflict == nil)             // F1
+        #expect(binding(5, .maskCommand, .maskAlternate).systemShortcutConflict == nil)  // Cmd+Opt+G
+    }
+
+    @Test("Matching is exact — extra or missing modifiers do not warn")
+    func matchingIsExact() {
+        // Control+Shift+Space is not the input-source shortcut.
+        #expect(binding(49, .maskControl, .maskShift).systemShortcutConflict == nil)
+        // Bare Space is not Spotlight.
+        #expect(binding(49).systemShortcutConflict == nil)
+        // Same modifiers on a different key are unrelated.
+        #expect(binding(48, .maskControl).systemShortcutConflict == nil)
+    }
+
+    @Test("Every catalogued shortcut has a distinct localization key")
+    func shortcutCatalogIsWellFormed() {
+        let keys = KeyBinding.SystemShortcut.all.map(\.nameKey)
+        #expect(Set(keys).count == keys.count)
+        #expect(keys.allSatisfy { $0.hasPrefix("shortcut.") })
     }
 }
