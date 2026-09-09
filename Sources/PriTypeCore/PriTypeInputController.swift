@@ -220,10 +220,20 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         composer.clearLocalBuffer()
         composer.setInputMode(nextMode)
         syncRomanKeyboardLayout(for: session.client, force: true)
+
+        // Report the switch to macOS so the menu-bar input source stops
+        // contradicting the composer. Deferred off the hot path, and only after
+        // the composer has already switched, so a slow or failing selection
+        // cannot delay the next keystroke. See InputSourceManager.
+        let selectEnglish = nextMode == .english
+        DispatchQueue.main.async {
+            InputSourceManager.shared.selectPriTypeMode(english: selectEnglish)
+        }
     }
 
-    // Custom toggles update the composer and PriType status indicator only.
-    // selectInputMode: can transfer a Latin-only host to real ABC (upstream #11).
+    // A custom toggle switches the composer synchronously and then reports the
+    // result to macOS. `selectInputMode:` is not used for that: routing through
+    // the client can transfer a Latin-only host to real ABC (upstream #11).
 
     // MARK: - IMK Lifecycle
 

@@ -38,6 +38,70 @@ public final class InputSourceManager: @unchecked Sendable {
         priTypeEnglishInputMode
     ]
     
+    // MARK: - Mode Selection
+
+    /// Tell macOS which PriType mode is now active, so the menu-bar input source
+    /// matches `HangulComposer.inputMode`.
+    ///
+    /// `Docs/UnifiedInputArchitecture.md` forbids driving a custom toggle *with*
+    /// `TISSelectInputSource`, and that invariant stands: in 2.7.x the selection
+    /// WAS the switch, and its asynchrony is what ate the first character after a
+    /// toggle. This is the opposite order. The composer has already switched
+    /// synchronously and remains the single source of truth; this call only
+    /// reports the outcome. A slow, failed, or unsupported call therefore cannot
+    /// affect typing — only the menu-bar icon lags.
+    ///
+    /// The two modes register as input modes under the bundle id, so the English
+    /// one is the source whose id carries the `.english` suffix. Resolved live
+    /// rather than cached: the user can enable or disable a mode at any time.
+    ///
+    /// - Important: Call off the toggle hot path.
+    /// - Returns: whether the requested mode is now the selected input source.
+    @discardableResult
+    public func selectPriTypeMode(english: Bool) -> Bool {
+        guard let source = priTypeModeSource(english: english) else {
+            DebugLogger.log("InputSourceManager: no enabled PriType \(english ? "english" : "korean") mode to select")
+            return false
+        }
+        if boolProperty(source, kTISPropertyInputSourceIsSelected) {
+            return true
+        }
+        let status = TISSelectInputSource(source)
+        guard status == noErr else {
+            DebugLogger.log("InputSourceManager: TISSelectInputSource failed (\(status))")
+            return false
+        }
+        DebugLogger.log("InputSourceManager: selected PriType \(english ? "english" : "korean") mode")
+        return true
+    }
+
+    private func priTypeModeSource(english: Bool) -> TISInputSource? {
+        let filter: [String: Any] = [
+            kTISPropertyInputSourceCategory as String: kTISCategoryKeyboardInputSource as String,
+            kTISPropertyInputSourceIsEnabled as String: true
+        ]
+        guard let sources = TISCreateInputSourceList(filter as CFDictionary, false)?
+            .takeRetainedValue() as? [TISInputSource] else { return nil }
+        return sources.first { source in
+            guard let id = stringProperty(source, kTISPropertyInputSourceID),
+                  id.hasPrefix(Self.priTypeBundleID),
+                  stringProperty(source, kTISPropertyInputSourceType) == kTISTypeKeyboardInputMode as String,
+                  boolProperty(source, kTISPropertyInputSourceIsSelectCapable)
+            else { return false }
+            return id.hasSuffix(".english") == english
+        }
+    }
+
+    private func stringProperty(_ source: TISInputSource, _ key: CFString) -> String? {
+        guard let pointer = TISGetInputSourceProperty(source, key) else { return nil }
+        return Unmanaged<CFString>.fromOpaque(pointer).takeUnretainedValue() as String
+    }
+
+    private func boolProperty(_ source: TISInputSource, _ key: CFString) -> Bool {
+        guard let pointer = TISGetInputSourceProperty(source, key) else { return false }
+        return CFBooleanGetValue(Unmanaged<CFBoolean>.fromOpaque(pointer).takeUnretainedValue())
+    }
+
     // MARK: - TIS API Methods
     
     /// Get a list of all enabled keyboard input sources using TIS API
