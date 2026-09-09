@@ -60,6 +60,24 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     private var session: InputSession?
     private var pendingSystemMode: DeferredInputMode?
 
+    /// The last input mode macOS told us it had selected.
+    ///
+    /// IMK re-asserts the selected input source on every activation, so a plain
+    /// focus change delivers `setValue` again with the mode the system already
+    /// had. A custom toggle deliberately does not touch that system selection
+    /// (see `performPriTypeModeTransition`), so after one the composer and the
+    /// system disagree, and applying the re-assertion would snap the user back to
+    /// whichever mode the input source happens to name — Korean or English —
+    /// every time they leave a window and come back.
+    ///
+    /// The system value only ever changes when the user really does switch input
+    /// source, so a repeat of the value we already saw identifies a re-assertion.
+    /// Static because the selection is systemwide while controllers are per
+    /// client: a freshly created controller must not mistake a re-assertion for a
+    /// first observation.
+    /// - Warning: Access from main thread only (guaranteed by IMK).
+    nonisolated(unsafe) private static var lastSystemMode: InputMode?
+
     /// Session-derived views for collaborators (Hanja lookup in `HangulComposer`).
     public var currentAdapter: (any HangulComposerDelegate)? { session?.adapter }
     public var cachedContext: ClientContext? { session?.context }
@@ -330,6 +348,16 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
                 super.setValue(value, forTag: tag, client: sender)
                 return
             }
+
+            // A repeat of the mode the system already had is IMK re-asserting the
+            // input source across a focus change, not the user switching it. The
+            // composer may legitimately differ from it because of a custom toggle,
+            // so honouring it here would undo that toggle on every refocus.
+            guard Self.lastSystemMode != targetMode else {
+                DebugLogger.log("PriTypeInputController: ignored re-asserted system mode \(targetMode)")
+                return
+            }
+            Self.lastSystemMode = targetMode
 
             // IMK may send a new controller's mode before activating it, or
             // finish notifying an old one after focus has moved. Only the owner
