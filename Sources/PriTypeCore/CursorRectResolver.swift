@@ -99,17 +99,25 @@ public enum CursorRectResolver {
 
     /// Validate that a rect from firstRect is a usable cursor position
     /// Electron/Chromium apps can return garbage values (e.g. x=1.6e-314, y=19896)
-    public static func isValidCursorRect(_ rect: NSRect) -> Bool {
+    ///
+    /// Negative coordinates are legitimate: a display left of or below the main
+    /// one has them. Garbage is recognized by its form (zero, non-finite,
+    /// subnormal) and by lying on no display.
+    ///
+    /// - Parameter screens: display frames to test against; defaults to the
+    ///   connected screens.
+    public static func isValidCursorRect(_ rect: NSRect, screens: [NSRect]? = nil) -> Bool {
+        let origin = rect.origin
+        guard origin.x.isFinite, origin.y.isFinite, rect.size.height.isFinite else { return false }
         // Reject zero origin (uninitialized)
-        guard rect.origin.x != 0 || rect.origin.y != 0 else { return false }
+        guard origin.x != 0 || origin.y != 0 else { return false }
         // Reject negative or zero height (malformed)
         guard rect.size.height > 0 else { return false }
-        // Reject absurdly small coordinates (floating point garbage like 1.6e-314)
-        guard rect.origin.x > 1 && rect.origin.y > 1 else { return false }
-        // Check that the point is on any connected screen
-        return NSScreen.screens.contains { screen in
-            screen.frame.contains(NSPoint(x: rect.origin.x, y: rect.origin.y))
-        }
+        // Reject uninitialized-memory floats like 1.6e-314
+        guard !origin.x.isSubnormal, !origin.y.isSubnormal else { return false }
+        // Check that the point is on a connected screen
+        let frames = screens ?? NSScreen.screens.map(\.frame)
+        return frames.contains { $0.contains(origin) }
     }
 
     // MARK: - Accessibility API Cursor Position

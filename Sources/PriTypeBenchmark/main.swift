@@ -238,13 +238,17 @@ print("  동시성 에러: \(concErrors2)건 \(concErrors2 == 0 ? "✅ PASS (⚠
 // =============================================
 separator("5️⃣  isValidCursorRect 검증")
 
+// A fixed display layout so the verdicts do not depend on the machine's monitors:
+// a 1920×1080 main display plus one to its left.
+let mainDisplay = NSRect(x: 0, y: 0, width: 1920, height: 1080)
+let leftDisplay = NSRect(x: -2560, y: 0, width: 2560, height: 1440)
 let rectTests: [(NSRect, Bool, String)] = [
     (NSRect(x: 607, y: 637, width: 1, height: 19), true, "정상 커서"),
     (NSRect(x: 458, y: 978, width: 0, height: 18), true, "AX fallback (w=0)"),
     (NSRect(x: 100, y: 300, width: 10, height: 20), true, "일반 좌표"),
     (NSRect(x: 0, y: 0, width: 0, height: 0), false, "크롬 실패 (전체 0)"),
     (NSRect(x: 1.6e-314, y: 95886, width: 1.6e-314, height: -1), false, "크롬 쓰레기값"),
-    (NSRect(x: -100, y: 500, width: 10, height: 20), false, "음수 x"),
+    (NSRect(x: -100, y: 500, width: 10, height: 20), false, "음수 x (화면 밖)"),
     (NSRect(x: 500, y: 500, width: 10, height: -5), false, "음수 height"),
     (NSRect(x: 100000, y: 500, width: 10, height: 20), false, "비현실적 x (>50000)"),
     (NSRect(x: 500, y: 100000, width: 10, height: 20), false, "비현실적 y (>50000)"),
@@ -252,11 +256,15 @@ let rectTests: [(NSRect, Bool, String)] = [
 
 var rectPass = true
 for (rect, expected, desc) in rectTests {
-    let result = HangulComposer.isValidCursorRect(rect)
+    let result = CursorRectResolver.isValidCursorRect(rect, screens: [mainDisplay])
     let match = result == expected
     if !match { rectPass = false }
     print("  \(match ? "✅" : "❌") \(desc): (\(String(format: "%.1f", rect.origin.x)), \(String(format: "%.1f", rect.origin.y))) → \(result ? "valid" : "invalid")\(match ? "" : " (expected \(expected))")")
 }
+let leftCaret = NSRect(x: -100, y: 500, width: 10, height: 20)
+let leftResult = CursorRectResolver.isValidCursorRect(leftCaret, screens: [mainDisplay, leftDisplay])
+if !leftResult { rectPass = false }
+print("  \(leftResult ? "✅" : "❌") 왼쪽 보조 모니터의 음수 x: (-100.0, 500.0) → \(leftResult ? "valid" : "invalid")")
 print("  Rect 검증: \(rectPass ? "✅ PASS" : "❌ FAIL")")
 
 measure("isValidCursorRect 버스트 (100,000회)", iterations: 100000) {

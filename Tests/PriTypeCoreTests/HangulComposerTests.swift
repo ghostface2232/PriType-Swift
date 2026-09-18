@@ -522,9 +522,23 @@ struct CursorRectValidationTests {
     func rejectsFloatGarbage() {
         // Representative Chromium garbage: subnormal x/width with negative height.
         #expect(!HangulComposer.isValidCursorRect(NSRect(x: 1.6e-314, y: 95886, width: 1.6e-314, height: -1)))
-        // Origin at or below 1pt is treated as uninitialized garbage.
-        #expect(!HangulComposer.isValidCursorRect(NSRect(x: 0.5, y: 0.5, width: 10, height: 10)))
-        #expect(!HangulComposer.isValidCursorRect(NSRect(x: 1, y: 1, width: 10, height: 10)))
+        // Subnormal origin with an otherwise plausible rect.
+        let screens = [NSRect(x: 0, y: 0, width: 1920, height: 1080)]
+        #expect(!CursorRectResolver.isValidCursorRect(NSRect(x: 1.6e-314, y: 500, width: 1, height: 18), screens: screens))
+        #expect(!CursorRectResolver.isValidCursorRect(NSRect(x: CGFloat.nan, y: 500, width: 1, height: 18), screens: screens))
+    }
+
+    @Test("Accepts a caret on a display left of or below the main one")
+    func acceptsNegativeCoordinatesOnSecondaryDisplays() {
+        let screens = [
+            NSRect(x: 0, y: 0, width: 1920, height: 1080),        // main
+            NSRect(x: -2560, y: 0, width: 2560, height: 1440),    // left
+            NSRect(x: 0, y: -1080, width: 1920, height: 1080)     // below
+        ]
+        #expect(CursorRectResolver.isValidCursorRect(NSRect(x: -100, y: 500, width: 1, height: 18), screens: screens))
+        #expect(CursorRectResolver.isValidCursorRect(NSRect(x: 500, y: -300, width: 1, height: 18), screens: screens))
+        // The same point with only the main display attached is off screen.
+        #expect(!CursorRectResolver.isValidCursorRect(NSRect(x: -100, y: 500, width: 1, height: 18), screens: [screens[0]]))
     }
 
     @Test("Accepts a well-formed on-screen rect")
