@@ -149,6 +149,17 @@ public class HangulComposer: @unchecked Sendable {
             DebugLogger.log("Composition committed before explicit mode switch")
         }
 
+        // An open Hanja candidate window belongs to the mode it was opened in.
+        // English mode never forwards keys to it, so left open it would linger
+        // unreachable by the keyboard — digits typed as text, Escape ignored —
+        // until a stray click inserted a candidate.
+        if hanjaMode {
+            HanjaCandidateWindow.shared.dismiss()
+            hanjaMode = false
+            hanjaKey = ""
+            DebugLogger.log("Hanja: dismissed by mode switch")
+        }
+
         inputMode = mode
         localTextBuffer = ""
         textConvenience.resetSpaceState()
