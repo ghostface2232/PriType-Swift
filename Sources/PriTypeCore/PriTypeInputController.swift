@@ -301,6 +301,13 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // deactivateServer runs, native hosts like KakaoTalk have already resigned and
         // ignore insertText. If the observer already committed, this is a no-op.
         finalizeActiveComposition(sender: sender, reason: .deactivateServer)
+        // Focus is leaving this client (another window or app). Its Hanja
+        // candidates can no longer receive keys, so close them. Only the owner
+        // does this: a late deactivation of an older controller must not close
+        // the window a newer client just opened.
+        if Self.sharedController === self {
+            composer.dismissHanjaCandidates(reason: "focus change")
+        }
         // NOTE: Do NOT clear localTextBuffer here.
         // Cross-app hanja leaking is prevented by bundleId matching in handleHanjaLookup(),
         // not by clearing the buffer. Clearing would make same-app hanja lookup impossible.

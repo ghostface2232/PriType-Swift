@@ -153,12 +153,7 @@ public class HangulComposer: @unchecked Sendable {
         // English mode never forwards keys to it, so left open it would linger
         // unreachable by the keyboard — digits typed as text, Escape ignored —
         // until a stray click inserted a candidate.
-        if hanjaMode {
-            HanjaCandidateWindow.shared.dismiss()
-            hanjaMode = false
-            hanjaKey = ""
-            DebugLogger.log("Hanja: dismissed by mode switch")
-        }
+        dismissHanjaCandidates(reason: "mode switch")
 
         inputMode = mode
         localTextBuffer = ""
@@ -591,6 +586,20 @@ public class HangulComposer: @unchecked Sendable {
     }
     
     // MARK: - Hanja Lookup
+
+    /// Close an open Hanja candidate window without choosing a candidate.
+    ///
+    /// For events that take the keyboard away from the window's client — a mode
+    /// switch, or focus leaving for another window or app. The panel does not
+    /// activate and shows on every Space, so nothing else would hide it, and only
+    /// keys routed to this client can reach it.
+    public func dismissHanjaCandidates(reason: String) {
+        guard hanjaMode else { return }
+        HanjaCandidateWindow.shared.dismiss()
+        hanjaMode = false
+        hanjaKey = ""
+        DebugLogger.log("Hanja: dismissed by \(reason)")
+    }
     
     /// Trigger Hanja lookup externally (run by `InputModeCoordinator`, in key order)
     ///
