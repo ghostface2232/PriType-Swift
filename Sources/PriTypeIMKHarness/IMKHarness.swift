@@ -59,7 +59,10 @@ public final class IMKHarness {
     /// Event time of the next key, on `NSEvent.timestamp`'s clock. Advances by
     /// `keyInterval` per key so toggles can be placed between keystrokes.
     public private(set) var clock: TimeInterval
-    public var keyInterval: TimeInterval = 0.05
+    /// Stay clear of the 50 ms duplicate-keyDown window (`KeyEventDedup`): at
+    /// exactly 0.05 the float clock sometimes landed a hair under it, and a
+    /// repeated key (backspace, Escape, "ss") was dropped as a re-delivery.
+    public var keyInterval: TimeInterval = 0.08
 
     public init() {
         clock = ProcessInfo.processInfo.systemUptime
