@@ -245,6 +245,11 @@ public final class InputSourceManager: @unchecked Sendable {
     /// enabled, so the UI confirms against TIS before claiming success. This uses
     /// the exact source ID — the confirmation must recognise exactly what the
     /// removal targets, or ABC-variant and Pinyin users fail forever.
+    ///
+    /// - Important: This reports the calling process's *cached* TIS view, which
+    ///   HIToolbox does not refresh after a preference write. Inside the running
+    ///   input method it keeps answering "enabled" after a successful removal.
+    ///   Confirm from a fresh process instead: `ABCLayoutStatusProbe`.
     public func isABCDisabledAccordingToTIS() -> Bool {
         let filter: [String: Any] = [
             kTISPropertyInputSourceCategory as String: kTISCategoryKeyboardInputSource as String,

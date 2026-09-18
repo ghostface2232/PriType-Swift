@@ -723,7 +723,9 @@ struct SettingsView: View {
     /// preference write never landed — which is indistinguishable from the
     /// reported "ABC comes back on its own" symptom. The write is now checked in
     /// preferences and then confirmed against live TIS state before the UI claims
-    /// success.
+    /// success. That confirmation runs in a fresh process: this process's own TIS
+    /// view never sees the write, and checking it here reported a failure after
+    /// every successful removal (see `ABCLayoutStatusProbe`).
     private func removeABCKeyboard() {
         guard removeABCStatus != .working else { return }
         removeABCResetWorkItem?.cancel()
@@ -736,7 +738,13 @@ struct SettingsView: View {
             do {
                 let confirmed = try await ABCRemovalVerification.confirm(
                     result: result,
-                    isDisabled: { manager.isABCDisabledAccordingToTIS() }
+                    // Off the main thread: the probe blocks for the child's
+                    // lifetime, and the settings window must keep responding.
+                    isDisabled: {
+                        await Task.detached(priority: .userInitiated) {
+                            ABCLayoutStatusProbe.isABCDisabledInFreshProcess()
+                        }.value
+                    }
                 )
                 try Task.checkCancellation()
                 if !confirmed {

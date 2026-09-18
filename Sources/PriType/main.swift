@@ -126,6 +126,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
 // MARK: - Main Entry Point
 
+// Only a fresh process can observe the ABC-layout removal (see
+// ABCLayoutStatusProbe). Answer and exit before AppKit or IMK start.
+ABCLayoutStatusProbe.runIfRequested()
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
