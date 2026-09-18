@@ -251,8 +251,11 @@ public class HangulComposer: @unchecked Sendable {
     }
     
     /// Process a single character through the Hangul engine
+    /// - Parameter composes: whether the character came from a letter-key
+    ///   position. A character from any other key is never handed to the engine,
+    ///   so a layout that puts a letter there (AZERTY "m") cannot produce a jamo.
     /// - Returns: `true` if the character was processed, `false` if skipped
-    private func processCharacter(_ char: Unicode.Scalar, delegate: HangulComposerDelegate) -> Bool {
+    private func processCharacter(_ char: Unicode.Scalar, composes: Bool, delegate: HangulComposerDelegate) -> Bool {
         let charCode = UInt32(char.value)
         
         // Skip non-printable characters
@@ -261,7 +264,7 @@ public class HangulComposer: @unchecked Sendable {
         }
         
         // Primary attempt
-        if context.process(Character(char)) {
+        if composes && context.process(Character(char)) {
             updateComposition(delegate: delegate)
             return true
         }
@@ -274,7 +277,7 @@ public class HangulComposer: @unchecked Sendable {
         }
         
         // Retry with clean context
-        if context.process(Character(char)) {
+        if composes && context.process(Character(char)) {
             DebugLogger.log("Retry success")
             updateComposition(delegate: delegate)
             return true
@@ -384,10 +387,11 @@ public class HangulComposer: @unchecked Sendable {
              return false
         }
         
-        // Compose from the key's position, not the active Latin layout: the Hangul
-        // layout is defined on QWERTY positions, and only Shift (never Caps Lock)
-        // picks the upper row. Keys outside the main block keep their characters.
+        // Letter keys compose from their position, not the active Latin layout: the
+        // Hangul layout is defined on QWERTY positions, and only Shift (never Caps
+        // Lock) picks the upper row. Every other key keeps what the layout typed.
         let positional = QwertyKeyMap.character(for: keyCode, shifted: event.modifierFlags.contains(.shift))
+        let composes = positional != nil
         guard let inputCharacters = positional ?? event.characters, !inputCharacters.isEmpty else {
             return false
         }
@@ -416,7 +420,7 @@ public class HangulComposer: @unchecked Sendable {
         var handledAtLeastOnce = false
         
         for char in inputCharacters.unicodeScalars {
-            if processCharacter(char, delegate: delegate) {
+            if processCharacter(char, composes: composes, delegate: delegate) {
                 handledAtLeastOnce = true
             }
         }

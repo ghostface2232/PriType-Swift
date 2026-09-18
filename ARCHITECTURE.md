@@ -171,7 +171,7 @@ libhangul preedit: ᄆ (U+1106)
 
 | 파일 | 역할 |
 |---|---|
-| **HangulComposer** | 한글 조합 엔진. libhangul 컨텍스트를 감싸고, 키 이벤트 → 초·중·종성 조합 → preedit/commit 변환을 담당한다. 한글 모드의 키는 현재 라틴 배열이 만든 문자가 아니라 키 위치(`QwertyKeyMap`, US QWERTY)로 해석하므로 Dvorak·Colemak·AZERTY 사용자도 같은 자모를 얻고, 윗줄 자모는 Shift로만 고른다(Caps Lock 무시). `inputMode`가 한/영 단일 source of truth다. 영어 내부 모드에서는 조합 없이 모든 키를 `return false`로 순수 pass-through하며(로컬 버퍼 미사용), 영문 텍스트 편의(더블스페이스 마침표 등)는 macOS가 소유한다. |
+| **HangulComposer** | 한글 조합 엔진. libhangul 컨텍스트를 감싸고, 키 이벤트 → 초·중·종성 조합 → preedit/commit 변환을 담당한다. 한글 모드의 글자 키 26개는 현재 라틴 배열이 만든 문자가 아니라 키 위치(`QwertyKeyMap`, US QWERTY)로 해석하므로 Dvorak·Colemak·AZERTY 사용자도 같은 자모를 얻고, 윗줄 자모는 Shift로만 고른다(Caps Lock 무시). 그 밖의 키는 배열이 만든 문자를 그대로 쓰며 조합 엔진에 넘기지 않는다. `inputMode`가 한/영 단일 source of truth다. 영어 내부 모드에서는 조합 없이 모든 키를 `return false`로 순수 pass-through하며(로컬 버퍼 미사용), 영문 텍스트 편의(더블스페이스 마침표 등)는 macOS가 소유한다. |
 | **HangulComposerTypes** | `HangulComposerDelegate` 프로토콜(insertText, setMarkedText, textBeforeCursor, replaceTextBeforeCursor)과 `InputMode` enum 정의. |
 | **PriTypeInputController** | `IMKInputController` 서브클래스. IMK 수명 주기(`activateServer` → `handle()` → `deactivateServer`)만 담당하는 얇은 edge. 세션 스코프 상태는 전부 `InputSession`에 위임하고, 모든 조합 종료 이벤트를 `session.finalize(reason:)`로 라우팅한다. |
 | **InputSession** | 활성 입력 세션 1개의 단일 소유자: 클라이언트, 분석된 `ClientContext`, delivery 어댑터, 중복 keyDown 상태, 포커스 상실 안전망(NSWorkspace 옵저버). `finalize(reason:)`이 조합 종료의 유일한 경로(1-op commit, 멱등, 호스트 무관)다. |

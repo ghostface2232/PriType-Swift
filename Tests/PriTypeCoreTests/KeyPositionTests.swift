@@ -42,10 +42,39 @@ struct KeyPositionTests {
         }
     }
 
-    @Test("Keys outside the main block keep the system's characters")
-    func keypadKeepsSystemCharacters() {
+    @Test("Keys outside the letter block keep the system's characters")
+    func nonLetterKeysAreUnmapped() {
         #expect(QwertyKeyMap.character(for: 83, shifted: false) == nil)   // keypad 1
-        #expect(QwertyKeyMap.character(for: 18, shifted: true) == "!")
+        #expect(QwertyKeyMap.character(for: 18, shifted: true) == nil)    // 1 / !
+        #expect(QwertyKeyMap.character(for: 41, shifted: false) == nil)   // ; (ö on German)
         #expect(QwertyKeyMap.character(for: 15, shifted: false) == "r")
+        #expect(QwertyKeyMap.character(for: 15, shifted: true) == "R")
+    }
+
+    @Test("A national character commits the syllable and reaches the host as typed")
+    func germanUmlautPassesThrough() {
+        let (composer, delegate) = makeComposer()
+        type([("r", 15, []), ("k", 40, [])], into: composer, delegate)
+        // German layout: the key at US ";" types ö.
+        let handled = composer.handle(TestEventFactory.keyEvent(char: "ö", keyCode: 41)!, delegate: delegate)
+        #expect(delegate.insertedTexts == ["가"])
+        #expect(!handled, "ö must reach the host from the user's layout, not become ';'")
+    }
+
+    @Test("Layout punctuation is inserted as the layout typed it")
+    func azertyPunctuation() {
+        let (composer, delegate) = makeComposer()
+        // AZERTY: the unshifted key at US "1" types &.
+        _ = composer.handle(TestEventFactory.keyEvent(char: "&", keyCode: 18)!, delegate: delegate)
+        #expect(delegate.insertedTexts == ["&"])
+    }
+
+    @Test("A letter on a non-letter key is never read as a jamo")
+    func letterOnPunctuationKeyStaysLiteral() {
+        let (composer, delegate) = makeComposer()
+        // AZERTY puts "m" on the key at US ";" — 두벌식 has no jamo there.
+        _ = composer.handle(TestEventFactory.keyEvent(char: "m", keyCode: 41)!, delegate: delegate)
+        #expect(delegate.insertedTexts == ["m"])
+        #expect(delegate.markedText.isEmpty)
     }
 }
