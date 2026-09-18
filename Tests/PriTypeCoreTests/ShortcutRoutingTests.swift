@@ -218,6 +218,22 @@ struct ToggleTapAloneTests {
         #expect(actions.snapshot.isEmpty)
     }
 
+    @Test("The Hanja key pressed while the toggle modifier is held cancels the tap")
+    func hanjaCancelsTap() async throws {
+        let tap = RightCommandSuppressor()
+        let actions = ShortcutActions()
+        tap.onToggle = { _ in actions.record("toggle") }
+        tap.onHanjaLookup = { _ in actions.record("hanja") }
+        #expect(send(tap, try modifier(down: true, at: 100)))
+        let option = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 61, keyDown: true))
+        option.type = .flagsChanged
+        option.flags = CGEventFlags(rawValue: Self.rightCommandFlags.rawValue | CGEventFlags.maskAlternate.rawValue | 0x40)
+        #expect(!send(tap, option, .flagsChanged))
+        #expect(send(tap, try modifier(down: false, at: 100.2)))
+        await settle()
+        #expect(actions.snapshot == ["hanja"])
+    }
+
     @Test("Held past the limit, the release does not toggle")
     func longHold() async throws {
         let tap = RightCommandSuppressor()

@@ -136,6 +136,9 @@ struct HIDShortcutState {
             return .toggle
         }
         guard hanjaEnabled, matches(hanja) else { return nil }
+        // The Hanja key pressed with the toggle modifier held is not a lone tap.
+        pendingToggle = nil
+        toggleTap.interrupt()
         if hanja.isModifierKey, let last = lastHanja, now - last < Self.hanjaDebounce { return nil }
         lastHanja = now
         return .hanja

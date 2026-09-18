@@ -145,11 +145,13 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             return false
         }
         
-        // Monitor flagsChanged AND keyDown events, plus clicks: a ⌘-click is not
-        // a tap of ⌘ (`ToggleTrigger.tapAlone`).
-        let eventMask = (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.keyDown.rawValue)
-            | (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.rightMouseDown.rawValue)
-            | (1 << CGEventType.otherMouseDown.rawValue)
+        // Monitor flagsChanged AND keyDown events. In tap mode clicks too, since
+        // a ⌘-click is not a tap of ⌘; press mode keeps clicks off this thread.
+        var eventMask = (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.keyDown.rawValue)
+        if ConfigurationManager.shared.toggleTrigger == .tapAlone {
+            eventMask |= (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.rightMouseDown.rawValue)
+                | (1 << CGEventType.otherMouseDown.rawValue)
+        }
         
         // Create event tap
         eventTap = CGEvent.tapCreate(
@@ -199,6 +201,16 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         return true
     }
     
+    /// Recreate a running tap so its event mask matches the current toggle
+    /// trigger (clicks are watched only in tap mode). Main thread.
+    public func restartForTriggerChange() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard eventTap != nil else { return }
+        stop()
+        start()
+    }
+
     /// Stop monitoring. Callable from main or from the tap callback itself.
     public func stop() {
         lock.lock()
@@ -357,6 +369,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                 
                 if isPressed && !hanjaModifierIsDown {
                     hanjaModifierIsDown = true
+                    toggleTap.interrupt()
                     
                     // Debounce: ignore if last trigger was within 500ms
                     let now = DispatchTime.now()
@@ -505,6 +518,8 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     }
     
     private func triggerHanjaLookup(_ event: CGEvent) {
+        // A Hanja key while the toggle modifier is down is not a lone tap of it.
+        toggleTap.interrupt()
         // Same hand-over as the toggle, so the two keep their relative order and a
         // key typed after the Hanja key reaches the candidate window.
         _onHanjaLookup?(Self.eventTime(of: event))

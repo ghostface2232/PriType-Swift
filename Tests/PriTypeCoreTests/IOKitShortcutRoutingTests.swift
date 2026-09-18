@@ -59,6 +59,15 @@ struct IOKitShortcutRoutingTests {
                       hanja: rightOptionBinding, trigger: .press, at: 1.2) == nil)
     }
 
+    @Test("The Hanja key pressed during a toggle tap cancels the tap")
+    func hanjaCancelsTap() {
+        var state = HIDShortcutState()
+        #expect(press(&state, HIDUsage.rightCommand, true, toggle: rightCommandBinding, hanja: rightOptionBinding) == nil)
+        #expect(press(&state, HIDUsage.rightOption, true, toggle: rightCommandBinding, hanja: rightOptionBinding) == .hanja)
+        #expect(press(&state, HIDUsage.rightOption, false, toggle: rightCommandBinding, hanja: rightOptionBinding) == nil)
+        #expect(press(&state, HIDUsage.rightCommand, false, toggle: rightCommandBinding, hanja: rightOptionBinding) == nil)
+    }
+
     @Test("A tap held past the limit is a hesitation, not a toggle")
     func longHoldIsNotATap() {
         var state = HIDShortcutState()

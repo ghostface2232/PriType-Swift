@@ -295,6 +295,7 @@ struct SettingsView: View {
             }
             .onChange(of: toggleTrigger) { _, newValue in
                 ConfigurationManager.shared.toggleTrigger = newValue
+                RightCommandSuppressor.shared.restartForTriggerChange()
             }
             .onChange(of: hanjaEnabled) { _, isOn in
                 ConfigurationManager.shared.hanjaEnabled = isOn

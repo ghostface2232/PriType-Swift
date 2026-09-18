@@ -114,8 +114,8 @@ keyDown ──► PriTypeInputController.handle(event, client)
 
 - 전환 시점(`ToggleTrigger`, 전환키가 수정키 하나일 때만)
   - 누르는 순간(`press`, 기본): 키를 삼키고 즉시 전환한다. 누르고 있는 동안 다른 키에서 그 수정키를 떼어 내므로 우측 ⌘ + C는 c를 입력한다.
-  - 단독 탭(`tapAlone`): 수정키를 앱에 그대로 넘기고, 다른 키나 클릭 없이 1초 안에 떼면 전환한다. 우측 ⌘ + C는 복사다.
-  - 두 키 모니터가 같은 `ModifierTapDetector`로 탭을 판정한다.
+  - 단독 탭(`tapAlone`): 수정키를 앱에 그대로 넘기고, 다른 키, 클릭, 한자키 없이 1초 안에 떼면 전환한다. 우측 ⌘ + C는 복사다. 이 모드에서만 이벤트 탭이 클릭도 받으며, 설정을 바꾸면 탭을 다시 만든다.
+  - 두 키 모니터가 같은 `ModifierTapDetector`로 시간을 잰다. 다만 보는 것이 다르다. IOKit 경로는 키보드만 보므로 ⌘-클릭을 알지 못하고, 대신 수정키보다 먼저 눌려 있던 일반 키도 알아챈다.
 - 전환 제외 앱(`ToggleExclusionPolicy`): 원격 데스크톱·가상 머신처럼 자체 입력기를 쓰는 앱이 앞에 있으면 전환키와 한자키를 가로채지 않고 그대로 넘긴다.
 - Caps Lock 입력 소스 전환이 켜져 있으면 PriType 전환키는 동작하지 않는다(설정 창에서 안내).
 
@@ -143,7 +143,7 @@ Caps Lock, 입력 메뉴, 그리고 4단계 통보에 대한 응답이 모두 �
 | 경로 | 필요 권한 | 특징 |
 |---|---|---|
 | `RightCommandSuppressor` (CGEventTap, 기본) | 손쉬운 사용 | 전용 스레드(`EventTapThread`, QoS userInteractive)에서 동작한다. 모든 키가 이 콜백을 거쳐 앱으로 가므로 메인 스레드가 바빠도 타이핑이 늦어지지 않는다. 키를 삼킬 수 있다 |
-| `IOKitManager` (IOHIDManager, 대체) | 입력 모니터링 | 탭 생성에 실패하거나, 탭이 60초 이내 간격으로 세 번 연달아 꺼지면(`EventTapFailureTracker`) 넘겨받는다. 넘겨받는 일은 한 번뿐이다. 키를 볼 수만 있고 막을 수는 없으므로, 누르는 순간 모드에서는 우측 ⌘ + C가 전환과 복사를 함께 한다. 규칙은 `HIDShortcutState`에 있다 |
+| `IOKitManager` (IOHIDManager, 대체) | 입력 모니터링 | 탭 생성에 실패하거나, 탭이 60초 이내 간격으로 세 번 연달아 꺼지면(`EventTapFailureTracker`) 넘겨받는다. 탭 하나가 넘기는 일은 한 번뿐이며, 탭을 다시 시작하면 새로 센다. 키를 볼 수만 있고 막을 수는 없으므로, 누르는 순간 모드에서는 우측 ⌘ + C가 전환과 복사를 함께 한다. 규칙은 `HIDShortcutState`에 있다 |
 
 ## 한자
 
