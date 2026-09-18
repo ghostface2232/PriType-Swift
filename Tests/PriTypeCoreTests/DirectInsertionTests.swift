@@ -248,7 +248,12 @@ struct DirectInsertionSessionTests {
         // reaching further back would show up as a replacement spanning it.
         #expect(composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: session.adapter))
         #expect(client.document == committed + "ㄴ", "got '\(client.document)'")
-        #expect(composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: session.adapter))
+        // The last jamo is committed as real text and the key goes to the host,
+        // whose own deleteBackward removes it.
+        #expect(!composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: session.adapter))
+        #expect(client.document == committed + "ㄴ", "got '\(client.document)'")
+        let afterHostDelete = String(client.document.dropLast())
+        client.replaceDocument(afterHostDelete, selection: NSRange(location: afterHostDelete.utf16.count, length: 0))
         #expect(client.document == committed, "preedit removal must not eat committed text; got '\(client.document)'")
         #expect(!composer.hasActiveComposition)
 

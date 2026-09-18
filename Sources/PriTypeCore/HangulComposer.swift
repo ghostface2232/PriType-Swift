@@ -241,13 +241,26 @@ public class HangulComposer: @unchecked Sendable {
         // Backspace
         if keyCode == KeyCode.backspace {
             if !context.isEmpty() {
-                if context.backspace() {
-                    updateComposition(delegate: delegate)
-                    return true
-                } else {
-                    updateComposition(delegate: delegate)
-                    return true
+                let before = context.getPreeditString()
+                _ = context.backspace()
+                if context.isEmpty() {
+                    // The last jamo is going. Commit it and let the host delete it
+                    // with its own deleteBackward, instead of cancelling the marked
+                    // text with setMarkedText(""). That is what Apple's Korean IME
+                    // does (recorded on macOS 27: insertText("ㅇ") then
+                    // deleteBackward:), and it matters: Figma's canvas editor treats
+                    // a cancelled composition as committed, so the cancel left the
+                    // jamo behind ("요" + ⌫⌫ → "ㅇ"). The end result is the same
+                    // everywhere else. Not added to localTextBuffer: the host
+                    // removes it right away.
+                    let jamo = CompositionHelpers.normalizeJamoForDisplay(before)
+                    if !jamo.isEmpty {
+                        delegate.insertText(jamo)
+                    }
+                    return false
                 }
+                updateComposition(delegate: delegate)
+                return true
             }
             if !localTextBuffer.isEmpty { localTextBuffer.removeLast() }
             return false
