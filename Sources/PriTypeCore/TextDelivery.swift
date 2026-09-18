@@ -26,8 +26,9 @@ enum TextDeliveryPolicy {
         if context.shouldUseImmediateMode {
             return .immediate
         }
-        if (ConfigurationManager.shared.experimentalDirectInsertion ||
-            ClientCompatibilityPolicy.prefersDirectInsertionForComposition(bundleId: context.bundleId)),
+        let wantsDirectInsertion = ConfigurationManager.shared.experimentalDirectInsertion
+            || ClientCompatibilityPolicy.prefersDirectInsertionForComposition(bundleId: context.bundleId)
+        if wantsDirectInsertion,
            context.documentAccessSafe,
            !ClientCompatibilityPolicy.directInsertionDenied(bundleId: context.bundleId) {
             return .directInsertion

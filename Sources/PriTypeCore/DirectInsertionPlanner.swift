@@ -15,7 +15,7 @@ struct KeyDownSnapshot: Equatable {
     let timestamp: TimeInterval
     let keyCode: UInt16
     let isARepeat: Bool
-    var characters: String? = nil
+    var characters: String?
     var modifiers: UInt = 0
 }
 

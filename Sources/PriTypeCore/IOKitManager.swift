@@ -140,7 +140,6 @@ public final class IOKitManager: @unchecked Sendable {
         UInt64(UInt(bitPattern: Unmanaged.passUnretained(device).toOpaque()))
     }
 
-    
     private func handleInputValue(_ value: IOHIDValue) {
         let element = IOHIDValueGetElement(value)
         let usagePage = IOHIDElementGetUsagePage(element)

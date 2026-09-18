@@ -850,7 +850,7 @@ struct SettingsHeaderIcon: View {
         Image(nsImage: image)
             .resizable()
             .interpolation(.high)
-            .aspectRatio(contentMode: .fit)
+            .scaledToFit()
             .frame(width: 48, height: 48)
             .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
             .accessibilityHidden(true)

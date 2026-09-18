@@ -263,5 +263,4 @@ public final class TextConvenienceHandler: @unchecked Sendable {
                (val >= 0x3130 && val <= 0x318F) ||
                (val >= 0x1100 && val <= 0x11FF)
     }
-
 }
