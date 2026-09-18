@@ -4,13 +4,6 @@
 "settings.title" = "설정";
 "settings.footer" = "Designed for macOS";
 
-/* Keyboard Layout */
-"keyboard.title" = "자판 배열";
-"keyboard.2set" = "두벌식 표준";
-"keyboard.3set390" = "세벌식 390";
-"keyboard.2setOld" = "두벌식 옛한글";
-"keyboard.3setOld" = "세벌식 옛한글";
-
 /* Toggle Key */
 "toggle.title" = "한/영 전환";
 "toggle.rightCmd" = "⌘ 오른쪽 Command";

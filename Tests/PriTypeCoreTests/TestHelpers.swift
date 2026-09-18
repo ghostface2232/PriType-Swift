@@ -17,7 +17,6 @@ final class MockStatusBar: StatusBarUpdating {
 
 /// Mock implementation of ConfigurationProviding for tests
 final class MockConfiguration: ConfigurationProviding, @unchecked Sendable {
-    var keyboardId: String = PriTypeConfig.defaultKeyboardId
     var toggleKey: ToggleKey = .rightCommand
     var rightCommandAsToggle: Bool { true }
     var controlSpaceAsToggle: Bool { false }

@@ -440,20 +440,6 @@ struct HangulComposerTests {
         #expect(delegate.markedText == "")
     }
     
-    // MARK: - Keyboard Layout Tests
-    
-    @Test("Keyboard layout change commits composition")
-    func keyboardLayoutChange() {
-        let (composer, delegate, _) = makeComposer()
-        _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
-        
-        composer.updateKeyboardLayout(id: "3")
-        
-        #expect(delegate.markedText.isEmpty || delegate.insertedTexts.count > 0)
-
-        composer.updateKeyboardLayout(id: "2")
-    }
-
     // MARK: - libhangul default-behavior regression guards
     //
     // The libhangul-swift defaults (combinationOnDoubleStroke OFF, fineGrainedBackspace ON,

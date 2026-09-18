@@ -354,29 +354,6 @@ func verify() {
         exit(1)
     }
     
-    // Test 12: Keyboard layout change
-    print("\nTest 12: Keyboard layout change")
-    commit(delegate: delegate, composer: composer)
-    
-    let originalLayout = ConfigurationManager.shared.keyboardId
-    
-    // Type something
-    _ = composer.handle(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, characters: "r", charactersIgnoringModifiers: "r", isARepeat: false, keyCode: 15)!, delegate: delegate)
-    
-    // Change layout - this should commit current composition
-    composer.updateKeyboardLayout(id: "3") // Switch to Sebeolsik
-    
-    // Check that composition was committed
-    if delegate.insertedText == "ㄱ" || delegate.insertedText == "\u{3131}" || delegate.insertedText == "" {
-        print("PASS: Composition handled on layout change")
-    } else {
-        print("INFO: insertedText = '\(delegate.insertedText)' (may vary by layout)")
-    }
-    
-    // Restore original layout
-    composer.updateKeyboardLayout(id: originalLayout)
-    print("PASS: Layout restored to '\(originalLayout)'")
-    
     // Test 13: Return key commits composition and passes original Return through
     print("\nTest 13: Return key commits composition and passes through")
     commit(delegate: delegate, composer: composer)
@@ -567,12 +544,10 @@ func verifyConfigurationManager() {
     print("\n--- Test 15: ConfigurationManager ---")
     
     let config = ConfigurationManager.shared
-    _ = config.keyboardId
     let originalToggle = config.toggleKey
     
     // Test 1: Default values
     print("Testing default values...")
-    // keyboardId should be "2" by default (if not set)
     // toggleKey should be .rightCommand by default
     
     // Test 2: Toggle key persistence

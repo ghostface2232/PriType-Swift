@@ -55,7 +55,6 @@ keyDown ──► PriTypeInputController.handle()
               • mouseCommit          — 조합 영역 외 클릭
               • modeTransition       — 사용자 한/영 전환키
               • systemModeSwitch     — macOS Caps Lock/메뉴 입력 모드 선택 (setValue ingress)
-              • keyboardLayoutChange — 두벌식/세벌식 전환
 ```
 
 1. macOS가 키 이벤트를 `PriTypeInputController.handle()`에 전달한다.
@@ -182,7 +181,7 @@ libhangul preedit: ᄆ (U+1106)
 | **IOKitManager** | `IOHIDManager` 기반 하드웨어 레벨 키 모니터. CGEventTap 실패 시 백업 핸들러로 동작한다. HID usage 매핑 테이블을 통해 사용자 지정 키를 동적으로 처리한다. |
 | **HanjaCandidateWindow** | SwiftUI 기반 한자 후보 패널. `NSPanel`을 재사용하며, `screenSaver + 1` 윈도우 레벨로 Electron 앱 위에 표시된다. 1~9 숫자키 선택, 방향키/Tab 페이지 이동을 지원한다. |
 | **HanjaManager** | 한자 사전 로더 + 자모 특수문자 검색. `hanja.txt`를 `HanjaTable`에 적재하고, `jamo_symbols.json`에서 자모 특수문자를 로딩한다. LRU 캐시(32개, NSLock 보호)로 재검색 시 사전 접근을 생략한다. 초성 자모(U+1100~) → 호환 자모(U+3131~) 변환을 포함한다. |
-| **ConfigurationManager** | `UserDefaults` 기반 설정 관리. 자판 배열, `KeyBinding`(한/영 전환키·한자 입력키), 자동 대문자, 더블스페이스 마침표, 자동 업데이트 확인 옵션을 저장한다. 기존 `ToggleKey` enum에서 `KeyBinding` struct로의 자동 마이그레이션을 지원한다. `ConfigurationProviding` 프로토콜로 테스트 시 목(mock) 주입이 가능하다. |
+| **ConfigurationManager** | `UserDefaults` 기반 설정 관리. `KeyBinding`(한/영 전환키·한자 입력키), 자동 대문자, 더블스페이스 마침표, 자동 업데이트 확인 옵션을 저장한다. 기존 `ToggleKey` enum에서 `KeyBinding` struct로의 자동 마이그레이션을 지원한다. `ConfigurationProviding` 프로토콜로 테스트 시 목(mock) 주입이 가능하다. |
 | **SettingsWindowController** | SwiftUI `NSHostingController` 기반 설정 창. Liquid Glass 스타일, Key Recorder(키 녹음) UI, 접근성 권한 확인/요청, Caps Lock 입력 소스 전환 안내를 포함한다. |
 | **StatusBarManager** | `NSStatusItem` 기반 메뉴 바 표시기. 현재 모드를 "가" / "A"로 표시하며, 전환 시 0.08초 페이드 애니메이션을 적용한다. |
 | **TextConvenienceHandler** | macOS 더블스페이스 마침표 설정을 한글 조합 경로에서 반영한다. 영어 모드는 순수 pass-through라 이 핸들러를 거치지 않는다(영문 편의는 macOS 소유). |
@@ -194,7 +193,7 @@ libhangul preedit: ᄆ (U+1106)
 | **DebugLogger** | 조건 컴파일(`#if DEBUG`) 기반 로거. 디버그 빌드에서는 `~/Library/Logs/PriType/pritype_debug.log`에 기록하고, 릴리즈 빌드에서는 `@autoclosure`로 문자열 생성 자체를 생략하는 no-op이 된다. |
 | **KeyCode** | macOS 키 코드 상수와 문자 판별 함수(`isPrintableASCII`, `shouldPassThrough` 등)를 집중 관리한다. |
 | **L10n** | `Localizable.strings`(ko/en)에서 로컬라이즈된 문자열을 타입 안전하게 접근한다. 배포/개발 환경 모두 대응하는 번들 해석 로직을 포함한다. |
-| **PriTypeConfig** | 전역 상수 정의. 기본 자판 ID(`"2"`, 두벌식), Finder 바탕화면 임계값(50pt), 설정 창 크기, 더블스페이스 임계값(0.45초). |
+| **PriTypeConfig** | 전역 상수 정의. 자판 ID(`"2"`, 두벌식 — 유일하게 지원하는 자판), Finder 바탕화면 임계값(50pt), 설정 창 크기, 더블스페이스 임계값(0.45초). |
 | **PriTypeError** | 구조화된 에러 타입. CGEventTap 생성 실패, 접근성 권한 거부, IOHIDManager 오류에 대해 복구 제안(`recoverySuggestion`)을 포함한다. |
 | **AboutInfo** | 앱 메타데이터 및 정보 대화상자. 버전은 `Info.plist`의 `CFBundleShortVersionString`에서 읽는다. |
 
@@ -209,7 +208,7 @@ C 기반 libhangul을 순수 Swift로 재구현한 한글 조합 엔진. PriType
 - **`HangulCharacter`**: 초·중·종성 결합/분리 및 호환 자모(Compatibility Jamo) 변환.
 - **`KeyInput`**: 키보드 입력을 `.character("r")` / `.keyCode(51)` 형태로 표현하는 타입 안전 열거형.
 
-두벌식(`"2"`), 세벌식 390(`"3"`), 옛한글(`"2y"`, `"3y"`) 자판을 지원한다.
+두벌식 표준(`"2"`) 자판만 지원한다.
 
 ## Secure Input 처리
 

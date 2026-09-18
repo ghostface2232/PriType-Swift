@@ -264,8 +264,6 @@ public struct KeyBinding: Codable, Equatable, Sendable {
 
 /// Notification names used by PriType
 public extension Notification.Name {
-    /// Posted when the keyboard layout changes
-    static let keyboardLayoutChanged = Notification.Name("PriTypeKeyboardLayoutChanged")
     /// Posted when a key binding changes
     static let keyBindingChanged = Notification.Name("PriTypeKeyBindingChanged")
 }
@@ -288,9 +286,6 @@ public extension Notification.Name {
 /// }
 /// ```
 public protocol ConfigurationProviding: AnyObject, Sendable {
-    /// The current keyboard layout identifier
-    var keyboardId: String { get set }
-    
     /// The selected toggle key for switching between Korean and English
     var toggleKey: ToggleKey { get set }
     
@@ -349,16 +344,12 @@ public extension ConfigurationProviding {
 ///
 /// ## Usage
 /// ```swift
-/// // Read current keyboard layout
-/// let layout = ConfigurationManager.shared.keyboardId
-///
-/// // Change keyboard layout (automatically persisted)
-/// ConfigurationManager.shared.keyboardId = "3"  // Switch to Sebeolsik
+/// // Read the current toggle key binding
+/// let binding = ConfigurationManager.shared.toggleKeyBinding
 /// ```
 ///
 /// ## Notifications
-/// When `keyboardId` changes, a `PriTypeKeyboardLayoutChanged` notification is posted
-/// to notify observers (e.g., `PriTypeInputController`) to update the input engine.
+/// When a key binding changes, a `PriTypeKeyBindingChanged` notification is posted.
 ///
 /// ## Thread Safety
 /// This class uses `UserDefaults` which is thread-safe for reading/writing.
@@ -400,7 +391,6 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     // MARK: - Keys
     
     private enum Keys {
-        static let keyboardId = "com.pritype.keyboardId"
         static let toggleKey = "com.pritype.toggleKey"  // Legacy
         static let toggleKeyBinding = "com.pritype.toggleKeyBinding"
         static let hanjaKeyBinding = "com.pritype.hanjaKeyBinding"
@@ -417,30 +407,6 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         static let automaticQuoteSubstitution = "NSAutomaticQuoteSubstitutionEnabled"
     }
 
-    // MARK: - Keyboard Layout
-    
-    /// The current keyboard layout identifier
-    ///
-    /// Supported values:
-    /// - `"2"`: 두벌식 표준 (Dubeolsik Standard)
-    /// - `"3"`: 세벌식 390 (Sebeolsik 390)
-    /// - `"2y"`: 두벌식 옛한글 (Dubeolsik Old Hangul)
-    /// - `"3y"`: 세벌식 옛한글 (Sebeolsik Old Hangul)
-    ///
-    /// When this value changes, a `PriTypeKeyboardLayoutChanged` notification is posted.
-    public var keyboardId: String {
-        get {
-            defaults.string(forKey: Keys.keyboardId) ?? "2"
-        }
-        set {
-            if keyboardId != newValue {
-                defaults.set(newValue, forKey: Keys.keyboardId)
-                // Notify observers (e.g. InputController) to update the engine
-                NotificationCenter.default.post(name: .keyboardLayoutChanged, object: nil)
-            }
-        }
-    }
-    
     // MARK: - Toggle Key (Legacy)
     
     /// The selected toggle key for switching between Korean and English

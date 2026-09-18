@@ -8,25 +8,6 @@ import CoreGraphics
 @Suite("ConfigurationManager", .serialized)
 struct ConfigurationManagerTests {
     
-    // MARK: - Keyboard Layout Tests
-    
-    @Test("Default keyboard ID is Dubeolsik (2)")
-    func defaultKeyboardId() {
-        #expect(ConfigurationManager.shared.keyboardId == "2")
-    }
-    
-    @Test("Keyboard ID persists to UserDefaults")
-    func keyboardIdPersistence() {
-        let original = ConfigurationManager.shared.keyboardId
-        defer { ConfigurationManager.shared.keyboardId = original }
-        
-        ConfigurationManager.shared.keyboardId = "3"
-        #expect(ConfigurationManager.shared.keyboardId == "3")
-        
-        let stored = UserDefaults.standard.string(forKey: "com.pritype.keyboardId")
-        #expect(stored == "3")
-    }
-    
     // MARK: - Toggle Key Tests (Legacy)
     
     @Test("Default toggle key is rightCommand")

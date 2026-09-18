@@ -92,7 +92,6 @@ extension SettingsWindowController: NSWindowDelegate {
 // MARK: - SwiftUI Settings View
 
 struct SettingsView: View {
-    @State private var selectedKeyboard = ConfigurationManager.shared.keyboardId
     @State private var toggleKeyBinding = ConfigurationManager.shared.toggleKeyBinding
     @State private var hanjaKeyBinding = ConfigurationManager.shared.hanjaKeyBinding
     @State private var autoUpdateCheckEnabled = ConfigurationManager.shared.autoUpdateCheckEnabled
@@ -138,13 +137,6 @@ struct SettingsView: View {
         case error
     }
 
-    private let keyboardOptions = [
-        ("2", L10n.keyboard.twoSet),
-        ("3", L10n.keyboard.threeSet390),
-        ("2y", L10n.keyboard.twoSetOld),
-        ("3y", L10n.keyboard.threeSetOld)
-    ]
-
     var body: some View {
         VStack(spacing: 0) {
             settingsHeader
@@ -162,7 +154,6 @@ struct SettingsView: View {
         }
         .frame(width: PriTypeConfig.settingsWindowWidth, height: PriTypeConfig.settingsWindowHeight)
         .onAppear {
-            selectedKeyboard = ConfigurationManager.shared.keyboardId
             toggleKeyBinding = ConfigurationManager.shared.toggleKeyBinding
             hanjaKeyBinding = ConfigurationManager.shared.hanjaKeyBinding
             autoUpdateCheckEnabled = ConfigurationManager.shared.autoUpdateCheckEnabled
@@ -196,24 +187,6 @@ struct SettingsView: View {
 
     private var settingsContent: some View {
         VStack(alignment: .leading, spacing: 24) {
-            SettingsSection(
-                title: L10n.keyboard.title,
-                icon: "keyboard"
-            ) {
-                VStack(spacing: 2) {
-                    ForEach(keyboardOptions, id: \.0) { option in
-                        SelectionRow(
-                            title: option.1,
-                            isSelected: selectedKeyboard == option.0,
-                            action: { selectedKeyboard = option.0 }
-                        )
-                    }
-                }
-            }
-            .onChange(of: selectedKeyboard) { _, newValue in
-                ConfigurationManager.shared.keyboardId = newValue
-            }
-
             CapsLockStatusCard(
                 isEnabled: capsLockSwitchEnabled,
                 openSettings: openInputSourceSettings
@@ -1039,56 +1012,6 @@ struct SettingsSection<Content: View>: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
-    }
-}
-
-/// A selection row — animations scoped to checkmark and background only
-struct SelectionRow: View {
-    let title: String
-    let isSelected: Bool
-    let action: () -> Void
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: {
-            // No withAnimation here — prevents text from re-rendering with animation
-            action()
-        }) {
-            HStack(spacing: 10) {
-                // Text — NO animation to prevent Korean glyph flickering
-                Text(title)
-                    .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(.primary)
-                    .animation(nil, value: isSelected) // Explicitly disable
-
-                Spacer()
-
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.blue)
-                        .transition(.scale.combined(with: .opacity))
-                }
-            }
-            .frame(minHeight: 34)
-            .padding(.horizontal, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected
-                          ? Color.primary.opacity(0.075)
-                          : isHovering ? Color.primary.opacity(0.03) : Color.clear)
-                    .animation(.easeOut(duration: 0.15), value: isHovering)
-                    .animation(.easeOut(duration: 0.2), value: isSelected)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hover in
-            isHovering = hover
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 }
 

@@ -9,8 +9,8 @@ import Carbon.HIToolbox
 /// client, analyzed context, delivery adapter, duplicate-keyDown state, focus-loss
 /// safety net — lives in a single `InputSession`, and EVERY composition-ending event
 /// (app deactivate, deactivateServer, mouse commit, custom toggle, Caps Lock mode
-/// switch, keyboard-layout change) funnels into `InputSession.finalize(reason:)`, the
-/// one host-agnostic commit path.
+/// switch) funnels into `InputSession.finalize(reason:)`, the one host-agnostic
+/// commit path.
 ///
 /// ```
 /// keyDown ──► handle() ──► ensureSession ──► dedup ──► secure gate ──► HangulComposer
@@ -19,7 +19,7 @@ import Carbon.HIToolbox
 ///
 /// toggle key ──► InputModeCoordinator ──► performPriTypeModeTransition ─┐
 /// Caps Lock  ──► setValue(inputMode)  ─────────────────────────────────┤
-/// app deactivate / deactivateServer / mouse commit / layout change ────┴─► session.finalize
+/// app deactivate / deactivateServer / mouse commit ────────────────────┴─► session.finalize
 /// ```
 @objc(PriTypeInputController)
 public class PriTypeInputController: IMKInputController, @unchecked Sendable {
@@ -89,12 +89,9 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     private var lastKeyboardOverrideTime: CFAbsoluteTime = 0
 
     deinit {
-        // The selector-based `.keyboardLayoutChanged` observer is auto-removed on
-        // modern macOS, but remove it explicitly to be safe. The session's block-based
-        // NSWorkspace observer is NOT auto-removed; the session disarms it in deinit,
-        // but do it eagerly here too.
+        // The session's block-based NSWorkspace observer is NOT auto-removed; the
+        // session disarms it in deinit, but do it eagerly here too.
         session?.disarmFocusLossFinalizer()
-        NotificationCenter.default.removeObserver(self, name: .keyboardLayoutChanged, object: nil)
     }
 
     // MARK: - Session Management
@@ -107,7 +104,6 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             previous.session?.finalize(reason: .deactivateServer)
             previous.session?.disarmFocusLossFinalizer()
             previous.session?.markContextStale()
-            NotificationCenter.default.removeObserver(previous, name: .keyboardLayoutChanged, object: nil)
         }
         Self.sharedController = self
         if let pending = pendingSystemMode {
@@ -278,18 +274,6 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
 
         // Set as active controller for toggle access
         Self.sharedController = self
-
-        // Ensure composer has correct layout (in case it changed while inactive)
-        let currentLayoutId = ConfigurationManager.shared.keyboardId
-        composer.updateKeyboardLayout(id: currentLayoutId)
-
-        // Observe layout changes. IMK can call activateServer again without an
-        // intervening deactivateServer (common in Electron/Chromium hosts), and
-        // NotificationCenter allows duplicate (observer, selector, name)
-        // registrations that would each fire handleLayoutChange. Remove any prior
-        // registration first so this stays idempotent.
-        NotificationCenter.default.removeObserver(self, name: .keyboardLayoutChanged, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(handleLayoutChange), name: .keyboardLayoutChanged, object: nil)
     }
 
     override public func deactivateServer(_ sender: Any!) {
@@ -314,19 +298,6 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         session?.disarmFocusLossFinalizer()
         session?.markContextStale()
         if Self.sharedController === self { Self.sharedController = nil }
-        NotificationCenter.default.removeObserver(self, name: .keyboardLayoutChanged, object: nil)
-    }
-
-    @objc private func handleLayoutChange() {
-        guard Self.sharedController === self else { return }
-        let newId = ConfigurationManager.shared.keyboardId
-        DebugLogger.log("PriTypeInputController: Layout changed to \(newId), updating composer")
-        // Layout switches mid-composition end the composition like any other
-        // session-ending event — through the single finalize path.
-        if composer.keyboardLayoutId != newId {
-            session?.finalize(reason: .keyboardLayoutChange)
-        }
-        composer.updateKeyboardLayout(id: newId)
     }
 
     // Match the native IMK path used by DINKIssTyle: ask IMK for flagsChanged

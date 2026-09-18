@@ -4,13 +4,6 @@
 "settings.title" = "Settings";
 "settings.footer" = "Designed for macOS";
 
-/* Keyboard Layout */
-"keyboard.title" = "Keyboard Layout";
-"keyboard.2set" = "2-Set Standard";
-"keyboard.3set390" = "3-Set 390";
-"keyboard.2setOld" = "2-Set Old Hangul";
-"keyboard.3setOld" = "3-Set Old Hangul";
-
 /* Toggle Key */
 "toggle.title" = "Korean/English Toggle";
 "toggle.rightCmd" = "⌘ Right Command";

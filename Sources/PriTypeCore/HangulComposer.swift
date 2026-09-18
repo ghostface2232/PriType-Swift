@@ -86,16 +86,8 @@ public class HangulComposer: @unchecked Sendable {
     }
     
     // MARK: - libhangul Context
-    // ThreadSafeHangulInputContext is thread-safe and supports synchronous calls.
-    // It uses NSLock internally for synchronization.
-    /// Active keyboard layout id ("2" 두벌식, "3" 세벌식, ...). Exposed so the
-    /// controller can finalize through the session BEFORE a layout switch.
-    public private(set) var keyboardLayoutId: String = PriTypeConfig.defaultKeyboardId
-    private var context: ThreadSafeHangulInputContext = {
-       let ctx = ThreadSafeHangulInputContext(keyboard: PriTypeConfig.defaultKeyboardId)
-       DebugLogger.log("Configured context with 2-set (id: '\(PriTypeConfig.defaultKeyboardId)')")
-       return ctx
-    }()
+    // 두벌식 표준 is the only supported layout, so the context is created once.
+    private let context = ThreadSafeHangulInputContext(keyboard: PriTypeConfig.defaultKeyboardId)
     
     /// Text convenience handler (double-space period)
     /// Owns all state for text convenience features
@@ -131,33 +123,6 @@ public class HangulComposer: @unchecked Sendable {
     }
 
     // MARK: - Public Methods
-    
-    /// Update the keyboard layout dynamically
-    ///
-    /// This method commits any in-progress composition before switching layouts
-    /// to prevent text corruption.
-    ///
-    /// - Parameter id: The keyboard layout identifier (e.g., "2" for 두벌식, "3" for 세벌식)
-    public func updateKeyboardLayout(id: String) {
-        // Only re-create context if layout actually changed.
-        // Electron apps trigger activateServer frequently, and re-creating
-        // the context every time resets the composition state, causing the
-        // first character to appear in English.
-        guard keyboardLayoutId != id else {
-            return
-        }
-        
-        DebugLogger.log("HangulComposer: Updating keyboard layout '\(keyboardLayoutId)' -> '\(id)'")
-        // Commit existing text before switching to avoid corruption
-        if let delegate = lastDelegate, !context.isEmpty() {
-            commitComposition(delegate: delegate)
-        }
-        
-        // Re-initialize context with new keyboard ID
-        keyboardLayoutId = id
-        context = ThreadSafeHangulInputContext(keyboard: id)
-        localTextBuffer = ""
-    }
     
     /// Set Korean or English mode from the PriType controller.
     ///
