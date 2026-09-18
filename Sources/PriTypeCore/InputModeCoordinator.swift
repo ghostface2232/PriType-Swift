@@ -167,6 +167,18 @@ struct SystemModeEchoFilter {
         outstanding.append((mode, now + Self.lifetime))
     }
 
+    /// Take back the latest report, whose selection failed and so will not echo.
+    mutating func withdrawLatest() {
+        _ = outstanding.popLast()
+    }
+
+    /// Forget every report. A real selection supersedes them: the echoes still
+    /// in flight describe a state the user has since moved away from, and one
+    /// that never arrives must not swallow the user's next selection.
+    mutating func reset() {
+        outstanding.removeAll()
+    }
+
     /// Whether `mode` is the echo of a report. Consumes it and every older report,
     /// since echoes arrive in order and the system may coalesce them.
     mutating func consumeEcho(of mode: InputMode, at now: TimeInterval) -> Bool {

@@ -303,6 +303,24 @@ struct SystemModeEchoFilterTests {
         #expect(!echo6)
     }
 
+    @Test("A withdrawn report is not waited for")
+    func withdrawnReport() {
+        var filter = SystemModeEchoFilter()
+        filter.expect(.english, at: 0)
+        filter.withdrawLatest()
+        let echo = filter.consumeEcho(of: .english, at: 0.05)
+        #expect(!echo)
+    }
+
+    @Test("After a reset, a real selection is never taken for an echo")
+    func resetRetiresReports() {
+        var filter = SystemModeEchoFilter()
+        filter.expect(.english, at: 0)      // its echo never arrives
+        filter.reset()                      // the user then selects Korean for real
+        let echo = filter.consumeEcho(of: .english, at: 0.3)
+        #expect(!echo, "a later real English selection must apply")
+    }
+
     @Test("A selection of the other mode is never taken for an echo")
     func otherModeIsReal() {
         var filter = SystemModeEchoFilter()

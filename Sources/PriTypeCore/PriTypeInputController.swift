@@ -231,8 +231,14 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // the composer has already switched, so a slow or failing selection
         // cannot delay the next keystroke. See InputSourceManager.
         DispatchQueue.main.async {
-            InputSourceManager.shared.selectPriTypeMode(english: nextMode == .english) {
+            var expected = false
+            let selected = InputSourceManager.shared.selectPriTypeMode(english: nextMode == .english) {
                 Self.echoFilter.expect(nextMode, at: ProcessInfo.processInfo.systemUptime)
+                expected = true
+            }
+            // A failed selection sends no echo; do not wait for one.
+            if expected && !selected {
+                Self.echoFilter.withdrawLatest()
             }
         }
     }
@@ -358,6 +364,8 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
                 return
             }
             Self.lastSystemMode = targetMode
+            // A real selection: echoes of earlier reports no longer describe anything.
+            Self.echoFilter.reset()
 
             // IMK may send a new controller's mode before activating it, or
             // finish notifying an old one after focus has moved. Only the owner
