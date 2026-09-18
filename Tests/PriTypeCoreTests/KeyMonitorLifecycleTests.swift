@@ -234,10 +234,14 @@ struct PendingToggleTests {
         #expect(coordinator.pendingActionCount == 0)
     }
 
-    @Test("A Hanja key keeps its place in the order")
+    @Test("Hanja and toggle run in the order they were pressed, cut off by the key")
     func hanjaIsOrderedWithToggles() {
         let coordinator = InputModeCoordinator.shared
         coordinator.applyPendingKeyActions()
+        var performed: [InputModeCoordinator.KeyAction] = []
+        coordinator.performOverride = { performed.append($0) }
+        defer { coordinator.performOverride = nil }
+
         // Hanja at 10, toggle at 30, recorded off main like the event tap does.
         let done = DispatchSemaphore(value: 0)
         Thread {
@@ -246,12 +250,13 @@ struct PendingToggleTests {
             done.signal()
         }.start()
         done.wait()
-        #expect(coordinator.pendingActionCount == 2)
-        // A key typed at 20 runs the Hanja lookup, not the later toggle.
+
+        // A key typed at 20 runs the Hanja lookup — in the mode it was pressed
+        // in — and leaves the later toggle alone.
         coordinator.applyPendingKeyActions(before: 20)
-        #expect(coordinator.pendingActionCount == 1)
+        #expect(performed == [.hanja])
         coordinator.applyPendingKeyActions()
-        #expect(coordinator.pendingActionCount == 0)
+        #expect(performed == [.hanja, .toggle(.customKey)])
     }
 
     @Test("Toggle times use NSEvent's clock")

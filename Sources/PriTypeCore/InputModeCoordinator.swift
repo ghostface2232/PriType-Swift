@@ -29,7 +29,7 @@ public final class InputModeCoordinator: @unchecked Sendable {
     }
 
     /// A key action seen by a key monitor, waiting to run on main.
-    private enum KeyAction {
+    enum KeyAction: Equatable {
         case toggle(ToggleSource)
         case hanja
     }
@@ -115,7 +115,14 @@ public final class InputModeCoordinator: @unchecked Sendable {
         pendingActions.withLock { $0.count }
     }
 
+    /// Replaces running actions, so tests can observe their order (tests only).
+    var performOverride: ((KeyAction) -> Void)?
+
     private func perform(_ action: KeyAction) {
+        if let performOverride {
+            performOverride(action)
+            return
+        }
         switch action {
         case .toggle(let source):
             performToggle(source: source)

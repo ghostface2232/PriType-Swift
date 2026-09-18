@@ -74,7 +74,7 @@ keyDown ──► PriTypeInputController.handle()
 
 `RightCommandSuppressor`가 `CGEventTap`으로 시스템 레벨 키 이벤트를 가로채서 사용자가 설정한 전환키(기본: 우측 Command)와 한자키(기본: 우측 Option)를 처리한다. Key Recorder 방식으로 아무 키나 등록할 수 있다. CGEventTap이 시스템에 의해 반복 비활성화되면 `IOKitManager`(IOHIDManager 기반)로 자동 전환된다.
 
-탭은 메인 런루프가 아닌 전용 스레드(`EventTapThread`, QoS userInteractive)에서 돈다. 시스템의 모든 키 입력이 이 콜백을 거친 뒤에야 앱에 도달하므로, IMK 처리·동기 클라이언트 IPC·설정 UI로 바쁜 메인 스레드에 두면 전역 타이핑이 함께 지연된다. 전환키와 한자키는 눌린 순간 탭 스레드에서 키 시각과 함께 `InputModeCoordinator`의 한 대기열에 기록되고, 메인에서 순서대로 실행된다. `handle()`은 조합 전에 그 키보다 먼저 눌린 동작만 실행하므로, 전환 직후 첫 키는 새 모드로, 한자키 직후 키는 후보창으로 가고, 직전에 친 키는 영향받지 않는다. 한자키와 전환키도 서로 순서를 지킨다.
+탭은 메인 런루프가 아닌 전용 스레드(`EventTapThread`, QoS userInteractive)에서 돈다. 시스템의 모든 키 입력이 이 콜백을 거친 뒤에야 앱에 도달하므로, IMK 처리·동기 클라이언트 IPC·설정 UI로 바쁜 메인 스레드에 두면 전역 타이핑이 함께 지연된다. 전환키와 한자키는 눌린 순간 탭 스레드에서 키 시각과 함께 `InputModeCoordinator`의 한 대기열에 기록되고, 메인에서 순서대로 실행된다. `handle()`은 조합 전에 그 키보다 먼저 눌린 동작만 실행하므로, 전환 직후 첫 키는 새 모드로, 한자키 직후 후보 선택 키는 후보창으로 가고, 직전에 친 키는 영향받지 않는다. 한자키와 전환키도 서로 순서를 지킨다.
 
 현재 한/영 전환 구조의 정식 명세는 [UnifiedInputArchitecture.md](Docs/UnifiedInputArchitecture.md)다(선택지 비교 원본은 [InputArchitectureHybridRollbackPlan.md](Docs/InputArchitectureHybridRollbackPlan.md), superseded). 핵심은 custom 전환키 경로에서 실제 ABC 입력 소스를 선택하지 않고, PriType 내부 mode 전환을 단일 트랜잭션으로 처리하는 것이다. PriType 단일 입력 소스가 IMK 세션을 영구 소유하고, 영어는 조합 없이 raw key를 그대로 pass-through한다.
 
