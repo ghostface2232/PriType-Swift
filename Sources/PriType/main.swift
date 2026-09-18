@@ -98,31 +98,45 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         if eventTapStarted {
             DebugLogger.log("Primary: CGEventTap started successfully")
             // Register fallback: if CGEventTap dies repeatedly, switch to IOKit
-            RightCommandSuppressor.shared.onTapFailed = {
+            RightCommandSuppressor.shared.onTapFailed = { [weak self] in
                 DebugLogger.log("CGEventTap failed repeatedly — activating IOKit fallback")
                 // RightCommandSuppressor has already removed and disabled its tap.
                 // IOKitManager.start() is idempotent, preserving exactly one owner.
-                IOKitManager.shared.onRightCommandToggle = {
-                    InputModeCoordinator.shared.requestToggle(source: .iokitFallback)
-                }
-                IOKitManager.shared.onRightOptionHanja = {
-                    InputModeCoordinator.shared.requestHanjaLookup()
-                }
-                IOKitManager.shared.start()
+                self?.startIOKitFallback()
             }
         } else {
             DebugLogger.log("Primary: CGEventTap FAILED - IOKit taking over as primary")
-            // IOKit takes over as primary toggle handler
-            IOKitManager.shared.onRightCommandToggle = {
-                InputModeCoordinator.shared.requestToggle(source: .iokitFallback)
-            }
-            IOKitManager.shared.onRightOptionHanja = {
-                InputModeCoordinator.shared.requestHanjaLookup()
-            }
-            IOKitManager.shared.start()
+            startIOKitFallback()
         }
         
         DebugLogger.log("Toggle key monitoring initialized")
+    }
+
+    /// Hand key monitoring to IOKit. It needs Input Monitoring; when that is
+    /// missing, `start()` prompts (first time only) and this waits for the grant,
+    /// as `setupIOKit` does for Accessibility, instead of leaving the toggle and
+    /// Hanja keys dead until the next launch.
+    private func startIOKitFallback() {
+        IOKitManager.shared.onRightCommandToggle = {
+            InputModeCoordinator.shared.requestToggle(source: .iokitFallback)
+        }
+        IOKitManager.shared.onRightOptionHanja = {
+            InputModeCoordinator.shared.requestHanjaLookup()
+        }
+        guard !IOKitManager.shared.start() else { return }
+        DebugLogger.log("IOKit fallback waiting for Input Monitoring permission")
+        Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { timer in
+            // The event tap may have come back (e.g. Accessibility re-granted
+            // from Settings); only one monitor may own the keys.
+            if RightCommandSuppressor.shared.isRunning {
+                timer.invalidate()
+                return
+            }
+            guard IOKitManager.inputMonitoringAccess() == .granted else { return }
+            timer.invalidate()
+            let started = IOKitManager.shared.start()
+            DebugLogger.log("Input Monitoring granted — IOKit fallback start = \(started)")
+        }
     }
 }
 

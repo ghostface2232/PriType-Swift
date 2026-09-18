@@ -122,6 +122,9 @@ public enum L10n {
         public static var accessibilityGranted: String { localized("system.accessibilityGranted") }
         public static var accessibilityRequest: String { localized("system.accessibilityRequest") }
         public static var accessibilitySubtitle: String { localized("system.accessibilitySubtitle") }
+        public static var inputMonitoring: String { localized("system.inputMonitoring") }
+        public static var inputMonitoringSubtitle: String { localized("system.inputMonitoringSubtitle") }
+        public static var openSystemSettings: String { localized("system.openSystemSettings") }
         public static var removeABC: String { localized("system.removeABC") }
         public static var removeABCSubtitle: String { localized("system.removeABCSubtitle") }
         public static var removeABCButton: String { localized("system.removeABCButton") }

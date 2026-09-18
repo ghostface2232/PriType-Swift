@@ -98,6 +98,7 @@ struct SettingsView: View {
     @State private var toggleTrigger = ConfigurationManager.shared.toggleTrigger
     @State private var autoUpdateCheckEnabled = ConfigurationManager.shared.autoUpdateCheckEnabled
     @State private var isAccessibilityGranted = false
+    @State private var inputMonitoringAccess = IOKitManager.InputMonitoringAccess.notDetermined
     @State private var hasKeyConflict = false
     @State private var showKeyConflictRestored = false
     @State private var isRestoringKeyBinding = false
@@ -398,6 +399,47 @@ struct SettingsView: View {
                         } else {
                             Button(action: { requestAccessibility() }) {
                                 Text(L10n.system.accessibilityRequest)
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .buttonStyle(.bordered)
+                            .buttonBorderShape(.roundedRectangle(radius: 7))
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
+
+                    Divider()
+                        .opacity(0.15)
+                        .padding(.horizontal, 12)
+
+                    HStack(alignment: .top, spacing: 10) {
+                        SettingsRowIcon(systemName: "keyboard.badge.eye")
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(L10n.system.inputMonitoring)
+                                .font(.system(size: 14, weight: .regular))
+                                .foregroundStyle(.primary)
+
+                            Text(L10n.system.inputMonitoringSubtitle)
+                                .font(.system(size: 11, weight: .regular))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .layoutPriority(1)
+
+                        Spacer()
+
+                        if inputMonitoringAccess == .granted {
+                            StatusPill(
+                                title: L10n.system.accessibilityGranted,
+                                systemImage: "checkmark.circle.fill",
+                                color: .green
+                            )
+                        } else {
+                            Button(action: { requestInputMonitoring() }) {
+                                Text(inputMonitoringAccess == .denied
+                                     ? L10n.system.openSystemSettings : L10n.system.accessibilityRequest)
                                     .font(.system(size: 12, weight: .medium))
                             }
                             .buttonStyle(.bordered)
@@ -749,6 +791,17 @@ struct SettingsView: View {
 
     private func checkAccessibility() {
         isAccessibilityGranted = AXIsProcessTrusted()
+        inputMonitoringAccess = IOKitManager.inputMonitoringAccess()
+    }
+
+    /// Prompt once; after a denial only System Settings can change it.
+    private func requestInputMonitoring() {
+        if inputMonitoringAccess == .notDetermined {
+            IOKitManager.requestInputMonitoringPermission()
+        } else if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
+        inputMonitoringAccess = IOKitManager.inputMonitoringAccess()
     }
 
     /// Disable the default English (ABC) keyboard input source so PriType alone

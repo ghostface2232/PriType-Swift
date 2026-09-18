@@ -67,6 +67,9 @@
 "system.accessibilityGranted" = "허용됨";
 "system.accessibilityRequest" = "권한 요청";
 "system.accessibilitySubtitle" = "우측 Command·Option 같은 전환키와 한자키 감지에 필요합니다.";
+"system.inputMonitoring" = "입력 모니터링 권한";
+"system.inputMonitoringSubtitle" = "손쉬운 사용 방식의 키 감지가 멈췄을 때 대신 쓰는 IOKit 경로에 필요합니다. 없으면 그때 전환키와 한자키가 동작하지 않습니다.";
+"system.openSystemSettings" = "시스템 설정 열기";
 "system.removeABC" = "ABC 입력 소스 끄기";
 "system.removeABCSubtitle" = "PriType만으로 한/영을 쓸 때 기본 ABC를 입력 소스 목록에서 제거합니다. 필요하면 시스템 설정에서 다시 추가할 수 있습니다.";
 "system.removeABCButton" = "ABC 끄기";

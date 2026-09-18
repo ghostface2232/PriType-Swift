@@ -76,6 +76,8 @@ keyDown ──► PriTypeInputController.handle()
 
 전환키가 수정키 하나(우측 ⌘ 등)이면 전환 시점을 고를 수 있다(`ToggleTrigger`). 기본값인 누르는 순간(`press`)은 키를 삼켜 즉시 전환하고, 누르고 있는 동안 다른 키에서 그 수정키를 떼어 낸다. 단독 탭(`tapAlone`)은 수정키를 앱에 그대로 넘기고, 다른 키·클릭 없이 1초 안에 떼면 전환한다. 두 모니터는 같은 `ModifierTapDetector`로 탭을 판정한다. IOKit은 키를 막을 수 없으므로 누르는 순간 모드에서는 우측 ⌘ + C가 전환과 복사를 함께 한다.
 
+권한은 경로마다 다르다. CGEventTap(`.defaultTap`)은 손쉬운 사용, IOKit(IOHIDManager)은 입력 모니터링이 필요하다. IOKit 대체 경로는 시작할 때 `IOHIDCheckAccess`로 확인하고, 물은 적이 없으면 요청한 뒤 허용될 때까지 기다렸다 시작한다. 설정 창은 두 권한의 상태를 모두 표시한다.
+
 탭은 메인 런루프가 아닌 전용 스레드(`EventTapThread`, QoS userInteractive)에서 돈다. 시스템의 모든 키 입력이 이 콜백을 거친 뒤에야 앱에 도달하므로, IMK 처리·동기 클라이언트 IPC·설정 UI로 바쁜 메인 스레드에 두면 전역 타이핑이 함께 지연된다. 전환키와 한자키는 눌린 순간 탭 스레드에서 키 시각과 함께 `InputModeCoordinator`의 한 대기열에 기록되고, 메인에서 순서대로 실행된다. `handle()`은 조합 전에 그 키보다 먼저 눌린 동작만 실행하므로, 전환 직후 첫 키는 새 모드로, 한자키 직후 후보 선택 키는 후보창으로 가고, 직전에 친 키는 영향받지 않는다. 한자키와 전환키도 서로 순서를 지킨다.
 
 현재 한/영 전환 구조의 정식 명세는 [UnifiedInputArchitecture.md](Docs/UnifiedInputArchitecture.md)다(선택지 비교 원본은 [InputArchitectureHybridRollbackPlan.md](Docs/InputArchitectureHybridRollbackPlan.md), superseded). 핵심은 custom 전환키 경로에서 실제 ABC 입력 소스를 선택하지 않고, PriType 내부 mode 전환을 단일 트랜잭션으로 처리하는 것이다. PriType 단일 입력 소스가 IMK 세션을 영구 소유하고, 영어는 조합 없이 raw key를 그대로 pass-through한다.

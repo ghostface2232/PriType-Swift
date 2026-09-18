@@ -55,6 +55,35 @@ public final class IOKitManager: @unchecked Sendable {
         AXIsProcessTrustedWithOptions(options)
     }
     
+    // MARK: - Input Monitoring Permission
+
+    public enum InputMonitoringAccess: Sendable, Equatable {
+        case granted
+        case denied
+        /// Never asked: `requestInputMonitoringPermission()` shows the system prompt.
+        case notDetermined
+    }
+
+    /// Input Monitoring, which IOHIDManager needs to read keyboards. The
+    /// CGEventTap path needs Accessibility instead, so this matters only once
+    /// the IOKit fallback takes over — without it the fallback cannot open any
+    /// keyboard and the toggle and Hanja keys stop working.
+    public static func inputMonitoringAccess() -> InputMonitoringAccess {
+        switch IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) {
+        case kIOHIDAccessTypeGranted: return .granted
+        case kIOHIDAccessTypeDenied: return .denied
+        default: return .notDetermined
+        }
+    }
+
+    /// Ask for Input Monitoring. Shows the system prompt the first time only;
+    /// after a denial the user must change it in System Settings.
+    /// - Returns: whether access is granted now.
+    @discardableResult
+    public static func requestInputMonitoringPermission() -> Bool {
+        IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+    }
+
     // MARK: - Start/Stop
     
     /// Start monitoring keyboard events via IOHIDManager
@@ -64,6 +93,19 @@ public final class IOKitManager: @unchecked Sendable {
         guard manager == nil else {
             DebugLogger.log("IOKitManager: Already running")
             return true
+        }
+
+        // Without Input Monitoring, IOHIDManagerOpen fails with a bare
+        // kIOReturnNotPermitted. Say why, and prompt if the user was never asked.
+        switch Self.inputMonitoringAccess() {
+        case .granted:
+            break
+        case .notDetermined:
+            DebugLogger.log("IOKitManager: Input Monitoring not determined — requesting")
+            guard Self.requestInputMonitoringPermission() else { return false }
+        case .denied:
+            DebugLogger.log("IOKitManager: Input Monitoring denied — cannot read keyboards")
+            return false
         }
 
         // A new ownership lifecycle must not inherit a half-pressed modifier from a

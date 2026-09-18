@@ -67,6 +67,9 @@
 "system.accessibilityGranted" = "Granted";
 "system.accessibilityRequest" = "Request Permission";
 "system.accessibilitySubtitle" = "Required for detecting shortcut keys such as Right Command and Right Option.";
+"system.inputMonitoring" = "Input Monitoring";
+"system.inputMonitoringSubtitle" = "Needed by the IOKit fallback that takes over when the Accessibility-based key detection stops. Without it, the toggle and Hanja keys stop working at that point.";
+"system.openSystemSettings" = "Open System Settings";
 "system.removeABC" = "Turn Off ABC Input Source";
 "system.removeABCSubtitle" = "Removes the default ABC input source when PriType alone handles Korean and English. You can add it again in System Settings.";
 "system.removeABCButton" = "Turn Off";
