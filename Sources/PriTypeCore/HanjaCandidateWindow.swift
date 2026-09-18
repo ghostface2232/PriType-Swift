@@ -276,43 +276,18 @@ public final class HanjaCandidateWindow: @unchecked Sendable {
     @MainActor
     private func positionWindow(near cursorRect: NSRect) {
         guard let window = window else { return }
-
-        // Gap (points) between the caret glyph and the candidate window edge.
-        let gap: CGFloat = 2
         let windowSize = window.frame.size
 
-        // Anchor on the caret glyph's bottom-left (screen coords, bottom-left origin).
-        // Pick the screen that actually contains the caret so multi-monitor placement is
-        // exact; clamp to its visibleFrame (excludes menu bar / Dock).
+        // Pick the screen that actually contains the caret so multi-monitor placement
+        // is exact; clamp to its visibleFrame (excludes menu bar / Dock).
         let anchor = NSPoint(x: cursorRect.minX, y: cursorRect.minY)
         let activeScreen = NSScreen.screens.first { $0.frame.contains(anchor) }
             ?? NSScreen.main
-        guard let screenFrame = activeScreen?.visibleFrame else {
-            window.setFrameOrigin(NSPoint(x: cursorRect.minX, y: cursorRect.minY - windowSize.height - gap))
-            return
-        }
-
-        // Default: snug directly beneath the caret glyph, left edge aligned to the caret.
-        var origin = NSPoint(x: cursorRect.minX, y: cursorRect.minY - windowSize.height - gap)
-
-        // No room below → flip to just above the caret glyph.
-        if origin.y < screenFrame.minY {
-            origin.y = cursorRect.maxY + gap
-        }
-        // Clamp so the window never spills off the top edge either.
-        if origin.y + windowSize.height > screenFrame.maxY {
-            origin.y = screenFrame.maxY - windowSize.height
-        }
-        if origin.y < screenFrame.minY {
-            origin.y = screenFrame.minY
-        }
-        // Horizontal clamp.
-        if origin.x + windowSize.width > screenFrame.maxX {
-            origin.x = screenFrame.maxX - windowSize.width
-        }
-        if origin.x < screenFrame.minX {
-            origin.x = screenFrame.minX
-        }
+        var origin = Self.panelOrigin(
+            caret: cursorRect,
+            panelSize: windowSize,
+            visibleFrame: activeScreen?.visibleFrame
+        )
 
         // Snap to whole DEVICE pixels so the panel and its text render crisply
         // (sub-pixel origins blur the glass/text on Retina).
@@ -323,6 +298,52 @@ public final class HanjaCandidateWindow: @unchecked Sendable {
         }
 
         window.setFrameOrigin(origin)
+    }
+
+    /// Vertical clearance between the caret line and the panel.
+    static let verticalGap: CGFloat = 6
+
+    /// Horizontal space between the converted syllable and the panel's left edge.
+    static let horizontalGap: CGFloat = 4
+
+    /// Where the candidate panel goes for a caret rect (screen coordinates,
+    /// bottom-left origin). Pure so it can be tested without a window.
+    ///
+    /// Measured on macOS 27, the rect clients report through IMK sits one glyph
+    /// height ABOVE the text actually drawn: in Notes the reported rect spanned
+    /// y 1874–1897 while the line's centre was at 1862. Placing the panel under
+    /// `minY` therefore covered the line being written — in Notes, TextEdit,
+    /// Terminal and KakaoTalk alike. So the panel clears one extra caret height:
+    /// under a rect that is right it just sits a line lower, under a shifted one
+    /// it sits directly below the text, and in neither case does it cover it. It
+    /// starts right of the syllable being converted. With no room below it flips
+    /// above the reported rect, which is above the text either way.
+    static func panelOrigin(caret: NSRect, panelSize: NSSize, visibleFrame: NSRect?) -> NSPoint {
+        var origin = NSPoint(
+            x: caret.maxX + horizontalGap,
+            y: caret.minY - caret.height - panelSize.height - verticalGap
+        )
+        guard let screen = visibleFrame else { return origin }
+
+        // No room below → flip to above the line.
+        if origin.y < screen.minY {
+            origin.y = caret.maxY + verticalGap
+        }
+        // Clamp so the panel never spills off the top or bottom edge.
+        if origin.y + panelSize.height > screen.maxY {
+            origin.y = screen.maxY - panelSize.height
+        }
+        if origin.y < screen.minY {
+            origin.y = screen.minY
+        }
+        // Horizontal clamp.
+        if origin.x + panelSize.width > screen.maxX {
+            origin.x = screen.maxX - panelSize.width
+        }
+        if origin.x < screen.minX {
+            origin.x = screen.minX
+        }
+        return origin
     }
 }
 
