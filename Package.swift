@@ -16,7 +16,11 @@ let package = Package(
             targets: ["PriTypeCore"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/Meapri/libhangul-swift", branch: "main"),
+        // Pinned to the revision PriType is tested against. The newest tag,
+        // v3.0.3, predates 43 commits PriType builds on, and `main` has since
+        // moved to data-driven keyboards that nothing here has run with. Move
+        // this pin deliberately, after the tests and PriTypeVerify pass.
+        .package(url: "https://github.com/Meapri/libhangul-swift", revision: "57168458d07b21cffd28afb674a7b177fc9084a5"),
     ],
     targets: [
         .target(
