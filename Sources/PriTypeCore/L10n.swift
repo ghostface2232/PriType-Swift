@@ -6,7 +6,7 @@ import Foundation
 ///
 /// ## Usage
 /// ```swift
-/// Text(L10n.keyboard.title)
+/// Text(L10n.settings.title)
 /// Text(L10n.toggle.rightCommand)
 /// ```
 public enum L10n {
@@ -39,16 +39,6 @@ public enum L10n {
     public enum settings {
         public static var title: String { localized("settings.title") }
         public static var footer: String { localized("settings.footer") }
-    }
-    
-    // MARK: - Keyboard Layout
-    
-    public enum keyboard {
-        public static var title: String { localized("keyboard.title") }
-        public static var twoSet: String { localized("keyboard.2set") }
-        public static var threeSet390: String { localized("keyboard.3set390") }
-        public static var twoSetOld: String { localized("keyboard.2setOld") }
-        public static var threeSetOld: String { localized("keyboard.3setOld") }
     }
     
     // MARK: - Toggle Key
@@ -128,5 +118,26 @@ public enum L10n {
         public static var removeABCButton: String { localized("system.removeABCButton") }
         public static var removeABCSuccess: String { localized("system.removeABCSuccess") }
         public static var removeABCFailed: String { localized("system.removeABCFailed") }
+    }
+
+    // MARK: - System Shortcut Conflicts
+
+    public enum shortcut {
+        /// Warning shown when a binding shadows a macOS shortcut.
+        public static func conflictWarning(_ shortcutName: String) -> String {
+            String(format: localized("shortcut.conflictWarning"), shortcutName)
+        }
+
+        public static func name(_ key: String) -> String { localized(key) }
+    }
+
+    // MARK: - Toggle Key App Exclusions
+
+    public enum exclusions {
+        public static var title: String { localized("exclusions.title") }
+        public static var subtitle: String { localized("exclusions.subtitle") }
+        public static var addButton: String { localized("exclusions.addButton") }
+        public static var removeButton: String { localized("exclusions.removeButton") }
+        public static var empty: String { localized("exclusions.empty") }
     }
 }

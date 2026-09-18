@@ -38,6 +38,73 @@ public final class InputSourceManager: @unchecked Sendable {
         priTypeEnglishInputMode
     ]
     
+    // MARK: - Mode Selection
+
+    /// Tell macOS which PriType mode is now active, so the menu-bar input source
+    /// matches `HangulComposer.inputMode`.
+    ///
+    /// `Docs/UnifiedInputArchitecture.md` forbids driving a custom toggle *with*
+    /// `TISSelectInputSource`, and that invariant stands: in 2.7.x the selection
+    /// WAS the switch, and its asynchrony is what ate the first character after a
+    /// toggle. This is the opposite order. The composer has already switched
+    /// synchronously and remains the single source of truth; this call only
+    /// reports the outcome. A slow, failed, or unsupported call therefore cannot
+    /// affect typing — only the menu-bar icon lags.
+    ///
+    /// The two modes register as input modes under the bundle id, so the English
+    /// one is the source whose id carries the `.english` suffix. Resolved live
+    /// rather than cached: the user can enable or disable a mode at any time.
+    ///
+    /// - Important: Call off the toggle hot path.
+    /// - Parameter beforeSelecting: runs only when a selection is actually issued,
+    ///   right before it, so the caller can expect the `setValue` echo it causes.
+    /// - Returns: whether the requested mode is now the selected input source.
+    @discardableResult
+    public func selectPriTypeMode(english: Bool, beforeSelecting: () -> Void = {}) -> Bool {
+        guard let source = priTypeModeSource(english: english) else {
+            DebugLogger.log("InputSourceManager: no enabled PriType \(english ? "english" : "korean") mode to select")
+            return false
+        }
+        if boolProperty(source, kTISPropertyInputSourceIsSelected) {
+            return true
+        }
+        beforeSelecting()
+        let status = TISSelectInputSource(source)
+        guard status == noErr else {
+            DebugLogger.log("InputSourceManager: TISSelectInputSource failed (\(status))")
+            return false
+        }
+        DebugLogger.log("InputSourceManager: selected PriType \(english ? "english" : "korean") mode")
+        return true
+    }
+
+    private func priTypeModeSource(english: Bool) -> TISInputSource? {
+        let filter: [String: Any] = [
+            kTISPropertyInputSourceCategory as String: kTISCategoryKeyboardInputSource as String,
+            kTISPropertyInputSourceIsEnabled as String: true
+        ]
+        guard let sources = TISCreateInputSourceList(filter as CFDictionary, false)?
+            .takeRetainedValue() as? [TISInputSource] else { return nil }
+        return sources.first { source in
+            guard let id = stringProperty(source, kTISPropertyInputSourceID),
+                  id.hasPrefix(Self.priTypeBundleID),
+                  stringProperty(source, kTISPropertyInputSourceType) == kTISTypeKeyboardInputMode as String,
+                  boolProperty(source, kTISPropertyInputSourceIsSelectCapable)
+            else { return false }
+            return id.hasSuffix(".english") == english
+        }
+    }
+
+    private func stringProperty(_ source: TISInputSource, _ key: CFString) -> String? {
+        guard let pointer = TISGetInputSourceProperty(source, key) else { return nil }
+        return Unmanaged<CFString>.fromOpaque(pointer).takeUnretainedValue() as String
+    }
+
+    private func boolProperty(_ source: TISInputSource, _ key: CFString) -> Bool {
+        guard let pointer = TISGetInputSourceProperty(source, key) else { return false }
+        return CFBooleanGetValue(Unmanaged<CFBoolean>.fromOpaque(pointer).takeUnretainedValue())
+    }
+
     // MARK: - TIS API Methods
     
     /// Get a list of all enabled keyboard input sources using TIS API
@@ -65,6 +132,11 @@ public final class InputSourceManager: @unchecked Sendable {
         return result
     }
     
+    /// Never resurrect a disabled ABC/US layout merely to override a client.
+    static func enabledRomanKeyboardLayoutID(in enabledIDs: [String]) -> String? {
+        ["com.apple.keylayout.ABC", "com.apple.keylayout.US"].first { enabledIDs.contains($0) }
+    }
+
     /// Check if ABC is enabled via TIS API
     public func isABCEnabled() -> Bool {
         let sources = getEnabledKeyboardInputSources()
@@ -77,54 +149,242 @@ public final class InputSourceManager: @unchecked Sendable {
         return sources.contains { $0.id.contains("US") || $0.name == "U.S." }
     }
 
+    // MARK: - Disable the default English (ABC) layout
+
+    /// Outcome of disabling the ABC keyboard layout.
+    public enum ABCRemovalResult: Equatable {
+        /// ABC was present and the removal was written and read back successfully.
+        case removed
+        /// ABC was not in the enabled list to begin with — the desired end state.
+        case alreadyAbsent
+        /// The write did not survive a read-back and a restore was attempted.
+        /// The restore is not itself verified, so this does not promise the
+        /// preferences are byte-identical to their prior state.
+        case failed(reason: String)
+    }
+
+    /// The exact input-source ID of the plain ABC layout.
+    ///
+    /// Must be matched exactly. `id.contains("ABC")` also catches ABC-AZERTY,
+    /// ABC-QWERTZ, ABC-India and even Chinese Pinyin (`…SCIM.ITABC`), none of which
+    /// this action removes — using the loose form to confirm removal reports a
+    /// permanent failure to anyone who keeps one of those enabled.
+    static let abcInputSourceID = "com.apple.keylayout.ABC"
+
+    /// Whether an `AppleEnabledInputSources` entry is the plain ABC keyboard layout.
+    ///
+    /// The layout ID is accepted only as a fallback for an entry that carries no
+    /// name, and only for a keyboard-layout entry. Matching ID 252 on its own would
+    /// delete any third-party `.keylayout` that happens to reuse that resource ID —
+    /// an unbounded false-positive surface for a malformed-entry case that is not
+    /// demonstrated. The ABC *variants* carry different names and IDs and are
+    /// deliberately left alone.
+    static func isABCLayoutEntry(_ source: [String: Any]) -> Bool {
+        let name = source["KeyboardLayout Name"] as? String
+        if name == "ABC" { return true }
+        guard name == nil,
+              (source["InputSourceKind"] as? String) == "Keyboard Layout",
+              let layoutID = source["KeyboardLayout ID"] as? Int else { return false }
+        return layoutID == abcKeyboardLayoutID
+    }
+
+    /// Disable the ABC layout in the enabled-input-source list, verifying the write.
+    ///
+    /// Reversible: the user can re-add ABC in System Settings (the login window
+    /// still needs it). This never selects or enables anything else.
+    @discardableResult
+    public func disableABCKeyboardLayout() -> ABCRemovalResult {
+        guard let defaults = UserDefaults(suiteName: "com.apple.HIToolbox") else {
+            return .failed(reason: "HIToolbox defaults unavailable")
+        }
+        let result = Self.disableABCKeyboardLayout(in: defaults)
+        if result == .removed || result == .alreadyAbsent {
+            CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
+            // A retry can find clean preferences while TIS still has ABC enabled.
+            // Refresh on both outcomes; neither is proof of live removal.
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+            task.arguments = ["TextInputMenuAgent"]
+            try? task.run()
+        }
+        DebugLogger.log("InputSourceManager: disable ABC → \(result)")
+        return result
+    }
+
+    /// Pure defaults-level ABC removal with read-back verification.
+    static func disableABCKeyboardLayout(in defaults: UserDefaults) -> ABCRemovalResult {
+        let key = "AppleEnabledInputSources"
+        guard let original = defaults.array(forKey: key) as? [[String: Any]] else {
+            return .failed(reason: "\(key) unreadable")
+        }
+
+        let remaining = original.filter { !isABCLayoutEntry($0) }
+        guard remaining.count != original.count else { return .alreadyAbsent }
+
+        defaults.set(remaining, forKey: key)
+        defaults.synchronize()
+
+        // Verify. A write that did not land is exactly the "ABC came back" report
+        // from the original issue, and must not be shown to the user as success.
+        guard let after = defaults.array(forKey: key) as? [[String: Any]] else {
+            defaults.set(original, forKey: key)
+            defaults.synchronize()
+            return .failed(reason: "\(key) unreadable after write")
+        }
+        guard !after.contains(where: isABCLayoutEntry) else {
+            defaults.set(original, forKey: key)
+            defaults.synchronize()
+            return .failed(reason: "ABC still present after write")
+        }
+        return .removed
+    }
+
+    /// Whether the live TIS state agrees that the plain ABC layout is gone.
+    ///
+    /// The preference write can succeed while the running system still has ABC
+    /// enabled, so the UI confirms against TIS before claiming success. This uses
+    /// the exact source ID — the confirmation must recognise exactly what the
+    /// removal targets, or ABC-variant and Pinyin users fail forever.
+    ///
+    /// - Important: This reports the calling process's *cached* TIS view, which
+    ///   HIToolbox does not refresh after a preference write. Inside the running
+    ///   input method it keeps answering "enabled" after a successful removal.
+    ///   Confirm from a fresh process instead: `ABCLayoutStatusProbe`.
+    public func isABCDisabledAccordingToTIS() -> Bool {
+        let filter: [String: Any] = [
+            kTISPropertyInputSourceCategory as String: kTISCategoryKeyboardInputSource as String,
+            kTISPropertyInputSourceIsEnabled as String: true
+        ]
+        guard let sources = TISCreateInputSourceList(filter as CFDictionary, false)?.takeRetainedValue() as? [TISInputSource] else {
+            return false // A failed query cannot prove absence.
+        }
+        var ids: [String] = []
+        for source in sources {
+            guard let pointer = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else {
+                return false
+            }
+            ids.append(Unmanaged<CFString>.fromOpaque(pointer).takeUnretainedValue() as String)
+        }
+        return Self.isABCDisabled(in: ids)
+    }
+
+    static func isABCDisabled(in enabledIDs: [String]?) -> Bool {
+        guard let enabledIDs else { return false }
+        return !enabledIDs.contains(abcInputSourceID)
+    }
+
+    /// Keys whose sanitized copies must land together or not at all.
+    static let managedInputSourceKeys = [
+        "AppleEnabledInputSources",
+        "AppleSelectedInputSources",
+        "AppleInputSourceHistory"
+    ]
+
+    /// Outcome of an explicit input-source cleanup.
+    ///
+    /// Cleanup rewrites system preferences, so callers need a result rather than a
+    /// silent success. Note what the read-back can and cannot establish: it detects
+    /// a write rejected or reverted at the storage layer, but NOT macOS re-adding
+    /// an entry afterwards — the deferred rewrite is what users perceive as an
+    /// entry "coming back", and no synchronous check can see it. Confirming that
+    /// requires the live TIS state (see `isABCDisabledAccordingToTIS`).
+    public enum CleanupResult: Equatable {
+        /// Preferences already matched the sanitized form; nothing was written.
+        case noChangeNeeded
+        /// Every managed key was written and read back unchanged.
+        case cleaned(keys: [String])
+        /// A write did not survive the read-back. A restore of the written keys was
+        /// attempted but is not itself verified, so this does not promise the
+        /// preferences are byte-identical to their prior state.
+        case failed(reason: String)
+    }
+
     /// Remove stale legacy entries without enabling or selecting input sources.
     ///
     /// This intentionally does not enable PriType itself. Calling
     /// `TISEnableInputSource` for the running input method can make macOS show
     /// an "add input source" confirmation again on startup.
-    public func cleanupStaleInputSources() {
+    ///
+    /// This is an explicit maintenance action, not a startup step: PriType must not
+    /// rewrite HIToolbox snapshots on every launch (see ARCHITECTURE). The value of
+    /// this path is the all-or-nothing planning across `managedInputSourceKeys`:
+    /// every key is planned before anything is written, so a mismatch on the last
+    /// key still restores the earlier ones and no partially-cleaned state is left
+    /// behind. The read-back is a cheap storage-layer guard, not proof the cleanup
+    /// stuck — see `CleanupResult`.
+    @discardableResult
+    public func cleanupStaleInputSources() -> CleanupResult {
         guard let defaults = UserDefaults(suiteName: "com.apple.HIToolbox") else {
             DebugLogger.log("InputSourceManager: failed to open HIToolbox defaults")
-            return
+            return .failed(reason: "HIToolbox defaults unavailable")
         }
-
-        var enabledSources = defaults.array(forKey: "AppleEnabledInputSources") as? [[String: Any]] ?? []
-        let originalEnabledSources = enabledSources
-
-        enabledSources = Self.sanitizedInputSources(
-            enabledSources,
-            removeAppleKoreanInputModes: false,
-            allowsPriTypeParentEntry: true
-        )
-
-        var didChange = !Self.inputSourcesEqual(enabledSources, originalEnabledSources)
-        if didChange {
-            defaults.set(enabledSources, forKey: "AppleEnabledInputSources")
+        let result = Self.cleanupStaleInputSources(in: defaults)
+        switch result {
+        case .noChangeNeeded:
+            DebugLogger.log("InputSourceManager: Apple ABC and legacy input-source cleanup already current")
+        case .cleaned(let keys):
+            CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
+            DebugLogger.log("InputSourceManager: cleaned stale PriType input-source entries (\(keys.joined(separator: ", ")))")
+        case .failed(let reason):
+            // Flush here too: the restore writes need it at least as much as the
+            // forward writes they undo.
+            CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
+            DebugLogger.log("InputSourceManager: input-source cleanup failed; restore attempted — \(reason)")
         }
+        return result
+    }
 
-        for key in ["AppleSelectedInputSources", "AppleInputSourceHistory"] {
-            guard let originalSources = defaults.array(forKey: key) as? [[String: Any]] else {
-                continue
+    /// Pure defaults-level cleanup, separated so it can be exercised against a
+    /// scratch domain instead of the live HIToolbox preferences.
+    static func cleanupStaleInputSources(in defaults: UserDefaults) -> CleanupResult {
+        // 1. Plan every write before touching anything.
+        var originals: [String: [[String: Any]]] = [:]
+        var planned: [String: [[String: Any]]] = [:]
+
+        for key in managedInputSourceKeys {
+            // A key that is absent is simply not managed. A key that is PRESENT but
+            // of the wrong shape is a real problem and must not be reported as
+            // "already current" — that is what `disableABCKeyboardLayout` does too.
+            guard defaults.object(forKey: key) != nil else { continue }
+            guard let original = defaults.array(forKey: key) as? [[String: Any]] else {
+                return .failed(reason: "\(key) is present but not a list of entries")
             }
-            let sanitizedSources = Self.sanitizedInputSources(
-                originalSources,
+            let sanitized = sanitizedInputSources(
+                original,
                 removeAppleKoreanInputModes: false,
                 allowsPriTypeParentEntry: true
             )
-            if !Self.inputSourcesEqual(sanitizedSources, originalSources) {
-                defaults.set(sanitizedSources, forKey: key)
-                didChange = true
+            originals[key] = original
+            if !inputSourcesEqual(sanitized, original) {
+                planned[key] = sanitized
             }
         }
 
-        guard didChange else {
-            DebugLogger.log("InputSourceManager: Apple ABC and legacy input-source cleanup already current")
-            return
+        guard !planned.isEmpty else { return .noChangeNeeded }
+
+        // 2. Apply the whole plan.
+        for (key, sanitized) in planned {
+            defaults.set(sanitized, forKey: key)
+        }
+        defaults.synchronize()
+
+        // 3. Read back. `UserDefaults` reflects out-of-band changes from cfprefsd,
+        //    so this does catch a write rejected or reverted by another process —
+        //    but a key compared against the value we just derived from it agrees by
+        //    construction otherwise. A mismatch fails the WHOLE operation rather
+        //    than leaving some keys cleaned.
+        for (key, expected) in planned {
+            let actual = defaults.array(forKey: key) as? [[String: Any]]
+            guard let actual, inputSourcesEqual(actual, expected) else {
+                for (rollbackKey, original) in originals where planned[rollbackKey] != nil {
+                    defaults.set(original, forKey: rollbackKey)
+                }
+                defaults.synchronize()
+                return .failed(reason: "verification failed for \(key)")
+            }
         }
 
-        defaults.synchronize()
-        CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
-        DebugLogger.log("InputSourceManager: cleaned stale PriType input-source entries")
+        return .cleaned(keys: planned.keys.sorted())
     }
 
     private static func inputSourcesEqual(_ lhs: [[String: Any]], _ rhs: [[String: Any]]) -> Bool {

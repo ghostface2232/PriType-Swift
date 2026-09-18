@@ -35,6 +35,7 @@ public class HangulComposer: @unchecked Sendable {
     ///
     /// When in `.english` mode, all keystrokes are passed through unchanged.
     public private(set) var inputMode: InputMode = .korean
+    private(set) var modeSelectionRevision: UInt64 = 0
 
     /// Whether the underlying Hangul engine currently has active composition.
     public var hasActiveComposition: Bool {
@@ -85,16 +86,8 @@ public class HangulComposer: @unchecked Sendable {
     }
     
     // MARK: - libhangul Context
-    // ThreadSafeHangulInputContext is thread-safe and supports synchronous calls.
-    // It uses NSLock internally for synchronization.
-    /// Active keyboard layout id ("2" 두벌식, "3" 세벌식, ...). Exposed so the
-    /// controller can finalize through the session BEFORE a layout switch.
-    public private(set) var keyboardLayoutId: String = PriTypeConfig.defaultKeyboardId
-    private var context: ThreadSafeHangulInputContext = {
-       let ctx = ThreadSafeHangulInputContext(keyboard: PriTypeConfig.defaultKeyboardId)
-       DebugLogger.log("Configured context with 2-set (id: '\(PriTypeConfig.defaultKeyboardId)')")
-       return ctx
-    }()
+    // 두벌식 표준 is the only supported layout, so the context is created once.
+    private let context = ThreadSafeHangulInputContext(keyboard: PriTypeConfig.defaultKeyboardId)
     
     /// Text convenience handler (double-space period)
     /// Owns all state for text convenience features
@@ -131,33 +124,6 @@ public class HangulComposer: @unchecked Sendable {
 
     // MARK: - Public Methods
     
-    /// Update the keyboard layout dynamically
-    ///
-    /// This method commits any in-progress composition before switching layouts
-    /// to prevent text corruption.
-    ///
-    /// - Parameter id: The keyboard layout identifier (e.g., "2" for 두벌식, "3" for 세벌식)
-    public func updateKeyboardLayout(id: String) {
-        // Only re-create context if layout actually changed.
-        // Electron apps trigger activateServer frequently, and re-creating
-        // the context every time resets the composition state, causing the
-        // first character to appear in English.
-        guard keyboardLayoutId != id else {
-            return
-        }
-        
-        DebugLogger.log("HangulComposer: Updating keyboard layout '\(keyboardLayoutId)' -> '\(id)'")
-        // Commit existing text before switching to avoid corruption
-        if let delegate = lastDelegate, !context.isEmpty() {
-            commitComposition(delegate: delegate)
-        }
-        
-        // Re-initialize context with new keyboard ID
-        keyboardLayoutId = id
-        context = ThreadSafeHangulInputContext(keyboard: id)
-        localTextBuffer = ""
-    }
-    
     /// Set Korean or English mode from the PriType controller.
     ///
     /// Custom toggle keys are coordinated by `InputModeCoordinator` and
@@ -171,6 +137,7 @@ public class HangulComposer: @unchecked Sendable {
     ///   PriType source, which always lands back in `.korean`). No other path —
     ///   including `activateServer` focus changes — may mutate the mode.
     public func setInputMode(_ mode: InputMode) {
+        modeSelectionRevision &+= 1
         guard inputMode != mode else {
             return
         }
@@ -232,6 +199,10 @@ public class HangulComposer: @unchecked Sendable {
         
         // Space - handle double-space period
         if keyCode == KeyCode.space {
+            guard !context.isEmpty() || !localTextBuffer.isEmpty else {
+                textConvenience.resetSpaceState()
+                return false
+            }
             commitComposition(delegate: delegate)
             let result = textConvenience.handleDoubleSpacePeriod(buffer: &localTextBuffer, delegate: delegate, checkHangul: true)
             if result == .convertedToPeriod {
@@ -263,9 +234,6 @@ public class HangulComposer: @unchecked Sendable {
         
         // Backspace
         if keyCode == KeyCode.backspace {
-            if !localTextBuffer.isEmpty {
-                localTextBuffer.removeLast()
-            }
             if !context.isEmpty() {
                 if context.backspace() {
                     updateComposition(delegate: delegate)
@@ -275,6 +243,7 @@ public class HangulComposer: @unchecked Sendable {
                     return true
                 }
             }
+            if !localTextBuffer.isEmpty { localTextBuffer.removeLast() }
             return false
         }
         
@@ -282,8 +251,11 @@ public class HangulComposer: @unchecked Sendable {
     }
     
     /// Process a single character through the Hangul engine
+    /// - Parameter composes: whether the character came from a letter-key
+    ///   position. A character from any other key is never handed to the engine,
+    ///   so a layout that puts a letter there (AZERTY "m") cannot produce a jamo.
     /// - Returns: `true` if the character was processed, `false` if skipped
-    private func processCharacter(_ char: Unicode.Scalar, delegate: HangulComposerDelegate) -> Bool {
+    private func processCharacter(_ char: Unicode.Scalar, composes: Bool, delegate: HangulComposerDelegate) -> Bool {
         let charCode = UInt32(char.value)
         
         // Skip non-printable characters
@@ -292,7 +264,7 @@ public class HangulComposer: @unchecked Sendable {
         }
         
         // Primary attempt
-        if context.process(Character(char)) {
+        if composes && context.process(Character(char)) {
             updateComposition(delegate: delegate)
             return true
         }
@@ -305,7 +277,7 @@ public class HangulComposer: @unchecked Sendable {
         }
         
         // Retry with clean context
-        if context.process(Character(char)) {
+        if composes && context.process(Character(char)) {
             DebugLogger.log("Retry success")
             updateComposition(delegate: delegate)
             return true
@@ -373,20 +345,14 @@ public class HangulComposer: @unchecked Sendable {
         // composition. Most keys pass through to the host app unchanged.
         // - Roman characters come from the keyboard layout that the controller
         //   installs via `overrideKeyboardWithKeyboardNamed(ABC/US)`.
-        // - Some macOS text conveniences do not fire for this internal English
-        //   mode in every host, so PriType supplies a narrow fallback for only
-        //   the transformed cases (double-space period and auto-capitalization).
-        // Keeping this path mostly pass-through avoids the classic buffer-vs-
-        // cursor desync that a PriType-side English buffer invites.
+        // Text conveniences belong to the host, which knows the field's opt-in
+        // settings. English printable keys always pass through unchanged.
         if inputMode == .english {
             if !context.isEmpty() {
                 commitComposition(delegate: delegate)
                 delegate.setMarkedText("")
             }
             localTextBuffer = ""
-            if textConvenience.handleEnglishModeInput(event, delegate: delegate) {
-                return true
-            }
             return false
         }
         
@@ -421,11 +387,14 @@ public class HangulComposer: @unchecked Sendable {
              return false
         }
         
-        guard let characters = event.characters, !characters.isEmpty else {
+        // Letter keys compose from their position, not the active Latin layout: the
+        // Hangul layout is defined on QWERTY positions, and only Shift (never Caps
+        // Lock) picks the upper row. Every other key keeps what the layout typed.
+        let positional = QwertyKeyMap.character(for: keyCode, shifted: event.modifierFlags.contains(.shift))
+        let composes = positional != nil
+        guard let inputCharacters = positional ?? event.characters, !inputCharacters.isEmpty else {
             return false
         }
-        
-        let inputCharacters = characters
         
         // Handle special keys (Return, Escape, Space, Arrow, Tab, Backspace)
         if let result = handleSpecialKey(keyCode: keyCode, delegate: delegate) {
@@ -451,7 +420,7 @@ public class HangulComposer: @unchecked Sendable {
         var handledAtLeastOnce = false
         
         for char in inputCharacters.unicodeScalars {
-            if processCharacter(char, delegate: delegate) {
+            if processCharacter(char, composes: composes, delegate: delegate) {
                 handledAtLeastOnce = true
             }
         }
@@ -612,7 +581,7 @@ public class HangulComposer: @unchecked Sendable {
     
     // MARK: - Hanja Lookup
     
-    /// Trigger Hanja lookup externally (called by RightCommandSuppressor via CGEventTap)
+    /// Trigger Hanja lookup externally (run by `InputModeCoordinator`, in key order)
     ///
     /// This is the public entry point for Hanja conversion.
     /// Acts as a toggle: dismisses if already visible, opens if not.

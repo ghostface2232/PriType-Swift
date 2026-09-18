@@ -193,10 +193,14 @@ public final class UpdateChecker: @unchecked Sendable {
     
     /// Normalize a version string by stripping leading "v" or "V"
     static func normalizeVersion(_ version: String) -> String {
-        var v = version.trimmingCharacters(in: .whitespaces)
+        var v = version.trimmingCharacters(in: .whitespacesAndNewlines)
         if v.hasPrefix("v") || v.hasPrefix("V") {
             v = String(v.dropFirst())
         }
+        // Trim again: dropping the prefix can expose leading whitespace ("v 2.5"),
+        // and callers normalize before `isNewer` normalizes a second time. Trimming
+        // here makes the function idempotent, so the double pass cannot disagree.
+        v = v.trimmingCharacters(in: .whitespacesAndNewlines)
         if let prereleaseStart = v.firstIndex(of: "-") {
             v = String(v[..<prereleaseStart])
         }
@@ -207,6 +211,12 @@ public final class UpdateChecker: @unchecked Sendable {
     }
     
     /// Selects the highest stable release by numeric version, ignoring beta/pre-release tags.
+    ///
+    /// Versions that differ only in trailing zero components ("2.7" and "2.7.0")
+    /// compare as equal, so a tie is possible. `max(by:)` keeps the FIRST element
+    /// of an equal-max run and the GitHub releases endpoint returns newest-first,
+    /// so the most recently published of the tie wins. That is the intent — it is
+    /// pinned by a test rather than left to depend on the caller's ordering.
     static func latestStableRelease(in releases: [GitHubRelease]) -> GitHubRelease? {
         releases
             .filter { release in
@@ -222,11 +232,48 @@ public final class UpdateChecker: @unchecked Sendable {
             }
     }
 
-    /// Check if `latest` is newer than `current` using numeric comparison
+    /// Check if `latest` is strictly newer than `current`.
     ///
-    /// Uses Foundation's `.numeric` comparison option which correctly handles
-    /// dotted version strings (e.g. "2.1" > "2.0.0", "2.10" > "2.9")
+    /// Compares dotted versions component by component, treating missing trailing
+    /// components as zero. A plain `.numeric` string compare cannot do this: it
+    /// ranks "2.1.0" above "2.1" because the shorter string is a prefix, which made
+    /// a `2.1.0` tag advertise an update to a machine already running `2.1`.
+    /// Component-wise comparison also makes "2.01" == "2.1" and "2.10" > "2.9".
+    ///
+    /// - Important: This treats "2.7" and "2.7.0" as the SAME version. If the
+    ///   project ever publishes both as distinct releases, a machine running "2.7"
+    ///   would never be offered "2.7.0". The release workflow pins
+    ///   `CFBundleShortVersionString` to the tag string exactly, so the only way to
+    ///   reach that state is to tag both forms — which would be two tags for one
+    ///   semantic version. Keep tags to a single canonical form.
     static func isNewer(_ latest: String, than current: String) -> Bool {
-        return latest.compare(current, options: .numeric) == .orderedDescending
+        let lhs = versionComponents(latest)
+        let rhs = versionComponents(current)
+        for index in 0..<max(lhs.count, rhs.count) {
+            let l = index < lhs.count ? lhs[index] : 0
+            let r = index < rhs.count ? rhs[index] : 0
+            if l != r { return l > r }
+        }
+        return false
+    }
+
+    /// Split a normalized version into numeric components.
+    ///
+    /// Each segment contributes its leading ASCII digits; a segment with none
+    /// contributes 0. Degradation is per SEGMENT, not per version — "2.5.x" still
+    /// ranks above "2.4.9", because only the malformed segment is affected.
+    ///
+    /// `Character.isNumber` would accept non-ASCII numerics that `Int` then
+    /// rejects, collapsing an otherwise-valid segment to 0, so the scan is
+    /// restricted to ASCII. A segment too large for `Int` saturates to `Int.max`
+    /// rather than wrapping to 0, which would invert the ordering.
+    static func versionComponents(_ version: String) -> [Int] {
+        normalizeVersion(version)
+            .split(separator: ".", omittingEmptySubsequences: false)
+            .map { segment in
+                let digits = segment.prefix { $0.isASCII && $0.isNumber }
+                if digits.isEmpty { return 0 }
+                return Int(digits) ?? Int.max
+            }
     }
 }

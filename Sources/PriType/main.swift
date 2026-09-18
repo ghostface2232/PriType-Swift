@@ -18,10 +18,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         _ = IMKServer(name: kConnectionName, bundleIdentifier: Bundle.main.bundleIdentifier)
         DebugLogger.log("IMKServer initialized")
         
-        Task.detached(priority: .utility) {
-            InputSourceManager.shared.cleanupStaleInputSources()
-        }
+        // Do not rewrite HIToolbox preference snapshots on every launch.
+        // Registration/migration belongs to installation, while TIS owns live state.
         
+        // Persist legacy/unsafe key bindings before any monitor reads them, so the
+        // running binding and the stored binding cannot disagree.
+        ConfigurationManager.shared.migrateKeyBindingsIfNeeded()
+
+        // Track the frontmost app so the event-tap callback can consult the user's
+        // toggle exclusion list without querying the workspace on the hot path.
+        ToggleExclusionPolicy.shared.start()
+
         // Setup toggle key monitoring
         setupIOKit()
         
@@ -73,13 +80,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         }
         
         // Set callback for CGEventTap toggle handler (handles all toggle keys)
-        RightCommandSuppressor.shared.onToggle = {
-            InputModeCoordinator.shared.requestToggle(source: .customKey)
+        RightCommandSuppressor.shared.onToggle = { eventTime in
+            InputModeCoordinator.shared.requestToggle(source: .customKey, eventTime: eventTime)
         }
         
         // Set callback for Right Option key → Hanja lookup
-        RightCommandSuppressor.shared.onHanjaLookup = {
-            PriTypeInputController.sharedComposer.triggerHanjaLookup()
+        RightCommandSuppressor.shared.onHanjaLookup = { eventTime in
+            InputModeCoordinator.shared.requestHanjaLookup(eventTime: eventTime)
         }
         
         // Track if CGEventTap started successfully
@@ -91,11 +98,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             // Register fallback: if CGEventTap dies repeatedly, switch to IOKit
             RightCommandSuppressor.shared.onTapFailed = {
                 DebugLogger.log("CGEventTap failed repeatedly — activating IOKit fallback")
+                // RightCommandSuppressor has already removed and disabled its tap.
+                // IOKitManager.start() is idempotent, preserving exactly one owner.
                 IOKitManager.shared.onRightCommandToggle = {
                     InputModeCoordinator.shared.requestToggle(source: .iokitFallback)
                 }
                 IOKitManager.shared.onRightOptionHanja = {
-                    PriTypeInputController.sharedComposer.triggerHanjaLookup()
+                    InputModeCoordinator.shared.requestHanjaLookup()
                 }
                 IOKitManager.shared.start()
             }
@@ -106,7 +115,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 InputModeCoordinator.shared.requestToggle(source: .iokitFallback)
             }
             IOKitManager.shared.onRightOptionHanja = {
-                PriTypeInputController.sharedComposer.triggerHanjaLookup()
+                InputModeCoordinator.shared.requestHanjaLookup()
             }
             IOKitManager.shared.start()
         }
@@ -116,6 +125,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 }
 
 // MARK: - Main Entry Point
+
+// Only a fresh process can observe the ABC-layout removal (see
+// ABCLayoutStatusProbe). Answer and exit before AppKit or IMK start.
+ABCLayoutStatusProbe.runIfRequested()
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

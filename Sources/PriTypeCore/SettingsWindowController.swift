@@ -92,7 +92,6 @@ extension SettingsWindowController: NSWindowDelegate {
 // MARK: - SwiftUI Settings View
 
 struct SettingsView: View {
-    @State private var selectedKeyboard = ConfigurationManager.shared.keyboardId
     @State private var toggleKeyBinding = ConfigurationManager.shared.toggleKeyBinding
     @State private var hanjaKeyBinding = ConfigurationManager.shared.hanjaKeyBinding
     @State private var autoUpdateCheckEnabled = ConfigurationManager.shared.autoUpdateCheckEnabled
@@ -112,9 +111,15 @@ struct SettingsView: View {
 
     // Disable-default-English (ABC) action state (restored 2.6.5 feature)
     @State private var removeABCStatus: RemoveABCStatus = .idle
+    // Pending status reset, replaced on each finish so timers cannot interleave.
+    @State private var removeABCResetWorkItem: DispatchWorkItem?
+    @State private var removeABCTask: Task<Void, Never>?
 
     // Experimental Windows-style direct insertion (Phase 3). Default OFF.
     @State private var experimentalDirectInsertion = false
+
+    // Apps that must keep the toggle/hanja keys for themselves (remote desktop, VMs).
+    @State private var excludedApps: [ExcludedApp] = []
 
     private enum UpdateStatus: Equatable {
         case idle
@@ -126,16 +131,11 @@ struct SettingsView: View {
 
     private enum RemoveABCStatus: Equatable {
         case idle
+        /// Removal issued; waiting for TIS to agree. Blocks re-entry.
+        case working
         case success
         case error
     }
-
-    private let keyboardOptions = [
-        ("2", L10n.keyboard.twoSet),
-        ("3", L10n.keyboard.threeSet390),
-        ("2y", L10n.keyboard.twoSetOld),
-        ("3y", L10n.keyboard.threeSetOld)
-    ]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -154,11 +154,11 @@ struct SettingsView: View {
         }
         .frame(width: PriTypeConfig.settingsWindowWidth, height: PriTypeConfig.settingsWindowHeight)
         .onAppear {
-            selectedKeyboard = ConfigurationManager.shared.keyboardId
             toggleKeyBinding = ConfigurationManager.shared.toggleKeyBinding
             hanjaKeyBinding = ConfigurationManager.shared.hanjaKeyBinding
             autoUpdateCheckEnabled = ConfigurationManager.shared.autoUpdateCheckEnabled
             experimentalDirectInsertion = ConfigurationManager.shared.experimentalDirectInsertion
+            reloadExcludedApps()
             refreshCapsLockSwitchState()
             checkAccessibility()
         }
@@ -175,6 +175,11 @@ struct SettingsView: View {
             Text(L10n.keyBinding.capsLockBlockedMessage)
         }
         .onDisappear {
+            removeABCTask?.cancel()
+            removeABCTask = nil
+            removeABCResetWorkItem?.cancel()
+            removeABCResetWorkItem = nil
+            removeABCStatus = .idle
             accessibilityPollTimer?.invalidate()
             accessibilityPollTimer = nil
         }
@@ -182,24 +187,6 @@ struct SettingsView: View {
 
     private var settingsContent: some View {
         VStack(alignment: .leading, spacing: 24) {
-            SettingsSection(
-                title: L10n.keyboard.title,
-                icon: "keyboard"
-            ) {
-                VStack(spacing: 2) {
-                    ForEach(keyboardOptions, id: \.0) { option in
-                        SelectionRow(
-                            title: option.1,
-                            isSelected: selectedKeyboard == option.0,
-                            action: { selectedKeyboard = option.0 }
-                        )
-                    }
-                }
-            }
-            .onChange(of: selectedKeyboard) { _, newValue in
-                ConfigurationManager.shared.keyboardId = newValue
-            }
-
             CapsLockStatusCard(
                 isEnabled: capsLockSwitchEnabled,
                 openSettings: openInputSourceSettings
@@ -246,6 +233,23 @@ struct SettingsView: View {
                             Text(showKeyConflictRestored ? L10n.keyBinding.conflictRestored : L10n.keyBinding.conflict)
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.orange)
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
+                    // A binding that shadows a macOS shortcut is allowed, but the
+                    // user should know why that shortcut stopped responding.
+                    ForEach(systemShortcutWarnings, id: \.self) { warning in
+                        HStack(alignment: .top, spacing: 4) {
+                            Image(systemName: "info.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.orange)
+                            Text(warning)
+                                .font(.system(size: 11, weight: .regular))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.vertical, 6)
                         .padding(.horizontal, 12)
@@ -392,6 +396,9 @@ struct SettingsView: View {
                         Spacer()
 
                         switch removeABCStatus {
+                        case .working:
+                            ProgressView()
+                                .controlSize(.small)
                         case .success:
                             StatusPill(
                                 title: L10n.system.removeABCSuccess,
@@ -415,7 +422,82 @@ struct SettingsView: View {
                             .buttonBorderShape(.roundedRectangle(radius: 7))
                             .controlSize(.small)
                             .frame(minWidth: 70)
+                            // Overlapping attempts would spawn competing killalls
+                            // and competing status resets.
+                            .disabled(removeABCStatus == .working)
                         }
+                    }
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
+                }
+            }
+
+            SettingsSection(
+                title: L10n.exclusions.title,
+                icon: "rectangle.on.rectangle.slash"
+            ) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(L10n.exclusions.subtitle)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 10)
+                        .padding(.horizontal, 12)
+
+                    if excludedApps.isEmpty {
+                        Text(L10n.exclusions.empty)
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(.tertiary)
+                            .padding(.vertical, 10)
+                            .padding(.horizontal, 12)
+                    } else {
+                        ForEach(excludedApps) { app in
+                            Divider()
+                                .opacity(0.2)
+                                .padding(.horizontal, 12)
+
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(app.displayName)
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundStyle(.primary)
+                                    Text(app.bundleID)
+                                        .font(.system(size: 10, weight: .regular))
+                                        .foregroundStyle(.tertiary)
+                                }
+
+                                Spacer()
+
+                                Button(L10n.exclusions.removeButton) {
+                                    removeExcludedApp(app)
+                                }
+                                .buttonStyle(.bordered)
+                                .buttonBorderShape(.roundedRectangle(radius: 7))
+                                .controlSize(.small)
+                            }
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                        }
+                    }
+
+                    Divider()
+                        .opacity(0.2)
+                        .padding(.horizontal, 12)
+
+                    HStack {
+                        Button(action: { addExcludedApp() }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 12, weight: .medium))
+                                Text(L10n.exclusions.addButton)
+                                    .font(.system(size: 13, weight: .medium))
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.roundedRectangle(radius: 7))
+                        .controlSize(.small)
+
+                        Spacer()
                     }
                     .padding(.vertical, 10)
                     .padding(.horizontal, 12)
@@ -599,6 +681,25 @@ struct SettingsView: View {
         }
     }
 
+    /// Warnings for bindings that shadow a well-known macOS shortcut.
+    ///
+    /// Deduplicated so binding both keys to the same shortcut family does not
+    /// print the same sentence twice.
+    private var systemShortcutWarnings: [String] {
+        // Only warn about bindings PriType actually intercepts. When Caps Lock owns
+        // switching, the toggle key is not consumed at all (the row is disabled and
+        // reads "managed by macOS"), so warning about it would tell the user to
+        // reassign a system shortcut for no reason.
+        let active = capsLockSwitchEnabled ? [hanjaKeyBinding] : [toggleKeyBinding, hanjaKeyBinding]
+        var seen = Set<String>()
+        return active
+            .compactMap { $0.systemShortcutConflict }
+            .compactMap { conflict in
+                guard seen.insert(conflict.nameKey).inserted else { return nil }
+                return L10n.shortcut.conflictWarning(L10n.shortcut.name(conflict.nameKey))
+            }
+    }
+
     private func clearKeyConflict() {
         guard hasKeyConflict || showKeyConflictRestored else { return }
 
@@ -617,37 +718,93 @@ struct SettingsView: View {
     /// Disable the default English (ABC) keyboard input source so PriType alone
     /// handles 한/영. Restored from v2.6.5 (removed in the 2.7 line). Reversible:
     /// the user can re-add ABC in System Settings (needed for the login screen).
+    ///
+    /// The previous version reported success unconditionally — even when the
+    /// preference write never landed — which is indistinguishable from the
+    /// reported "ABC comes back on its own" symptom. The write is now checked in
+    /// preferences and then confirmed against live TIS state before the UI claims
+    /// success. That confirmation runs in a fresh process: this process's own TIS
+    /// view never sees the write, and checking it here reported a failure after
+    /// every successful removal (see `ABCLayoutStatusProbe`).
     private func removeABCKeyboard() {
-        guard let defaults = UserDefaults(suiteName: "com.apple.HIToolbox"),
-              var sources = defaults.array(forKey: "AppleEnabledInputSources") as? [[String: Any]] else {
-            withAnimation { removeABCStatus = .error }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                withAnimation { self.removeABCStatus = .idle }
+        guard removeABCStatus != .working else { return }
+        removeABCResetWorkItem?.cancel()
+        removeABCResetWorkItem = nil
+        withAnimation { removeABCStatus = .working }
+
+        let manager = InputSourceManager.shared
+        let result = manager.disableABCKeyboardLayout()
+        removeABCTask = Task { @MainActor in
+            do {
+                let confirmed = try await ABCRemovalVerification.confirm(
+                    result: result,
+                    // Off the main thread: the probe blocks for the child's
+                    // lifetime, and the settings window must keep responding.
+                    isDisabled: {
+                        await Task.detached(priority: .userInitiated) {
+                            ABCLayoutStatusProbe.isABCDisabledInFreshProcess()
+                        }.value
+                    }
+                )
+                try Task.checkCancellation()
+                if !confirmed {
+                    DebugLogger.log("SettingsView: ABC removal not confirmed, preferences=\(result)")
+                }
+                finishRemoveABC(confirmed ? .success : .error)
+            } catch is CancellationError {
+                // Closing settings cancels the old attempt; it must not update
+                // a reopened view or finish a newer attempt.
+            } catch {
+                finishRemoveABC(.error)
             }
-            return
         }
+    }
 
-        let originalCount = sources.count
-        sources.removeAll { source in
-            (source["KeyboardLayout Name"] as? String) == "ABC"
+    private func finishRemoveABC(_ status: RemoveABCStatus) {
+        withAnimation { removeABCStatus = status }
+        // Replace any in-flight reset so an older timer cannot clear a newer status.
+        removeABCResetWorkItem?.cancel()
+        let reset = DispatchWorkItem {
+            withAnimation { removeABCStatus = .idle }
         }
+        removeABCResetWorkItem = reset
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: reset)
+    }
 
-        if sources.count < originalCount {
-            defaults.set(sources, forKey: "AppleEnabledInputSources")
-            _ = CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
+    // MARK: - Toggle Exclusion Logic
 
-            // Restart TextInputMenuAgent so the menu-bar input-source list refreshes now.
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-            task.arguments = ["TextInputMenuAgent"]
-            try? task.run()
+    private func reloadExcludedApps() {
+        excludedApps = ConfigurationManager.shared.toggleExcludedBundleIDs.map(ExcludedApp.init(bundleID:))
+    }
+
+    private func addExcludedApp() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.prompt = L10n.exclusions.addButton
+
+        guard panel.runModal() == .OK else { return }
+
+        // Resolve each pick to a bundle ID; a chosen file without one cannot be
+        // matched against the frontmost app, so it is skipped rather than stored.
+        var updated = ConfigurationManager.shared.toggleExcludedBundleIDs
+        for url in panel.urls {
+            guard let bundleID = Bundle(url: url)?.bundleIdentifier else { continue }
+            updated = ToggleExclusionPolicy.adding(bundleID, to: updated)
         }
+        ConfigurationManager.shared.toggleExcludedBundleIDs = updated
+        reloadExcludedApps()
+    }
 
-        // Treat "already absent" as success too — the end state is what matters.
-        withAnimation { removeABCStatus = .success }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            withAnimation { self.removeABCStatus = .idle }
-        }
+    private func removeExcludedApp(_ app: ExcludedApp) {
+        ConfigurationManager.shared.toggleExcludedBundleIDs = ToggleExclusionPolicy.removing(
+            app.bundleID,
+            from: ConfigurationManager.shared.toggleExcludedBundleIDs
+        )
+        reloadExcludedApps()
     }
 
     private func requestAccessibility() {
@@ -670,11 +827,11 @@ struct SettingsView: View {
 
                 // Auto-start key monitoring that was skipped at launch
                 if !RightCommandSuppressor.shared.isRunning {
-                    RightCommandSuppressor.shared.onToggle = {
-                        InputModeCoordinator.shared.requestToggle(source: .customKey)
+                    RightCommandSuppressor.shared.onToggle = { eventTime in
+                        InputModeCoordinator.shared.requestToggle(source: .customKey, eventTime: eventTime)
                     }
-                    RightCommandSuppressor.shared.onHanjaLookup = {
-                        PriTypeInputController.sharedComposer.triggerHanjaLookup()
+                    RightCommandSuppressor.shared.onHanjaLookup = { eventTime in
+                        InputModeCoordinator.shared.requestHanjaLookup(eventTime: eventTime)
                     }
                     let started = RightCommandSuppressor.shared.start()
                     DebugLogger.log("Accessibility granted: CGEventTap start = \(started)")
@@ -693,7 +850,7 @@ struct SettingsHeaderIcon: View {
         Image(nsImage: image)
             .resizable()
             .interpolation(.high)
-            .aspectRatio(contentMode: .fit)
+            .scaledToFit()
             .frame(width: 48, height: 48)
             .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
             .accessibilityHidden(true)
@@ -866,56 +1023,6 @@ struct SettingsSection<Content: View>: View {
     }
 }
 
-/// A selection row — animations scoped to checkmark and background only
-struct SelectionRow: View {
-    let title: String
-    let isSelected: Bool
-    let action: () -> Void
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: {
-            // No withAnimation here — prevents text from re-rendering with animation
-            action()
-        }) {
-            HStack(spacing: 10) {
-                // Text — NO animation to prevent Korean glyph flickering
-                Text(title)
-                    .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(.primary)
-                    .animation(nil, value: isSelected) // Explicitly disable
-
-                Spacer()
-
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.blue)
-                        .transition(.scale.combined(with: .opacity))
-                }
-            }
-            .frame(minHeight: 34)
-            .padding(.horizontal, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected
-                          ? Color.primary.opacity(0.075)
-                          : isHovering ? Color.primary.opacity(0.03) : Color.clear)
-                    .animation(.easeOut(duration: 0.15), value: isHovering)
-                    .animation(.easeOut(duration: 0.2), value: isSelected)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hover in
-            isHovering = hover
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
-    }
-}
-
 /// A toggle row — icon uses plain background instead of glass
 struct SettingsToggleRow: View {
     let title: String
@@ -969,6 +1076,7 @@ struct KeyRecorderRow: View {
     let onCapsLockBlocked: () -> Void
 
     @State private var isRecording = false
+    @State private var recordingOwner = UUID()
     @State private var isHovering = false
     @State private var monitor: Any?
     @State private var pulseAnimation = false
@@ -1038,76 +1146,98 @@ struct KeyRecorderRow: View {
                 stopRecording()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            stopRecording()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            stopRecording()
+        }
         .onDisappear {
             stopRecording()
         }
     }
 
-    @State private var previousFlags: NSEvent.ModifierFlags = []
+    @State private var recordingState = KeyRecordingState()
 
     private func startRecording() {
+        let owner = UUID()
+        KeyRecordingSessions.shared.begin(owner: owner) { stopRecording() }
+        recordingOwner = owner
         isRecording = true
         pulseAnimation = true
-        previousFlags = NSEvent.ModifierFlags(rawValue: 0)
+        recordingState = KeyRecordingState()
 
-        // Use local event monitor to capture key events in the settings window
+        let suppressor = RightCommandSuppressor.shared
+        suppressor.onKeyRecorded = { keyCode, modifiers in
+            guard KeyRecordingSessions.shared.owns(owner) else { return }
+            receiveBinding(keyCode: keyCode, modifiers: modifiers)
+        }
+        suppressor.isRecordingKey = true
+
+        // Both producers use the same modifier-release/shortcut state machine.
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
-            if event.type == .flagsChanged {
-                let keyCode = Int64(event.keyCode)
-                let currentFlags = event.modifierFlags.intersection([.command, .option, .control, .shift, .capsLock])
-
-                // Detect key DOWN: current flags have MORE modifiers than previous
-                // This prevents capturing on modifier release. Caps Lock is a lock
-                // state, so capture its keyCode directly even when the flag toggles off.
-                let isNewModifier = (!currentFlags.isSubset(of: previousFlags) && !currentFlags.isEmpty) || keyCode == 57
-                previousFlags = currentFlags
-
-                if isNewModifier {
-                    // Fn key (63) is not supported in CGEventTap — ignore it
-                    guard keyCode != 63 else { return event }
-                    guard keyCode != 57 else {
-                        stopRecording()
-                        onCapsLockBlocked()
-                        return nil
-                    }
-                    let newBinding = KeyBinding(
-                        keyCode: keyCode,
-                        modifiers: 0,  // modifier-only binding
-                        displayName: KeyBinding.generateDisplayName(keyCode: keyCode, modifiers: 0)
-                    )
-                    binding = newBinding
-                    stopRecording()
-                    return nil  // Consume event
-                }
-            } else if event.type == .keyDown {
-                // Escape cancels recording
-                if event.keyCode == 53 {
-                    stopRecording()
-                    return nil
-                }
-
-                // Regular key + optional modifiers
-                let keyCode = Int64(event.keyCode)
-                let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift]).rawValue
-                let newBinding = KeyBinding(
-                    keyCode: keyCode,
-                    modifiers: UInt64(modifiers),
-                    displayName: KeyBinding.generateDisplayName(keyCode: keyCode, modifiers: UInt64(modifiers))
-                )
-                binding = newBinding
-                stopRecording()
-                return nil  // Consume event
+            guard KeyRecordingSessions.shared.owns(owner) else { return event }
+            if let recorded = recordingState.consume(keyCode: Int64(event.keyCode),
+                flags: UInt64(event.modifierFlags.rawValue), isModifierChange: event.type == .flagsChanged) {
+                receiveBinding(keyCode: recorded.keyCode, modifiers: recorded.modifiers)
             }
-            return event
+            return nil
         }
     }
 
+    private func receiveBinding(keyCode: Int64, modifiers: UInt64) {
+        guard isRecording else { return }
+        if keyCode == 53 { stopRecording(); return }
+        if keyCode == 57 { stopRecording(); onCapsLockBlocked(); return }
+        // Narrow to the four bare masks. `KeyBinding.SystemShortcut.matches` compares
+        // modifiers with `==`, so widening this would leave device-specific bits
+        // (NX_DEVICEL/RCMDKEYMASK…), maskNonCoalesced or Caps Lock in the stored
+        // value and silently stop every shortcut-conflict warning from matching.
+        let relevant = modifiers & (CGEventFlags.maskCommand.rawValue | CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue | CGEventFlags.maskShift.rawValue)
+        let candidate = KeyBinding(keyCode: keyCode, modifiers: relevant,
+            displayName: KeyBinding.generateDisplayName(keyCode: keyCode, modifiers: relevant))
+        guard candidate.isSafeGlobalBinding else { NSSound.beep(); return }
+        binding = candidate
+        stopRecording()
+    }
+
     private func stopRecording() {
+        if KeyRecordingSessions.shared.end(owner: recordingOwner) {
+            RightCommandSuppressor.shared.isRecordingKey = false
+            RightCommandSuppressor.shared.onKeyRecorded = nil
+        }
         isRecording = false
         pulseAnimation = false
         if let monitor = monitor {
             NSEvent.removeMonitor(monitor)
         }
         monitor = nil
+    }
+}
+
+// MARK: - Excluded App Row Model
+
+/// One entry of the toggle-key exclusion list.
+///
+/// The bundle ID is what the policy matches on; the display name is resolved for
+/// the UI only, and falls back to the bundle ID when the app is not installed —
+/// an entry for an uninstalled app must stay visible so the user can remove it.
+struct ExcludedApp: Identifiable, Equatable {
+    let bundleID: String
+    let displayName: String
+
+    var id: String { bundleID }
+
+    init(bundleID: String) {
+        self.bundleID = bundleID
+        self.displayName = Self.resolveDisplayName(for: bundleID) ?? bundleID
+    }
+
+    private static func resolveDisplayName(for bundleID: String) -> String? {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            return nil
+        }
+        return FileManager.default.displayName(atPath: url.path)
+            .replacingOccurrences(of: ".app", with: "")
     }
 }

@@ -74,6 +74,65 @@ public struct KeyBinding: Codable, Equatable, Sendable {
         }
     }
     
+    /// Reject bindings that swallow ordinary typing globally, including Shift+letter.
+    public var isSafeGlobalBinding: Bool {
+        if keyCode == 57 || keyCode == 63 { return false }
+        if isModifierKey { return modifiers == 0 }
+        let shortcuts = CGEventFlags.maskCommand.rawValue | CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue
+        if modifiers & shortcuts != 0 { return true }
+        return [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90].contains(keyCode)
+    }
+
+    /// A well-known macOS shortcut this binding would shadow, if any.
+    ///
+    /// These bindings are still allowed — a user may genuinely prefer PriType to
+    /// win, and macOS lets the shortcut be reassigned — but taking one silently
+    /// looks like the system shortcut broke. The settings UI warns instead.
+    /// Only exact matches are reported, so an unrelated combo never nags.
+    public var systemShortcutConflict: SystemShortcut? {
+        SystemShortcut.all.first { $0.matches(self) }
+    }
+
+    /// A macOS shortcut PriType can shadow when bound to the same keys.
+    public struct SystemShortcut: Equatable, Sendable {
+        public let keyCode: Int64
+        public let modifiers: UInt64
+        /// Localization key for the shortcut's name.
+        public let nameKey: String
+
+        /// Exact match. This is only safe because recorded bindings are normalized
+        /// to the four bare modifier masks at record time
+        /// (`SettingsWindowController.receiveBinding`, which strips the
+        /// device-specific left/right bits, `maskNonCoalesced`, Caps Lock, numeric
+        /// pad and Fn). Widening that mask would silently kill this feature with no
+        /// test failure — `normalizedRecordedModifiersStillConflict` pins it.
+        func matches(_ binding: KeyBinding) -> Bool {
+            binding.keyCode == keyCode && binding.modifiers == modifiers
+        }
+
+        static let all: [SystemShortcut] = [
+            // Space combos own input-source switching and Spotlight on a default
+            // macOS install — the exact area a user is configuring here.
+            SystemShortcut(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue,
+                           nameKey: "shortcut.previousInputSource"),
+            SystemShortcut(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue,
+                           nameKey: "shortcut.nextInputSource"),
+            SystemShortcut(keyCode: 49, modifiers: CGEventFlags.maskCommand.rawValue,
+                           nameKey: "shortcut.spotlight"),
+            SystemShortcut(keyCode: 49, modifiers: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskAlternate.rawValue,
+                           nameKey: "shortcut.finderSearch"),
+            SystemShortcut(keyCode: 49, modifiers: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskControl.rawValue,
+                           nameKey: "shortcut.emojiPicker"),
+            // Screenshot family.
+            SystemShortcut(keyCode: 20, modifiers: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue,
+                           nameKey: "shortcut.screenshot"),
+            SystemShortcut(keyCode: 21, modifiers: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue,
+                           nameKey: "shortcut.screenshotRegion"),
+            SystemShortcut(keyCode: 23, modifiers: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue,
+                           nameKey: "shortcut.screenshotUI")
+        ]
+    }
+
     /// Default toggle key: Right Command
     public static let defaultToggle = KeyBinding(keyCode: 54, modifiers: 0, displayName: "우측 Command")
     
@@ -205,8 +264,6 @@ public struct KeyBinding: Codable, Equatable, Sendable {
 
 /// Notification names used by PriType
 public extension Notification.Name {
-    /// Posted when the keyboard layout changes
-    static let keyboardLayoutChanged = Notification.Name("PriTypeKeyboardLayoutChanged")
     /// Posted when a key binding changes
     static let keyBindingChanged = Notification.Name("PriTypeKeyBindingChanged")
 }
@@ -229,9 +286,6 @@ public extension Notification.Name {
 /// }
 /// ```
 public protocol ConfigurationProviding: AnyObject, Sendable {
-    /// The current keyboard layout identifier
-    var keyboardId: String { get set }
-    
     /// The selected toggle key for switching between Korean and English
     var toggleKey: ToggleKey { get set }
     
@@ -263,12 +317,16 @@ public protocol ConfigurationProviding: AnyObject, Sendable {
     /// direct insertion) instead of marked text, on probe-verified allowlisted hosts.
     /// Default OFF. See Docs/KoreanWindowsInputFeasibility.md (Phase 3).
     var experimentalDirectInsertion: Bool { get }
+
+    /// Bundle IDs of apps where PriType must not consume the toggle/hanja keys.
+    var toggleExcludedBundleIDs: [String] { get }
 }
 
 public extension ConfigurationProviding {
     /// Default: experimental direct insertion disabled. Conformers (e.g. test mocks)
     /// inherit this unless they override it; only `ConfigurationManager` reads the flag.
     var experimentalDirectInsertion: Bool { false }
+    var toggleExcludedBundleIDs: [String] { [] }
 
     /// Default: enabled, matching macOS's normal text-input default.
     var autoCapitalizationEnabled: Bool { true }
@@ -286,16 +344,12 @@ public extension ConfigurationProviding {
 ///
 /// ## Usage
 /// ```swift
-/// // Read current keyboard layout
-/// let layout = ConfigurationManager.shared.keyboardId
-///
-/// // Change keyboard layout (automatically persisted)
-/// ConfigurationManager.shared.keyboardId = "3"  // Switch to Sebeolsik
+/// // Read the current toggle key binding
+/// let binding = ConfigurationManager.shared.toggleKeyBinding
 /// ```
 ///
 /// ## Notifications
-/// When `keyboardId` changes, a `PriTypeKeyboardLayoutChanged` notification is posted
-/// to notify observers (e.g., `PriTypeInputController`) to update the input engine.
+/// When a key binding changes, a `PriTypeKeyBindingChanged` notification is posted.
 ///
 /// ## Thread Safety
 /// This class uses `UserDefaults` which is thread-safe for reading/writing.
@@ -311,6 +365,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     
     private let defaults = UserDefaults.standard
     private let systemTextFeatureLock = NSLock()
+    private var lastSystemTextRefresh: TimeInterval = 0
     private var cachedDoubleSpacePeriodEnabled: Bool = ConfigurationManager.readSystemTextFeature(
         key: SystemTextInputKeys.automaticPeriodSubstitution,
         defaultValue: true
@@ -336,13 +391,13 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     // MARK: - Keys
     
     private enum Keys {
-        static let keyboardId = "com.pritype.keyboardId"
         static let toggleKey = "com.pritype.toggleKey"  // Legacy
         static let toggleKeyBinding = "com.pritype.toggleKeyBinding"
         static let hanjaKeyBinding = "com.pritype.hanjaKeyBinding"
         static let lastUpdateCheck = "com.pritype.lastUpdateCheck"
         static let autoUpdateCheck = "com.pritype.autoUpdateCheck"
         static let experimentalDirectInsertion = "com.pritype.experimentalDirectInsertion"
+        static let toggleExcludedBundleIDs = "com.pritype.toggleExcludedBundleIDs"
     }
 
     private enum SystemTextInputKeys {
@@ -352,30 +407,6 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         static let automaticQuoteSubstitution = "NSAutomaticQuoteSubstitutionEnabled"
     }
 
-    // MARK: - Keyboard Layout
-    
-    /// The current keyboard layout identifier
-    ///
-    /// Supported values:
-    /// - `"2"`: 두벌식 표준 (Dubeolsik Standard)
-    /// - `"3"`: 세벌식 390 (Sebeolsik 390)
-    /// - `"2y"`: 두벌식 옛한글 (Dubeolsik Old Hangul)
-    /// - `"3y"`: 세벌식 옛한글 (Sebeolsik Old Hangul)
-    ///
-    /// When this value changes, a `PriTypeKeyboardLayoutChanged` notification is posted.
-    public var keyboardId: String {
-        get {
-            defaults.string(forKey: Keys.keyboardId) ?? "2"
-        }
-        set {
-            if keyboardId != newValue {
-                defaults.set(newValue, forKey: Keys.keyboardId)
-                // Notify observers (e.g. InputController) to update the engine
-                NotificationCenter.default.post(name: .keyboardLayoutChanged, object: nil)
-            }
-        }
-    }
-    
     // MARK: - Toggle Key (Legacy)
     
     /// The selected toggle key for switching between Korean and English
@@ -420,7 +451,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
             if let data = defaults.data(forKey: Keys.toggleKeyBinding),
                let decoded = try? JSONDecoder().decode(KeyBinding.self, from: data) {
                 // Fn and Caps Lock are not supported as PriType custom toggle keys.
-                binding = (decoded.keyCode == 63 || decoded.keyCode == 57) ? .defaultToggle : decoded
+                binding = decoded.isSafeGlobalBinding ? decoded : .defaultToggle
             } else {
                 // Migrate from legacy toggleKey
                 binding = toggleKey.asKeyBinding
@@ -429,6 +460,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
             return binding
         }
         set {
+            guard newValue.isSafeGlobalBinding else { return }
             keyBindingLock.lock()
             _cachedToggleBinding = newValue
             keyBindingLock.unlock()
@@ -454,7 +486,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
             if let data = defaults.data(forKey: Keys.hanjaKeyBinding),
                let decoded = try? JSONDecoder().decode(KeyBinding.self, from: data) {
                 // Sanitize: Fn key (63) is not supported in CGEventTap
-                binding = decoded.keyCode == 63 ? .defaultHanja : decoded
+                binding = decoded.isSafeGlobalBinding ? decoded : .defaultHanja
             } else {
                 binding = .defaultHanja
             }
@@ -462,6 +494,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
             return binding
         }
         set {
+            guard newValue.isSafeGlobalBinding else { return }
             keyBindingLock.lock()
             _cachedHanjaBinding = newValue
             keyBindingLock.unlock()
@@ -472,6 +505,110 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         }
     }
     
+    // MARK: - Toggle Exclusions
+
+    /// Bundle IDs of apps that must receive the toggle/hanja key themselves.
+    ///
+    /// Remote-desktop clients and VMs run their own IME; swallowing the key leaves
+    /// the guest session unable to switch languages. Read through
+    /// `ToggleExclusionPolicy`, never from an event-tap callback directly.
+    public var toggleExcludedBundleIDs: [String] {
+        get {
+            (defaults.array(forKey: Keys.toggleExcludedBundleIDs) as? [String]) ?? []
+        }
+        set {
+            var deduped: [String] = []
+            for bundleID in newValue {
+                deduped = ToggleExclusionPolicy.adding(bundleID, to: deduped)
+            }
+            defaults.set(deduped, forKey: Keys.toggleExcludedBundleIDs)
+            // The policy snapshot is the only consumer; the settings view reloads
+            // its own rows imperatively after each mutation.
+            ToggleExclusionPolicy.shared.refreshExcludedBundleIDs(from: self)
+        }
+    }
+
+    // MARK: - Key Binding Migration
+
+    /// Persist the legacy `toggleKey` enum as a `KeyBinding`, and repair stored
+    /// bindings that are unreadable or no longer safe as global bindings.
+    ///
+    /// The getters above fall back in memory, but never wrote the result back, so a
+    /// legacy install re-derived its binding on every launch and an unsafe stored
+    /// value (e.g. a bare letter key from an older build) stayed on disk forever —
+    /// it would come back the moment the sanitizing fallback changed. Run this once
+    /// at startup so what is stored is what is used.
+    /// - Returns: `true` if anything on disk was rewritten.
+    @discardableResult
+    public func migrateKeyBindingsIfNeeded() -> Bool {
+        let changed = Self.migrateKeyBindings(in: defaults)
+        if changed {
+            keyBindingLock.lock()
+            _cachedToggleBinding = nil
+            _cachedHanjaBinding = nil
+            keyBindingLock.unlock()
+            NotificationCenter.default.post(name: .keyBindingChanged, object: nil)
+        }
+        return changed
+    }
+
+    /// Pure migration step, separated from the singleton so it can be exercised
+    /// against a scratch `UserDefaults` domain.
+    static func migrateKeyBindings(in defaults: UserDefaults) -> Bool {
+        var changed = false
+
+        // Toggle. The three cases must resolve exactly as the getter does, or the
+        // migration would persist something the running app was not using.
+        let storedToggle = defaults.data(forKey: Keys.toggleKeyBinding)
+            .flatMap { try? JSONDecoder().decode(KeyBinding.self, from: $0) }
+        if let storedToggle {
+            // Decodable but unusable ⇒ repair to the default.
+            if !storedToggle.isSafeGlobalBinding {
+                changed = store(.defaultToggle, forKey: Keys.toggleKeyBinding, in: defaults) || changed
+            }
+        } else if let rawValue = defaults.string(forKey: Keys.toggleKey) {
+            // Absent OR undecodable, with a legacy value present. The getter falls
+            // back to the legacy enum in BOTH cases, so the migration must too —
+            // splitting on `data != nil` would overwrite a user's Control+Space
+            // with the default and then delete the legacy key that proved it.
+            let legacy = ToggleKey(rawValue: rawValue)?.asKeyBinding ?? .defaultToggle
+            changed = store(legacy.isSafeGlobalBinding ? legacy : .defaultToggle,
+                            forKey: Keys.toggleKeyBinding, in: defaults) || changed
+        } else if defaults.data(forKey: Keys.toggleKeyBinding) != nil {
+            // Undecodable with no legacy source to recover from.
+            changed = store(.defaultToggle, forKey: Keys.toggleKeyBinding, in: defaults) || changed
+        }
+
+        // Drop the legacy key only once a DECODABLE binding stands in for it.
+        // Removing it next to an unreadable blob would destroy the preference.
+        let toggleNowReadable = defaults.data(forKey: Keys.toggleKeyBinding)
+            .flatMap { try? JSONDecoder().decode(KeyBinding.self, from: $0) } != nil
+        if toggleNowReadable, defaults.object(forKey: Keys.toggleKey) != nil {
+            defaults.removeObject(forKey: Keys.toggleKey)
+            changed = true
+        }
+
+        // Hanja has no legacy source; only repair an unusable stored value.
+        if let data = defaults.data(forKey: Keys.hanjaKeyBinding) {
+            let decoded = try? JSONDecoder().decode(KeyBinding.self, from: data)
+            if decoded?.isSafeGlobalBinding != true {
+                changed = store(.defaultHanja, forKey: Keys.hanjaKeyBinding, in: defaults) || changed
+            }
+        }
+
+        return changed
+    }
+
+    /// - Returns: `true` only if the value actually reached `defaults`. Reporting a
+    ///   change that did not happen would let the caller drop the legacy key on the
+    ///   strength of a binding that was never written.
+    @discardableResult
+    private static func store(_ binding: KeyBinding, forKey key: String, in defaults: UserDefaults) -> Bool {
+        guard let data = try? JSONEncoder().encode(binding) else { return false }
+        defaults.set(data, forKey: key)
+        return true
+    }
+
     // MARK: - Convenience Properties
     
     /// Whether Right Command key is configured as the toggle key
@@ -513,8 +650,21 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     
     // MARK: - Text Input Features
     
+    private func refreshSystemTextFeaturesIfNeeded() {
+        systemTextFeatureLock.withLock {
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - lastSystemTextRefresh >= 2 else { return }
+            lastSystemTextRefresh = now
+            cachedDoubleSpacePeriodEnabled = Self.readSystemTextFeature(key: SystemTextInputKeys.automaticPeriodSubstitution, defaultValue: true)
+            cachedAutoCapitalizationEnabled = Self.readSystemTextFeature(key: SystemTextInputKeys.automaticCapitalization, defaultValue: true)
+            cachedSmartQuoteSubstitutionEnabled = Self.readSystemTextFeature(key: SystemTextInputKeys.automaticQuoteSubstitution, defaultValue: true)
+            cachedSmartDashSubstitutionEnabled = Self.readSystemTextFeature(key: SystemTextInputKeys.automaticDashSubstitution, defaultValue: true)
+        }
+    }
+
     /// Mirrors macOS "Add period with double-space" for PriType Korean input.
     public var doubleSpacePeriodEnabled: Bool {
+        refreshSystemTextFeaturesIfNeeded()
         return systemTextFeatureLock.withLock { cachedDoubleSpacePeriodEnabled }
     }
 
@@ -524,16 +674,19 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     /// apply it in Korean composition. English mode passes through to macOS, so
     /// the system handles capitalization without PriType tracking text context.
     public var autoCapitalizationEnabled: Bool {
+        refreshSystemTextFeaturesIfNeeded()
         return systemTextFeatureLock.withLock { cachedAutoCapitalizationEnabled }
     }
 
     /// Mirrors macOS "Use smart quotes".
     public var smartQuoteSubstitutionEnabled: Bool {
+        refreshSystemTextFeaturesIfNeeded()
         return systemTextFeatureLock.withLock { cachedSmartQuoteSubstitutionEnabled }
     }
 
     /// Mirrors macOS "Use smart dashes".
     public var smartDashSubstitutionEnabled: Bool {
+        refreshSystemTextFeaturesIfNeeded()
         return systemTextFeatureLock.withLock { cachedSmartDashSubstitutionEnabled }
     }
 

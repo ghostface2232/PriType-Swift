@@ -15,6 +15,8 @@ struct KeyDownSnapshot: Equatable {
     let timestamp: TimeInterval
     let keyCode: UInt16
     let isARepeat: Bool
+    var characters: String?
+    var modifiers: UInt = 0
 }
 
 enum KeyEventDedup {
@@ -24,7 +26,9 @@ enum KeyEventDedup {
     static func isDuplicate(_ event: KeyDownSnapshot, previous: KeyDownSnapshot?) -> Bool {
         guard let previous,
               !event.isARepeat, !previous.isARepeat,
-              event.keyCode == previous.keyCode else { return false }
+              event.keyCode == previous.keyCode,
+              event.characters == previous.characters,
+              event.modifiers == previous.modifiers else { return false }
         let dt = event.timestamp - previous.timestamp
         return dt >= 0 && dt < duplicateWindow
     }
@@ -57,27 +61,34 @@ enum DirectInsertionPlanner {
     /// Same sanity ceiling used elsewhere to reject Chromium's garbage range values.
     static let maxReasonableLocation = 10_000_000
 
-    /// Caret-stability guard. Decide whether the tracked live preedit can still be
-    /// safely rewritten in place, given a read-back of the document at the expected
-    /// region. The live preedit is REAL text the user can click/arrow away from, and
-    /// IMK does NOT notify us of caret moves (there is no marked range), so we must
-    /// verify before deleting. Returns false → the caller must abandon tracking and
-    /// insert fresh, never deleting text it cannot verify.
+    static func isUsableCollapsedSelection(_ selection: NSRange) -> Bool {
+        selection.location != NSNotFound
+            && selection.location >= 0
+            && selection.location < maxReasonableLocation
+            && selection.length == 0
+    }
+
+    /// Identity guard for a tracked real-text preedit. The exact original range and
+    /// its contents must still exist, and the caret must remain immediately after it.
+    /// Looking only behind the current caret is insufficient: after a move to another
+    /// identical string (ABA), it would authorize overwriting unrelated text.
     /// - Parameters:
-    ///   - caret: `client.selectedRange().location`.
-    ///   - livePreeditLength: tracked UTF-16 length of the live preedit (0 ⇒ nothing tracked).
-    ///   - actualSubstring: the document text currently at `[caret-len, len]` (nil if unreadable).
+    ///   - selectionRange: the client's current selection.
+    ///   - liveRange: exact document range originally written by the adapter.
+    ///   - actualSubstring: the document text currently at `liveRange` (nil if unreadable).
     ///   - expectedText: the string we last wrote as the live preedit.
     static func liveRegionIsVerified(
-        caret: Int,
-        livePreeditLength: Int,
+        selectionRange: NSRange,
+        liveRange: NSRange,
         actualSubstring: String?,
         expectedText: String
     ) -> Bool {
-        guard livePreeditLength > 0 else { return true }   // nothing tracked → safe
-        guard caret != NSNotFound,
-              caret >= livePreeditLength,
-              caret < maxReasonableLocation else { return false }
+        guard liveRange.location != NSNotFound,
+              liveRange.location >= 0,
+              liveRange.location < maxReasonableLocation,
+              liveRange.length == expectedText.utf16.count,
+              isUsableCollapsedSelection(selectionRange),
+              selectionRange.location == NSMaxRange(liveRange) else { return false }
         return actualSubstring == expectedText
     }
 

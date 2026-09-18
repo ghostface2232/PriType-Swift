@@ -26,8 +26,9 @@ enum TextDeliveryPolicy {
         if context.shouldUseImmediateMode {
             return .immediate
         }
-        if (ConfigurationManager.shared.experimentalDirectInsertion ||
-            ClientCompatibilityPolicy.prefersDirectInsertionForComposition(bundleId: context.bundleId)),
+        let wantsDirectInsertion = ConfigurationManager.shared.experimentalDirectInsertion
+            || ClientCompatibilityPolicy.prefersDirectInsertionForComposition(bundleId: context.bundleId)
+        if wantsDirectInsertion,
            context.documentAccessSafe,
            !ClientCompatibilityPolicy.directInsertionDenied(bundleId: context.bundleId) {
             return .directInsertion
@@ -210,29 +211,65 @@ final class ImmediateModeAdapter: BaseClientAdapter {
 final class DirectInsertionAdapter: BaseClientAdapter {
     override var deliveryMode: InputDeliveryMode { .directInsertion }
 
-    /// UTF-16 length of the live (in-progress) syllable currently sitting in the
-    /// document as real text. 0 when there is no live preedit.
-    private var livePreeditLength: Int = 0
-    /// The exact string we last wrote as the live preedit. Used to VERIFY the live
-    /// region is still where we think before deleting it (caret-stability guard).
-    private var livePreeditText: String = ""
-    /// Caret position we expect (UTF-16 offset) right after our last edit. When the
-    /// host reports the SAME caret on the next keystroke, the live region is provably
-    /// intact and we can SKIP the expensive attributedSubstring read-back (perf).
-    private var expectedCaret: Int = NSNotFound
-    /// Once the client proves it lacks reliable document access mid-composition,
-    /// degrade to marked text for the rest of the session rather than strand text.
-    private var fellBackToMarked = false
+    /// Delivery state is explicit because finalization depends on where the preedit
+    /// actually lives. In particular, `markedFallback` must use the canonical marked-
+    /// text commit path; treating every DirectInsertionAdapter as "already real text"
+    /// loses that fallback composition on focus or mode changes.
+    enum State: Equatable {
+        case idle
+        case directLive(range: NSRange, text: String)
+        case markedFallback
+    }
+
+    private(set) var state: State = .idle
+
+    /// `prepareForInput()` validates a direct-live range immediately before the
+    /// composer runs. Remember that validation for the one synchronous delegate call
+    /// it produces so normal typing pays for one read-back, not two.
+    private var preparedLiveRange: NSRange?
 
     /// Clear live-preedit tracking. Called by the session whenever composition
     /// ends out-of-band (focus loss, mouse-click commit, secure passthrough). Also
     /// re-arms direct insertion: a clean finalize lets a host that momentarily
     /// returned a bad selectionRange try direct insertion again.
     func resetPreeditTracking() {
-        livePreeditLength = 0
-        livePreeditText = ""
-        expectedCaret = NSNotFound
-        fellBackToMarked = false
+        state = .idle
+        preparedLiveRange = nil
+    }
+
+    var requiresMarkedTextFinalize: Bool {
+        state == .markedFallback
+    }
+
+    /// Validate the identity of the real-text preedit before processing a new key.
+    /// Both the stored document range and its contents must still match, and the
+    /// selection must be the collapsed caret immediately after that exact range.
+    ///
+    /// Returns `true` when the caller must flush/reset the composer before handling
+    /// the current key. The old real text is already committed in the document; the
+    /// flush is engine-only and lets the current key begin a fresh composition.
+    func prepareForInput() -> Bool {
+        guard case let .directLive(range, text) = state else {
+            preparedLiveRange = nil
+            return false
+        }
+
+        let selection = client.selectedRange()
+        let actual = client.attributedSubstring(from: range)?.string
+        guard DirectInsertionPlanner.liveRegionIsVerified(
+            selectionRange: selection,
+            liveRange: range,
+            actualSubstring: actual,
+            expectedText: text
+        ) else {
+            state = .idle
+            preparedLiveRange = nil
+            DebugLogger.log("DirectInsertionAdapter: live range invalidated; committing existing real text and starting a new composition")
+            return true
+        }
+
+        preparedLiveRange = range
+        return false
     }
 
     private func renderMarkedFallback(_ text: String) {
@@ -244,93 +281,79 @@ final class DirectInsertionAdapter: BaseClientAdapter {
         )
     }
 
-    /// Replace the live-preedit region (if any) with `text` as REAL text.
-    /// `keepingLive` = true means `text` is the new live preedit; false means it is
-    /// a finalized commit that becomes permanent (tracked length resets to 0).
+    /// Replace the exact stored live-preedit range (if any) with `text` as REAL text.
+    /// `keepingLive` means the replacement remains a tracked live preedit.
     private func rewriteLivePreedit(with text: String, keepingLive: Bool) {
-        if fellBackToMarked {
-            renderMarkedFallback(text)
-            return
-        }
-
         let tStart = CFAbsoluteTimeGetCurrent()
-        let caret = client.selectedRange().location
-        let tAfterSel = CFAbsoluteTimeGetCurrent()
-        var readbackMs = 0.0
+        let replacementRange: NSRange
 
-        // CARET-STABILITY GUARD — prevents the direct-insertion corruption class.
-        // The live preedit is REAL text the user can click or arrow away from, and
-        // because there is no marked range IMK does NOT notify us when the caret moves.
-        //
-        // FAST PATH: if the host reports the caret exactly where our last edit left it
-        // (`caret == expectedCaret`), the live region is provably intact — skip the
-        // expensive attributedSubstring read-back (one synchronous IPC per keystroke,
-        // a real latency source in some native hosts). Only when the caret differs do
-        // we pay for the read-back to verify before deleting; on any mismatch we
-        // abandon tracking and insert fresh — never deleting text we cannot verify.
-        if livePreeditLength > 0 && caret != expectedCaret {
-            let tReadStart = CFAbsoluteTimeGetCurrent()
-            let actual: String?
-            if caret != NSNotFound, caret >= livePreeditLength,
-               caret < DirectInsertionPlanner.maxReasonableLocation {
-                let region = NSRange(location: caret - livePreeditLength, length: livePreeditLength)
-                actual = client.attributedSubstring(from: region)?.string
+        switch state {
+        case let .directLive(range, expectedText):
+            if preparedLiveRange == range {
+                preparedLiveRange = nil
+                replacementRange = range
             } else {
-                actual = nil
+                // Delegate calls outside InputSession's keystroke pipeline still get
+                // the same integrity guard. Never overwrite a range we cannot prove.
+                let selection = client.selectedRange()
+                let actual = client.attributedSubstring(from: range)?.string
+                guard DirectInsertionPlanner.liveRegionIsVerified(
+                    selectionRange: selection,
+                    liveRange: range,
+                    actualSubstring: actual,
+                    expectedText: expectedText
+                ) else {
+                    state = .idle
+                    rewriteLivePreedit(with: text, keepingLive: keepingLive)
+                    return
+                }
+                replacementRange = range
             }
-            readbackMs = (CFAbsoluteTimeGetCurrent() - tReadStart) * 1000
-            let verified = DirectInsertionPlanner.liveRegionIsVerified(
-                caret: caret,
-                livePreeditLength: livePreeditLength,
-                actualSubstring: actual,
-                expectedText: livePreeditText
-            )
-            if !verified {
-                livePreeditLength = 0
-                livePreeditText = ""
-                DebugLogger.log("DirectInsertionAdapter: caret moved (\(caret) != expected \(expectedCaret)), abandoning stale preedit tracking")
-            }
-        }
 
-        let plan = DirectInsertionPlanner.plan(
-            cursorLocation: caret,
-            livePreeditLength: livePreeditLength,
-            textUTF16Count: text.utf16.count,
-            keepingLive: keepingLive
-        )
-        if plan.bailed {
-            // Document access unreliable: degrade to marked text to avoid stranding
-            // a half-jamo. (Should be rare — probe + denylist gate this.)
-            fellBackToMarked = true
-            livePreeditLength = 0
-            livePreeditText = ""
-            expectedCaret = NSNotFound
+        case .idle:
+            let selection = client.selectedRange()
+            guard DirectInsertionPlanner.isUsableCollapsedSelection(selection) else {
+                state = .markedFallback
+                preparedLiveRange = nil
+                renderMarkedFallback(text)
+                DebugLogger.log("DirectInsertionAdapter: invalid selectedRange, falling back to marked text")
+                return
+            }
+            replacementRange = NSRange(location: selection.location, length: 0)
+
+        case .markedFallback:
             renderMarkedFallback(text)
-            DebugLogger.log("DirectInsertionAdapter: invalid selectedRange, falling back to marked text")
             return
         }
 
         let tBeforeInsert = CFAbsoluteTimeGetCurrent()
-        client.insertText(text, replacementRange: plan.replaceRange)
+        client.insertText(text, replacementRange: replacementRange)
         let tEnd = CFAbsoluteTimeGetCurrent()
 
-        livePreeditLength = plan.newLivePreeditLength
-        livePreeditText = keepingLive ? text : ""
-        expectedCaret = plan.replaceRange.location + text.utf16.count
+        if keepingLive, !text.isEmpty {
+            state = .directLive(
+                range: NSRange(location: replacementRange.location, length: text.utf16.count),
+                text: text
+            )
+        } else {
+            state = .idle
+        }
 
         // Instrumentation: surface a slow rewrite with a per-IPC breakdown so latency
         // ("렉") can be pinpointed. Only logs the slow ones to avoid spam.
         let totalMs = (tEnd - tStart) * 1000
         if totalMs > 8 {
             DebugLogger.log(String(
-                format: "DirectInsert SLOW total=%.1fms selRange=%.1fms readback=%.1fms insert=%.1fms len=%d",
-                totalMs, (tAfterSel - tStart) * 1000, readbackMs, (tEnd - tBeforeInsert) * 1000, livePreeditLength))
+                format: "DirectInsert SLOW total=%.1fms insert=%.1fms len=%d",
+                totalMs, (tEnd - tBeforeInsert) * 1000, keepingLive ? text.utf16.count : 0))
         }
     }
 
     override func insertText(_ text: String) {
-        if fellBackToMarked {
+        if state == .markedFallback {
             super.insertText(text)   // base: NSNotFound auto-replaces marked text
+            state = .idle
+            preparedLiveRange = nil
             return
         }
         guard !text.isEmpty else { return }
@@ -347,7 +370,8 @@ final class DirectInsertionAdapter: BaseClientAdapter {
 
     override func replaceTextBeforeCursor(length: Int, with text: String) {
         // Committed-text edit (e.g. double-space period); no live preedit involved.
-        livePreeditLength = 0
+        state = .idle
+        preparedLiveRange = nil
         super.replaceTextBeforeCursor(length: length, with: text)
     }
 }

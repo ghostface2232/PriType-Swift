@@ -114,3 +114,29 @@ public enum KeyCode {
         return isFunctionKey(charCode) || isIgnorableControlChar(charCode)
     }
 }
+
+// MARK: - QwertyKeyMap
+
+/// The US QWERTY letter at each of the 26 letter-key positions.
+///
+/// 두벌식 is defined by key *position*: ㄱ is the key labelled R on a US keyboard,
+/// whatever the active Latin layout calls it. Reading `event.characters` instead
+/// ties composition to that layout, so a Dvorak, Colemak or AZERTY user types the
+/// wrong jamo, and Caps Lock turns every consonant into its doubled form.
+///
+/// Only letter keys are mapped, because only they carry jamo. Every other key —
+/// digits, punctuation, national characters such as ö or é, keypad, JIS/ISO
+/// extras — keeps the character the user's layout produced.
+public enum QwertyKeyMap {
+    private static let letters: [UInt16: Character] = [
+        0: "a", 1: "s", 2: "d", 3: "f", 4: "h", 5: "g", 6: "z", 7: "x", 8: "c", 9: "v",
+        11: "b", 12: "q", 13: "w", 14: "e", 15: "r", 16: "y", 17: "t", 31: "o", 32: "u",
+        34: "i", 35: "p", 37: "l", 38: "j", 40: "k", 45: "n", 46: "m"
+    ]
+
+    /// The QWERTY letter at `keyCode`, or `nil` for a key that carries no jamo.
+    /// Only Shift selects the upper case; Caps Lock is deliberately ignored.
+    public static func character(for keyCode: UInt16, shifted: Bool) -> String? {
+        letters[keyCode].map { shifted ? $0.uppercased() : String($0) }
+    }
+}

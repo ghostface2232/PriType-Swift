@@ -9,8 +9,8 @@ import Carbon.HIToolbox
 /// client, analyzed context, delivery adapter, duplicate-keyDown state, focus-loss
 /// safety net — lives in a single `InputSession`, and EVERY composition-ending event
 /// (app deactivate, deactivateServer, mouse commit, custom toggle, Caps Lock mode
-/// switch, keyboard-layout change) funnels into `InputSession.finalize(reason:)`, the
-/// one host-agnostic commit path.
+/// switch) funnels into `InputSession.finalize(reason:)`, the one host-agnostic
+/// commit path.
 ///
 /// ```
 /// keyDown ──► handle() ──► ensureSession ──► dedup ──► secure gate ──► HangulComposer
@@ -19,7 +19,7 @@ import Carbon.HIToolbox
 ///
 /// toggle key ──► InputModeCoordinator ──► performPriTypeModeTransition ─┐
 /// Caps Lock  ──► setValue(inputMode)  ─────────────────────────────────┤
-/// app deactivate / deactivateServer / mouse commit / layout change ────┴─► session.finalize
+/// app deactivate / deactivateServer / mouse commit ────────────────────┴─► session.finalize
 /// ```
 @objc(PriTypeInputController)
 public class PriTypeInputController: IMKInputController, @unchecked Sendable {
@@ -28,12 +28,6 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     // macOS Caps Lock / input-source switching moves between these two modes.
     private static let priTypeInputSourceID = "com.pritype.inputmethod.v2"          // Korean mode (== bundle id)
     private static let priTypeEnglishInputModeID = "com.pritype.inputmethod.v2.english"
-    private static let romanKeyboardLayoutID = resolveRomanKeyboardLayoutID()
-    private static let romanKeyboardLayoutCandidates = [
-        "com.apple.keylayout.ABC",
-        "com.apple.keylayout.US"
-    ]
-
     // MARK: - Shared State
     //
     // THREAD SAFETY INVARIANTS:
@@ -64,6 +58,29 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// before the next activateServer still need the adapter/context — and replaced
     /// when a different client appears.
     private var session: InputSession?
+    private var pendingSystemMode: DeferredInputMode?
+
+    /// The last input mode macOS told us it had selected.
+    ///
+    /// IMK re-asserts the selected input source on every activation, so a plain
+    /// focus change delivers `setValue` again with the mode the system already
+    /// had. A custom toggle deliberately does not touch that system selection
+    /// (see `performPriTypeModeTransition`), so after one the composer and the
+    /// system disagree, and applying the re-assertion would snap the user back to
+    /// whichever mode the input source happens to name — Korean or English —
+    /// every time they leave a window and come back.
+    ///
+    /// The system value only ever changes when the user really does switch input
+    /// source, so a repeat of the value we already saw identifies a re-assertion.
+    /// Static because the selection is systemwide while controllers are per
+    /// client: a freshly created controller must not mistake a re-assertion for a
+    /// first observation.
+    /// - Warning: Access from main thread only (guaranteed by IMK).
+    nonisolated(unsafe) private static var lastSystemMode: InputMode?
+
+    /// Reports sent to macOS whose `setValue` echo has not come back yet.
+    /// - Warning: Access from main thread only.
+    nonisolated(unsafe) private static var echoFilter = SystemModeEchoFilter()
 
     /// Session-derived views for collaborators (Hanja lookup in `HangulComposer`).
     public var currentAdapter: (any HangulComposerDelegate)? { session?.adapter }
@@ -76,15 +93,38 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     private var lastKeyboardOverrideTime: CFAbsoluteTime = 0
 
     deinit {
-        // The selector-based `.keyboardLayoutChanged` observer is auto-removed on
-        // modern macOS, but remove it explicitly to be safe. The session's block-based
-        // NSWorkspace observer is NOT auto-removed; the session disarms it in deinit,
-        // but do it eagerly here too.
+        // The session's block-based NSWorkspace observer is NOT auto-removed; the
+        // session disarms it in deinit, but do it eagerly here too.
         session?.disarmFocusLossFinalizer()
-        NotificationCenter.default.removeObserver(self, name: .keyboardLayoutChanged, object: nil)
     }
 
     // MARK: - Session Management
+
+    /// The shared engine may only be finalized by its current controller.
+    /// Some hosts deliver a key before activation, or deactivate the previous
+    /// controller after the new one is already composing.
+    private func claimActiveController() {
+        if let previous = Self.sharedController, previous !== self {
+            previous.session?.finalize(reason: .deactivateServer)
+            previous.session?.disarmFocusLossFinalizer()
+            previous.session?.markContextStale()
+        }
+        Self.sharedController = self
+        if let pending = pendingSystemMode {
+            pendingSystemMode = nil
+            if let mode = pending.resolve(currentRevision: composer.modeSelectionRevision) {
+                // Finalize only on a real mode change, but ALWAYS re-select: the
+                // selection bumps `modeSelectionRevision`, which is what retires the
+                // other controllers' pending values. Skipping the call for a no-op
+                // mode would leave an older pending (e.g. English) still resolvable,
+                // so a late-activating stale controller could re-apply it.
+                if composer.inputMode != mode {
+                    session?.finalize(reason: .systemModeSwitch)
+                }
+                composer.setInputMode(mode)
+            }
+        }
+    }
 
     /// Return the session for `client`, creating or refreshing it as needed.
     /// - A different client object ⇒ new session (full context analysis).
@@ -94,7 +134,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     ///   field can only be told apart by coordinates at keystroke time).
     private func ensureSession(for client: IMKTextInput) -> InputSession {
         if let session, session.matches(client) {
-            if session.contextNeedsRefresh {
+            if session.contextNeedsRefresh || session.context.isLightweight {
                 session.refreshContext(ClientContextDetector.analyze(client: client))
                 session.armFocusLossFinalizer()
             } else if session.context.isLightweight && session.context.isFinder {
@@ -104,6 +144,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         }
 
         DebugLogger.log("PriTypeInputController: client changed or no session, analyzing (Slow Path)")
+        session?.finalize(reason: .deactivateServer)
         let newSession = InputSession(
             client: client,
             context: ClientContextDetector.analyze(client: client),
@@ -121,6 +162,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// falls back to a detached marked-text finalize when IMK hands us a sender the
     /// session has never seen.
     private func finalizeActiveComposition(sender: Any?, reason: CompositionFinalizeReason) {
+        guard Self.sharedController === self else { return }
         let senderClient = sender as? IMKTextInput
         if let session {
             if session.adapter is DirectInsertionAdapter
@@ -139,12 +181,21 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
 
     // MARK: - Keyboard Layout (English pass-through support)
 
+    /// Runs synchronously on purpose: the first English key after a toggle or
+    /// activation must already see the Roman layout.
     private func syncRomanKeyboardLayout(for client: IMKTextInput, force: Bool = false) {
+        guard composer.inputMode == .english else { return }
+        // Throttle before asking TIS, so a skipped call costs nothing.
         let clientID = ObjectIdentifier(client as AnyObject)
         let now = CFAbsoluteTimeGetCurrent()
         guard force || lastKeyboardOverrideClientID != clientID || now - lastKeyboardOverrideTime > 0.5 else {
             return
         }
+        // Resolved live, not cached: the user can disable ABC at any time, and a
+        // stale answer would override a client with a layout they removed.
+        guard let layoutID = InputSourceManager.enabledRomanKeyboardLayoutID(
+            in: InputSourceManager.shared.getEnabledKeyboardInputSources().map(\.id)
+        ) else { return }
 
         let selector = NSSelectorFromString("overrideKeyboardWithKeyboardNamed:")
         let object = client as AnyObject
@@ -153,29 +204,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             return
         }
 
-        _ = object.perform(selector, with: Self.romanKeyboardLayoutID)
+        _ = object.perform(selector, with: layoutID)
         lastKeyboardOverrideClientID = clientID
         lastKeyboardOverrideTime = now
-        DebugLogger.log("PriTypeInputController: override keyboard layout -> \(Self.romanKeyboardLayoutID)")
-    }
-
-    private static func resolveRomanKeyboardLayoutID() -> String {
-        let filter: [String: Any] = [
-            kTISPropertyInputSourceCategory as String: kTISCategoryKeyboardInputSource as String
-        ]
-
-        guard let sourceList = TISCreateInputSourceList(filter as CFDictionary, true)?.takeRetainedValue() as? [TISInputSource] else {
-            return romanKeyboardLayoutCandidates[0]
-        }
-
-        let availableIDs = Set(sourceList.compactMap { source -> String? in
-            guard let idPointer = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else {
-                return nil
-            }
-            return Unmanaged<CFString>.fromOpaque(idPointer).takeUnretainedValue() as String
-        })
-
-        return romanKeyboardLayoutCandidates.first { availableIDs.contains($0) } ?? romanKeyboardLayoutCandidates[0]
+        DebugLogger.log("PriTypeInputController: override keyboard layout -> \(layoutID)")
     }
 
     // MARK: - Mode Transitions (한/영)
@@ -191,28 +223,29 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
 
         session.finalize(reason: .modeTransition)
         composer.clearLocalBuffer()
-        syncRomanKeyboardLayout(for: session.client, force: true)
         composer.setInputMode(nextMode)
-        syncSelectedInputModeForMenuBar(client: session.client, mode: nextMode)
+        syncRomanKeyboardLayout(for: session.client, force: true)
+
+        // Report the switch to macOS so the menu-bar input source stops
+        // contradicting the composer. Deferred off the hot path, and only after
+        // the composer has already switched, so a slow or failing selection
+        // cannot delay the next keystroke. See InputSourceManager.
+        DispatchQueue.main.async {
+            var expected = false
+            let selected = InputSourceManager.shared.selectPriTypeMode(english: nextMode == .english) {
+                Self.echoFilter.expect(nextMode, at: ProcessInfo.processInfo.systemUptime)
+                expected = true
+            }
+            // A failed selection sends no echo; do not wait for one.
+            if expected && !selected {
+                Self.echoFilter.withdrawLatest()
+            }
+        }
     }
 
-    /// Best-effort: tell macOS which PriType mode is active so the menu-bar input
-    /// source indicator (and Caps Lock's notion of the current mode) matches a
-    /// custom-key toggle. Cosmetic + consistency only — `composer.inputMode` is
-    /// already the authoritative composition state, so even if this is delayed or
-    /// unsupported, typing is unaffected (no first-key race). Without it, a
-    /// custom-key toggle and macOS's selected mode could drift apart.
-    private func syncSelectedInputModeForMenuBar(client: IMKTextInput, mode: InputMode) {
-        let modeID = mode == .english ? Self.priTypeEnglishInputModeID : Self.priTypeInputSourceID
-        let selector = NSSelectorFromString("selectInputMode:")
-        let object = client as AnyObject
-        guard object.responds(to: selector) else {
-            DebugLogger.log("PriTypeInputController: client does not support selectInputMode:")
-            return
-        }
-        _ = object.perform(selector, with: modeID)
-        DebugLogger.log("PriTypeInputController: selectInputMode -> \(modeID)")
-    }
+    // A custom toggle switches the composer synchronously and then reports the
+    // result to macOS. `selectInputMode:` is not used for that: routing through
+    // the client can transfer a Latin-only host to real ABC (upstream #11).
 
     // MARK: - IMK Lifecycle
 
@@ -222,24 +255,31 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         assert(Thread.isMainThread, "IMK activateServer must run on main thread")
         #endif
         super.activateServer(sender)
+        claimActiveController()
         // NOTE: Focus changes never reset `composer.inputMode`. The Korean/English
         // state is owned solely by the toggle path and the `setValue` ingress, so
         // switching apps preserves whatever mode the user last chose.
         if let client = sender as? IMKTextInput {
             syncRomanKeyboardLayout(for: client, force: true)
 
-            // PERFORMANCE: Analyze context ONCE per activation (lightweight — no
-            // client IPC) and let `ensureSession` upgrade it lazily. This avoids
-            // heavy IPC calls (validAttributes, coordinates) on every focus change.
-            let newSession = InputSession(
-                client: client,
-                context: ClientContextDetector.analyzeForActivation(client: client),
-                composer: composer
-            )
-            session?.disarmFocusLossFinalizer()
-            session = newSession
-            newSession.armFocusLossFinalizer()
-            DebugLogger.log("Activated for client: \(newSession.context.bundleId) (Lightweight Context)")
+            if let existing = session, existing.matches(client), !existing.contextNeedsRefresh {
+                // Repeated activation in Chromium must preserve direct-preedit tracking.
+                existing.armFocusLossFinalizer()
+            } else {
+                session?.finalize(reason: .deactivateServer)
+                // PERFORMANCE: Analyze context ONCE per activation (lightweight — no
+                // client IPC) and let `ensureSession` upgrade it lazily. This avoids
+                // heavy IPC calls (validAttributes, coordinates) on every focus change.
+                let newSession = InputSession(
+                    client: client,
+                    context: ClientContextDetector.analyzeForActivation(client: client),
+                    composer: composer
+                )
+                session?.disarmFocusLossFinalizer()
+                session = newSession
+                newSession.armFocusLossFinalizer()
+                DebugLogger.log("Activated for client: \(newSession.context.bundleId) (Lightweight Context)")
+            }
         } else {
             // Fallback if sender is not IMKTextInput (rare). Keep the old session's
             // adapter alive for async Hanja callbacks, but stop trusting its context
@@ -250,18 +290,6 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
 
         // Set as active controller for toggle access
         Self.sharedController = self
-
-        // Ensure composer has correct layout (in case it changed while inactive)
-        let currentLayoutId = ConfigurationManager.shared.keyboardId
-        composer.updateKeyboardLayout(id: currentLayoutId)
-
-        // Observe layout changes. IMK can call activateServer again without an
-        // intervening deactivateServer (common in Electron/Chromium hosts), and
-        // NotificationCenter allows duplicate (observer, selector, name)
-        // registrations that would each fire handleLayoutChange. Remove any prior
-        // registration first so this stays idempotent.
-        NotificationCenter.default.removeObserver(self, name: .keyboardLayoutChanged, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(handleLayoutChange), name: .keyboardLayoutChanged, object: nil)
     }
 
     override public func deactivateServer(_ sender: Any!) {
@@ -285,18 +313,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // - mark the context stale so the next handle() re-analyzes it.
         session?.disarmFocusLossFinalizer()
         session?.markContextStale()
-        NotificationCenter.default.removeObserver(self, name: .keyboardLayoutChanged, object: nil)
-    }
-
-    @objc private func handleLayoutChange() {
-        let newId = ConfigurationManager.shared.keyboardId
-        DebugLogger.log("PriTypeInputController: Layout changed to \(newId), updating composer")
-        // Layout switches mid-composition end the composition like any other
-        // session-ending event — through the single finalize path.
-        if composer.keyboardLayoutId != newId {
-            session?.finalize(reason: .keyboardLayoutChange)
-        }
-        composer.updateKeyboardLayout(id: newId)
+        if Self.sharedController === self { Self.sharedController = nil }
     }
 
     // Match the native IMK path used by DINKIssTyle: ask IMK for flagsChanged
@@ -329,8 +346,33 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
                 return
             }
 
-            if let client = sender as? IMKTextInput {
-                syncRomanKeyboardLayout(for: client, force: true)
+            // The echo of our own report after a custom toggle. The composer is
+            // already where the user put it — possibly past this value, if they
+            // toggled again before the echo arrived — so only note the system state.
+            if Self.echoFilter.consumeEcho(of: targetMode, at: ProcessInfo.processInfo.systemUptime) {
+                DebugLogger.log("PriTypeInputController: consumed echo of reported mode \(targetMode)")
+                Self.lastSystemMode = targetMode
+                return
+            }
+
+            // A repeat of the mode the system already had is IMK re-asserting the
+            // input source across a focus change, not the user switching it. The
+            // composer may legitimately differ from it because of a custom toggle,
+            // so honouring it here would undo that toggle on every refocus.
+            guard Self.lastSystemMode != targetMode else {
+                DebugLogger.log("PriTypeInputController: ignored re-asserted system mode \(targetMode)")
+                return
+            }
+            Self.lastSystemMode = targetMode
+            // A real selection: echoes of earlier reports no longer describe anything.
+            Self.echoFilter.reset()
+
+            // IMK may send a new controller's mode before activating it, or
+            // finish notifying an old one after focus has moved. Only the owner
+            // mutates the shared engine; pending modes apply on activation/keyDown.
+            guard Self.sharedController === self else {
+                pendingSystemMode = DeferredInputMode(mode: targetMode, revision: composer.modeSelectionRevision)
+                return
             }
 
             if composer.inputMode != targetMode {
@@ -338,7 +380,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
                 // System-driven mode switches end composition through the same
                 // single path as everything else (not via a stale delegate).
                 finalizeActiveComposition(sender: sender, reason: .systemModeSwitch)
-                composer.setInputMode(targetMode)
+            }
+            composer.setInputMode(targetMode)
+            if let client = sender as? IMKTextInput {
+                syncRomanKeyboardLayout(for: client, force: true)
             }
             return
         }
@@ -358,15 +403,23 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             return false
         }
 
+        claimActiveController()
+
         // 1. Resolve the session FIRST — all subsequent logic uses its fresh context.
         let session = ensureSession(for: client)
+
+        // A toggle or Hanja key pressed just before this key may still be waiting
+        // for its hop from the key-monitor thread. Run it now so this key lands in
+        // the new mode or in the candidate window — but only actions pressed before
+        // this key: running a later one would reinterpret a key typed earlier.
+        InputModeCoordinator.shared.applyPendingKeyActions(before: event.timestamp)
 
         // 2. Duplicate-keyDown suppression. Some hosts (observed: KakaoTalk) deliver
         // the same physical keyDown to the IME twice. That double-processes input —
         // notably one backspace decomposing TWO jamo, i.e. a composing syllable
         // "deleted all at once". Drop the exact re-delivery and replay the original
         // result. Host-event-level, so it applies in every delivery mode.
-        let keyDownSnapshot = KeyDownSnapshot(timestamp: event.timestamp, keyCode: event.keyCode, isARepeat: event.isARepeat)
+        let keyDownSnapshot = KeyDownSnapshot(timestamp: event.timestamp, keyCode: event.keyCode, isARepeat: event.isARepeat, characters: event.characters, modifiers: event.modifierFlags.rawValue)
         if session.registerKeyDown(keyDownSnapshot) {
             DebugLogger.log("PriTypeInputController: dropped duplicate keyDown keyCode=\(event.keyCode)")
             return session.lastHandleResult
@@ -375,7 +428,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         #if DEBUG
         if debugHandleLogCount < 200 {
             debugHandleLogCount += 1
-            DebugLogger.log("PriTypeInputController: handle keyCode=\(event.keyCode) repeat=\(event.isARepeat) mode=\(composer.inputMode) chars='\(event.characters ?? "")' modifiers=\(event.modifierFlags.rawValue) bundle=\(session.context.bundleId) lightweight=\(session.context.isLightweight) immediate=\(session.context.shouldUseImmediateMode)")
+            DebugLogger.log("PriTypeInputController: handle keyCode=\(event.keyCode) repeat=\(event.isARepeat) mode=\(composer.inputMode) modifiers=\(event.modifierFlags.rawValue) bundle=\(session.context.bundleId) lightweight=\(session.context.isLightweight) immediate=\(session.context.shouldUseImmediateMode)")
         }
         #endif
 
@@ -385,12 +438,17 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // 4. DYNAMIC CHECK: Secure Input (password fields) — raw pass-through.
         if shouldPassThroughSecureInput(client: client, context: session.context) {
             session.discardForSecureInput()
+            session.recordHandleResult(false)
             return false
         }
 
         // 5. The delivery policy can flip mid-session (experimental flag toggled in
         // settings); make sure the adapter still matches before composing into it.
         session.ensureAdapterMatchesPolicy()
+
+        // A direct-live preedit has no IMK marked range, so caret/document changes
+        // must be detected explicitly before this key mutates the Hangul engine.
+        session.prepareForInput()
 
         // 6. Compose.
         let handled = composer.handle(event, delegate: session.adapter)
@@ -400,32 +458,38 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
 
     private func shouldPassThroughSecureInput(client: IMKTextInput, context: ClientContext) -> Bool {
         let bundleId = context.bundleId
-
-        if SecureInputPolicy.isSystemSecureClient(bundleId) {
-            DebugLogger.log("Secure Input: System secure client (\(bundleId)), passing through")
-            return true
-        }
-
+        let isSystemSecureClient = SecureInputPolicy.isSystemSecureClient(bundleId)
         let hasGlobalSecureInput = IsSecureEventInputEnabled()
 
-        if hasGlobalSecureInput {
-            DebugLogger.log("Secure Input: global secure input active in '\(bundleId)', passing through")
-            return true
+        // selectedRange is synchronous client IPC. Probe only when it can change the
+        // decision: a global secure-input warning. System
+        // secure clients are known up front and must not be queried.
+        var hasInvalidSelection = false
+        if !isSystemSecureClient && hasGlobalSecureInput {
+            hasInvalidSelection = client.selectedRange().location == NSNotFound
         }
 
-        guard !context.hasTextInputCapability else {
-            return false
+        let signals = SecureInputSignals(
+            bundleId: bundleId,
+            hasTextInputCapability: context.hasTextInputCapability,
+            hasInvalidSelection: hasInvalidSelection,
+            hasGlobalSecureInput: hasGlobalSecureInput
+        )
+        let shouldPassThrough = SecureInputPolicy.shouldPassThrough(signals)
+
+        if shouldPassThrough {
+            if isSystemSecureClient {
+                DebugLogger.log("Secure Input: system secure client (\(bundleId)), passing through")
+            } else if hasInvalidSelection {
+                DebugLogger.log("Secure Input: invalid selection in '\(bundleId)', passing through")
+            } else {
+                DebugLogger.log("Secure Input: global flag + no text capability in '\(bundleId)', passing through")
+            }
+        } else if hasGlobalSecureInput {
+            DebugLogger.log("Secure Input: ignoring stale global flag for capable field in '\(bundleId)'")
         }
 
-        let selectionRange = client.selectedRange()
-        let hasInvalidSelection = selectionRange.location == NSNotFound
-
-        if hasInvalidSelection {
-            DebugLogger.log("Secure Input: invalid selection in '\(bundleId)', passing through")
-            return true
-        }
-
-        return false
+        return shouldPassThrough
     }
 
     // 마우스 클릭 등으로 조합 영역 외부 클릭 시 조합 커밋
@@ -434,7 +498,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         assert(Thread.isMainThread, "IMK commitComposition must run on main thread")
         #endif
         finalizeActiveComposition(sender: sender, reason: .mouseCommit)
-        composer.localTextBuffer = "" // Clear buffer when focus changes or user clicks elsewhere
+        if Self.sharedController === self {
+            composer.clearLocalBuffer()
+            session?.markContextStale()
+        }
         super.commitComposition(sender)
     }
 

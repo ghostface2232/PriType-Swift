@@ -124,72 +124,91 @@ struct HangulComposerTests {
         #expect(delegate.markedText.isEmpty)
     }
 
-    @Test("English mode applies double-space period fallback")
-    func englishModeDoubleSpacePeriodFallback() {
+    @Test("English conveniences remain host-owned at empty and sentence-boundary fields")
+    func englishConveniencesPassThrough() {
         let (composer, delegate, _) = makeComposer()
         composer.setInputMode(.english)
-
-        delegate.fullText = "h"
-        let firstSpace = TestEventFactory.keyEvent(char: " ", keyCode: KeyCode.space)!
-        let secondSpace = TestEventFactory.keyEvent(char: " ", keyCode: KeyCode.space)!
-
-        #expect(!composer.handle(firstSpace, delegate: delegate))
-        delegate.fullText.append(" ")
-
-        #expect(composer.handle(secondSpace, delegate: delegate))
-        #expect(delegate.fullText == "h. ")
+        for text in ["", "Hello. ", "h ", "-", "Hello"] {
+            for (char, code): (String, UInt16) in [("h", 4), ("w", 13), ("\"", 39), ("-", 27), (" ", KeyCode.space)] {
+                delegate.fullText = text
+                #expect(!composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: delegate))
+                #expect(delegate.fullText == text)
+            }
+        }
+        #expect(delegate.insertedTexts.isEmpty)
         #expect(delegate.markedText.isEmpty)
     }
 
-    @Test("English mode applies auto-capitalization fallback")
-    func englishModeAutoCapitalizationFallback() {
+    @Test("Deleting preedit preserves committed text for Hanja lookup")
+    func backspacePreservesCommittedBuffer() {
         let (composer, delegate, _) = makeComposer()
-        composer.setInputMode(.english)
-
-        let firstLetter = TestEventFactory.keyEvent(char: "h", keyCode: 4)!
-        #expect(composer.handle(firstLetter, delegate: delegate))
-        #expect(delegate.fullText == "H")
-
-        delegate.fullText = "Hello. "
-        let sentenceLetter = TestEventFactory.keyEvent(char: "w", keyCode: 13)!
-        #expect(composer.handle(sentenceLetter, delegate: delegate))
-        #expect(delegate.fullText == "Hello. W")
+        composer.localTextBuffer = "대한"
+        delegate.fullText = "대한"
+        #expect(composer.handle(TestEventFactory.keyEvent(char: "a", keyCode: 0)!, delegate: delegate))
+        #expect(composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate))
+        #expect(composer.localTextBuffer == "대한")
+        #expect(delegate.fullText == "대한")
+        #expect(!composer.hasActiveComposition)
+        #expect(!composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate))
+        #expect(composer.localTextBuffer == "대")
     }
 
-    @Test("English mode leaves ordinary lowercase words pass-through")
-    func englishModeOrdinaryLowercasePassesThrough() {
+    @Test("Full preedit decomposition never touches committed text or the document")
+    func backspaceDecompositionKeepsCommittedText() {
         let (composer, delegate, _) = makeComposer()
-        composer.setInputMode(.english)
-        delegate.fullText = "Hello "
+        composer.localTextBuffer = "한글"
+        delegate.fullText = "한글"
 
-        let letter = TestEventFactory.keyEvent(char: "w", keyCode: 13)!
-        #expect(!composer.handle(letter, delegate: delegate))
+        // Build a three-jamo syllable on top of already committed text.
+        for (char, code): (String, UInt16) in [("d", 2), ("k", 40), ("s", 1)] {  // ㅇ, 아, 안
+            #expect(composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: delegate))
+        }
+        #expect(composer.hasActiveComposition)
+
+        // Every backspace consumed by the preedit must leave both the committed
+        // buffer and the host document untouched — only the marked text shrinks.
+        // Bounded: an engine backspace that stops consuming would otherwise spin
+        // here forever and wedge the run instead of failing.
+        var seenMarked: [String] = []
+        for _ in 0..<8 {
+            guard composer.hasActiveComposition else { break }
+            #expect(composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate))
+            seenMarked.append(delegate.markedText)
+            #expect(composer.localTextBuffer == "한글")
+            #expect(delegate.fullText == "한글")
+        }
+        #expect(!composer.hasActiveComposition, "composition did not drain within 8 backspaces")
+        #expect(seenMarked.count >= 2, "expected stepwise decomposition, saw \(seenMarked)")
+        #expect(delegate.insertedTexts.isEmpty, "decomposition must not commit anything")
+    }
+
+    @Test("Backspace after an empty preedit never deletes host text itself")
+    func backspaceAfterEmptyPreeditDefersToHost() {
+        let (composer, delegate, _) = makeComposer()
+        composer.localTextBuffer = "가나"
+        delegate.fullText = "가나"
+
+        // With nothing composing the key is passed through: the host performs the
+        // deletion. PriType may only trim its own shadow buffer.
+        #expect(!composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate))
+        #expect(composer.localTextBuffer == "가")
+        #expect(delegate.fullText == "가나", "PriType must not delete host text on a passed-through backspace")
+
+        #expect(!composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate))
+        #expect(composer.localTextBuffer.isEmpty)
+        #expect(delegate.fullText == "가나")
+
+        // Underflow must stay safe once the shadow buffer is exhausted.
+        #expect(!composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate))
+        #expect(composer.localTextBuffer.isEmpty)
+        #expect(delegate.fullText == "가나")
+    }
+
+    @Test("Idle Korean Space reaches host shortcuts")
+    func idleSpacePassThrough() {
+        let (composer, delegate, _) = makeComposer()
+        #expect(!composer.handle(TestEventFactory.keyEvent(char: " ", keyCode: KeyCode.space)!, delegate: delegate))
         #expect(delegate.insertedTexts.isEmpty)
-    }
-
-    @Test("English mode applies smart quote fallback")
-    func englishModeSmartQuoteFallback() {
-        let (composer, delegate, _) = makeComposer()
-        composer.setInputMode(.english)
-
-        let quote = TestEventFactory.keyEvent(char: "\"", keyCode: 39)!
-        #expect(composer.handle(quote, delegate: delegate))
-        #expect(delegate.fullText == "“")
-
-        delegate.fullText = "“Hello"
-        #expect(composer.handle(quote, delegate: delegate))
-        #expect(delegate.fullText == "“Hello”")
-    }
-
-    @Test("English mode applies smart dash fallback")
-    func englishModeSmartDashFallback() {
-        let (composer, delegate, _) = makeComposer()
-        composer.setInputMode(.english)
-        delegate.fullText = "-"
-
-        let hyphen = TestEventFactory.keyEvent(char: "-", keyCode: 27)!
-        #expect(composer.handle(hyphen, delegate: delegate))
-        #expect(delegate.fullText == "—")
     }
 
     @Test("English mode passes every printable key through without inserting")
@@ -197,8 +216,7 @@ struct HangulComposerTests {
         let (composer, delegate, _) = makeComposer()
         composer.setInputMode(.english)
 
-        // Most printable keys flow to the host untouched. Lowercase letters at
-        // sentence boundaries and second spaces are covered by fallback tests.
+        // All printable keys flow to the host untouched.
         let cases: [(String, UInt16)] = [
             ("Z", 6), ("r", 15), ("k", 40),   // including 2-bulsik jamo keys
             ("1", 18), ("0", 29), ("!", 18), ("@", 19),
@@ -422,20 +440,6 @@ struct HangulComposerTests {
         #expect(delegate.markedText == "")
     }
     
-    // MARK: - Keyboard Layout Tests
-    
-    @Test("Keyboard layout change commits composition")
-    func keyboardLayoutChange() {
-        let (composer, delegate, _) = makeComposer()
-        _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
-        
-        composer.updateKeyboardLayout(id: "3")
-        
-        #expect(delegate.markedText.isEmpty || delegate.insertedTexts.count > 0)
-
-        composer.updateKeyboardLayout(id: "2")
-    }
-
     // MARK: - libhangul default-behavior regression guards
     //
     // The libhangul-swift defaults (combinationOnDoubleStroke OFF, fineGrainedBackspace ON,
@@ -518,9 +522,32 @@ struct CursorRectValidationTests {
     func rejectsFloatGarbage() {
         // Representative Chromium garbage: subnormal x/width with negative height.
         #expect(!HangulComposer.isValidCursorRect(NSRect(x: 1.6e-314, y: 95886, width: 1.6e-314, height: -1)))
-        // Origin at or below 1pt is treated as uninitialized garbage.
-        #expect(!HangulComposer.isValidCursorRect(NSRect(x: 0.5, y: 0.5, width: 10, height: 10)))
-        #expect(!HangulComposer.isValidCursorRect(NSRect(x: 1, y: 1, width: 10, height: 10)))
+        // Near-zero or non-finite values on an otherwise on-screen rect.
+        let screens = [NSRect(x: 0, y: 0, width: 1920, height: 1080)]
+        for rect in [
+            NSRect(x: 1.6e-314, y: 500, width: 1, height: 18),   // subnormal
+            NSRect(x: 1e-300, y: 500, width: 1, height: 18),     // tiny but normal
+            NSRect(x: 0.5, y: 0.5, width: 10, height: 10),
+            NSRect(x: 1, y: 1, width: 10, height: 10),
+            NSRect(x: 0, y: 500, width: 1, height: 18),
+            NSRect(x: CGFloat.nan, y: 500, width: 1, height: 18),
+            NSRect(x: 500, y: 500, width: CGFloat.nan, height: 18)
+        ] {
+            #expect(!CursorRectResolver.isValidCursorRect(rect, screens: screens), "\(rect)")
+        }
+    }
+
+    @Test("Accepts a caret on a display left of or below the main one")
+    func acceptsNegativeCoordinatesOnSecondaryDisplays() {
+        let screens = [
+            NSRect(x: 0, y: 0, width: 1920, height: 1080),        // main
+            NSRect(x: -2560, y: 0, width: 2560, height: 1440),    // left
+            NSRect(x: 0, y: -1080, width: 1920, height: 1080)     // below
+        ]
+        #expect(CursorRectResolver.isValidCursorRect(NSRect(x: -100, y: 500, width: 1, height: 18), screens: screens))
+        #expect(CursorRectResolver.isValidCursorRect(NSRect(x: 500, y: -300, width: 1, height: 18), screens: screens))
+        // The same point with only the main display attached is off screen.
+        #expect(!CursorRectResolver.isValidCursorRect(NSRect(x: -100, y: 500, width: 1, height: 18), screens: [screens[0]]))
     }
 
     @Test("Accepts a well-formed on-screen rect")

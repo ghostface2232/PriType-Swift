@@ -55,7 +55,6 @@ keyDown ──► PriTypeInputController.handle()
               • mouseCommit          — 조합 영역 외 클릭
               • modeTransition       — 사용자 한/영 전환키
               • systemModeSwitch     — macOS Caps Lock/메뉴 입력 모드 선택 (setValue ingress)
-              • keyboardLayoutChange — 두벌식/세벌식 전환
 ```
 
 1. macOS가 키 이벤트를 `PriTypeInputController.handle()`에 전달한다.
@@ -74,6 +73,8 @@ keyDown ──► PriTypeInputController.handle()
 ## 한/영 전환 흐름
 
 `RightCommandSuppressor`가 `CGEventTap`으로 시스템 레벨 키 이벤트를 가로채서 사용자가 설정한 전환키(기본: 우측 Command)와 한자키(기본: 우측 Option)를 처리한다. Key Recorder 방식으로 아무 키나 등록할 수 있다. CGEventTap이 시스템에 의해 반복 비활성화되면 `IOKitManager`(IOHIDManager 기반)로 자동 전환된다.
+
+탭은 메인 런루프가 아닌 전용 스레드(`EventTapThread`, QoS userInteractive)에서 돈다. 시스템의 모든 키 입력이 이 콜백을 거친 뒤에야 앱에 도달하므로, IMK 처리·동기 클라이언트 IPC·설정 UI로 바쁜 메인 스레드에 두면 전역 타이핑이 함께 지연된다. 전환키와 한자키는 눌린 순간 탭 스레드에서 키 시각과 함께 `InputModeCoordinator`의 한 대기열에 기록되고, 메인에서 순서대로 실행된다. `handle()`은 조합 전에 그 키보다 먼저 눌린 동작만 실행하므로, 전환 직후 첫 키는 새 모드로, 한자키 직후 후보 선택 키는 후보창으로 가고, 직전에 친 키는 영향받지 않는다. 한자키와 전환키도 서로 순서를 지킨다.
 
 현재 한/영 전환 구조의 정식 명세는 [UnifiedInputArchitecture.md](Docs/UnifiedInputArchitecture.md)다(선택지 비교 원본은 [InputArchitectureHybridRollbackPlan.md](Docs/InputArchitectureHybridRollbackPlan.md), superseded). 핵심은 custom 전환키 경로에서 실제 ABC 입력 소스를 선택하지 않고, PriType 내부 mode 전환을 단일 트랜잭션으로 처리하는 것이다. PriType 단일 입력 소스가 IMK 세션을 영구 소유하고, 영어는 조합 없이 raw key를 그대로 pass-through한다.
 
@@ -101,7 +102,9 @@ flowchart TD
 | 실제 조합 모드 | `HangulComposer.inputMode` | 2.6.5처럼 PriType 내부 mode의 source of truth다. |
 | host input mode 표시 | macOS TIS | custom 전환키에서는 입력 소스를 바꾸지 않으므로 메뉴바 source는 PriType 단일 항목으로 유지한다. |
 | macOS 실제 입력 소스 | macOS TIS | custom 전환키에서는 건드리지 않는다. Caps Lock 경로에서만 시스템이 소유한다. |
-| 영어 레이아웃 | IMK session | `overrideKeyboardWithKeyboardNamed`로 ABC/US 계열 layout을 요청한다. |
+| 영어 레이아웃 | IMK session | 영어 모드에서 이미 활성화된 ABC/US에만 `overrideKeyboardWithKeyboardNamed`를 요청한다. 사용자 전환에는 `selectInputMode:`를 호출하지 않는다. |
+
+`cleanupStaleInputSources()`는 시작 시 자동 실행하지 않는 명시적 유지보수 동작이다. `AppleEnabledInputSources`, `AppleSelectedInputSources`, `AppleInputSourceHistory`의 정리본을 **모두 계획한 뒤** 함께 기록하므로, 마지막 키에서 실패해도 앞서 쓴 키를 되돌려 일부만 정리된 상태가 남지 않는다. 되읽기 검증이 잡는 것은 저장 계층의 거부·되돌림뿐이다. 사용자가 체감하는 "껐는데 다시 살아남"은 macOS가 **나중에** 스냅샷을 다시 쓰는 것이며, 동기 검사로는 관측할 수 없다. 그 확인은 살아 있는 TIS 상태(`isABCDisabledAccordingToTIS`)의 몫이고, 이때 판정 술어는 제거 술어와 정확히 같아야 한다 — `id.contains("ABC")`는 ABC-QWERTZ/AZERTY/India와 중국어 병음까지 매칭해 영구 오탐을 만든다.
 
 PriType의 `ComponentInputModeDict`는 단일 mode `com.pritype.inputmethod.v2`만 등록한다. 내부 한/영 상태는 `HangulComposer.inputMode`가 들고, custom 전환키는 실제 Apple `ABC` source나 별도 English input mode를 선택하지 않는다.
 
@@ -131,7 +134,7 @@ PriType의 `ComponentInputModeDict`는 단일 mode `com.pritype.inputmethod.v2`�
 - 비정규화 부동소수점: `(1.6e-314, 95886, 1.6e-314, -1)` — 초기화되지 않은 메모리
 - 음수 height: `(x, y, w, -1)` — 비정상 응답
 
-검증 기준: origin이 (0, 0)이 아닐 것, height > 0, origin.x/y > 1 (부동소수점 쓰레기값 배제), origin이 연결된 `NSScreen.frame` 내부에 있을 것.
+검증 기준: 좌표와 크기가 유한할 것, height > 0, origin의 x·y 절댓값이 각각 1보다 클 것(0·비정규화 부동소수점 같은 쓰레기값 배제), origin이 연결된 `NSScreen.frame` 중 하나의 내부에 있을 것. 음수 좌표는 주 화면 왼쪽·아래에 놓인 보조 모니터에서 정상이므로 거부하지 않는다.
 
 ## 한자 검색과 자모 특수문자
 
@@ -168,18 +171,19 @@ libhangul preedit: ᄆ (U+1106)
 
 | 파일 | 역할 |
 |---|---|
-| **HangulComposer** | 한글 조합 엔진. libhangul 컨텍스트를 감싸고, 키 이벤트 → 초·중·종성 조합 → preedit/commit 변환을 담당한다. `inputMode`가 한/영 단일 source of truth다. 영어 내부 모드에서는 조합 없이 모든 키를 `return false`로 순수 pass-through하며(로컬 버퍼 미사용), 영문 텍스트 편의(더블스페이스 마침표 등)는 macOS가 소유한다. |
+| **HangulComposer** | 한글 조합 엔진. libhangul 컨텍스트를 감싸고, 키 이벤트 → 초·중·종성 조합 → preedit/commit 변환을 담당한다. 한글 모드의 글자 키 26개는 현재 라틴 배열이 만든 문자가 아니라 키 위치(`QwertyKeyMap`, US QWERTY)로 해석하므로 Dvorak·Colemak·AZERTY 사용자도 같은 자모를 얻고, 윗줄 자모는 Shift로만 고른다(Caps Lock 무시). 그 밖의 키는 배열이 만든 문자를 그대로 쓰며 조합 엔진에 넘기지 않는다. `inputMode`가 한/영 단일 source of truth다. 영어 내부 모드에서는 조합 없이 모든 키를 `return false`로 순수 pass-through하며(로컬 버퍼 미사용), 영문 텍스트 편의(더블스페이스 마침표 등)는 macOS가 소유한다. |
 | **HangulComposerTypes** | `HangulComposerDelegate` 프로토콜(insertText, setMarkedText, textBeforeCursor, replaceTextBeforeCursor)과 `InputMode` enum 정의. |
 | **PriTypeInputController** | `IMKInputController` 서브클래스. IMK 수명 주기(`activateServer` → `handle()` → `deactivateServer`)만 담당하는 얇은 edge. 세션 스코프 상태는 전부 `InputSession`에 위임하고, 모든 조합 종료 이벤트를 `session.finalize(reason:)`로 라우팅한다. |
 | **InputSession** | 활성 입력 세션 1개의 단일 소유자: 클라이언트, 분석된 `ClientContext`, delivery 어댑터, 중복 keyDown 상태, 포커스 상실 안전망(NSWorkspace 옵저버). `finalize(reason:)`이 조합 종료의 유일한 경로(1-op commit, 멱등, 호스트 무관)다. |
 | **TextDelivery** | 조합 출력이 호스트에 도달하는 방식. `TextDeliveryPolicy.mode(for:)`가 단일 결정 지점이고, `MarkedTextAdapter`(canonical marked text), `DirectInsertionAdapter`(실험: 실제 텍스트 in-place rewrite), `ImmediateModeAdapter`(Finder 바탕화면) 세 어댑터를 제공한다. 조합 밑줄: `PreeditUnderline`이 엔진별 invisible 속성을 보내지만(분류는 `ClientCompatibilityPolicy.compositionRenderer`), **macOS 26부터는 전송 계층이 IME 속성을 전부 폐기하고 시스템 스타일(`NSUnderline=2`+액센트색)을 재생성하므로 marked text 밑줄은 숨길 수 없다**(13종 페이로드 실측, `PreeditUnderline` 주석 참고). 구버전 macOS에서만 유효. 밑줄 없는 입력은 직접 삽입 모드가 유일한 경로다. |
 | **CursorRectResolver** | 한자 후보창 좌표 전략 체인(firstRect → attributes → 캐시 → AX → 마우스)과 좌표 유효성 검증. |
 | **ClientContextDetector** | 입력 클라이언트 분석기. 번들 ID, `validAttributesForMarkedText`, 좌표 휴리스틱을 조합해 `ClientContext` 구조체를 생성한다. Finder 바탕화면은 좌표 기반(`y < 50`)으로 판별한다. |
-| **RightCommandSuppressor** | `CGEventTap` 기반 시스템 레벨 키 인터셉터. `ConfigurationManager`의 `toggleKeyBinding`/`hanjaKeyBinding`을 읽어 사용자 지정 키를 동적으로 처리한다. Key Recorder 모드를 지원하여 설정 창에서 키 캡처가 가능하다. 이벤트 탭 비활성화 시 재활성화를 시도하며, 60초 내 3회 실패 시 IOKit 백업으로 자동 전환한다. |
+| **SecureInputPolicy** | 시스템 보안 client와 현재 필드의 selection/capability 신호를 조합하는 순수 정책. 정상 capable field에서는 다른 앱이 남긴 stale 전역 Secure Event Input flag를 무시한다. |
+| **RightCommandSuppressor** | `CGEventTap` 기반 시스템 레벨 키 인터셉터. `ConfigurationManager`의 `toggleKeyBinding`/`hanjaKeyBinding`을 읽어 사용자 지정 키를 동적으로 처리한다. Key Recorder 모드를 지원하여 설정 창에서 키 캡처가 가능하다. 전용 스레드에서 동작하며 모든 가변 상태는 재귀 잠금 하나로 보호한다. 이벤트 탭 비활성화 시 재활성화를 시도하며, 60초 내 3회 실패 시 IOKit 백업으로 자동 전환한다. |
 | **IOKitManager** | `IOHIDManager` 기반 하드웨어 레벨 키 모니터. CGEventTap 실패 시 백업 핸들러로 동작한다. HID usage 매핑 테이블을 통해 사용자 지정 키를 동적으로 처리한다. |
 | **HanjaCandidateWindow** | SwiftUI 기반 한자 후보 패널. `NSPanel`을 재사용하며, `screenSaver + 1` 윈도우 레벨로 Electron 앱 위에 표시된다. 1~9 숫자키 선택, 방향키/Tab 페이지 이동을 지원한다. |
 | **HanjaManager** | 한자 사전 로더 + 자모 특수문자 검색. `hanja.txt`를 `HanjaTable`에 적재하고, `jamo_symbols.json`에서 자모 특수문자를 로딩한다. LRU 캐시(32개, NSLock 보호)로 재검색 시 사전 접근을 생략한다. 초성 자모(U+1100~) → 호환 자모(U+3131~) 변환을 포함한다. |
-| **ConfigurationManager** | `UserDefaults` 기반 설정 관리. 자판 배열, `KeyBinding`(한/영 전환키·한자 입력키), 자동 대문자, 더블스페이스 마침표, 자동 업데이트 확인 옵션을 저장한다. 기존 `ToggleKey` enum에서 `KeyBinding` struct로의 자동 마이그레이션을 지원한다. `ConfigurationProviding` 프로토콜로 테스트 시 목(mock) 주입이 가능하다. |
+| **ConfigurationManager** | `UserDefaults` 기반 설정 관리. `KeyBinding`(한/영 전환키·한자 입력키), 자동 대문자, 더블스페이스 마침표, 자동 업데이트 확인 옵션을 저장한다. 기존 `ToggleKey` enum에서 `KeyBinding` struct로의 자동 마이그레이션을 지원한다. `ConfigurationProviding` 프로토콜로 테스트 시 목(mock) 주입이 가능하다. |
 | **SettingsWindowController** | SwiftUI `NSHostingController` 기반 설정 창. Liquid Glass 스타일, Key Recorder(키 녹음) UI, 접근성 권한 확인/요청, Caps Lock 입력 소스 전환 안내를 포함한다. |
 | **StatusBarManager** | `NSStatusItem` 기반 메뉴 바 표시기. 현재 모드를 "가" / "A"로 표시하며, 전환 시 0.08초 페이드 애니메이션을 적용한다. |
 | **TextConvenienceHandler** | macOS 더블스페이스 마침표 설정을 한글 조합 경로에서 반영한다. 영어 모드는 순수 pass-through라 이 핸들러를 거치지 않는다(영문 편의는 macOS 소유). |
@@ -191,7 +195,7 @@ libhangul preedit: ᄆ (U+1106)
 | **DebugLogger** | 조건 컴파일(`#if DEBUG`) 기반 로거. 디버그 빌드에서는 `~/Library/Logs/PriType/pritype_debug.log`에 기록하고, 릴리즈 빌드에서는 `@autoclosure`로 문자열 생성 자체를 생략하는 no-op이 된다. |
 | **KeyCode** | macOS 키 코드 상수와 문자 판별 함수(`isPrintableASCII`, `shouldPassThrough` 등)를 집중 관리한다. |
 | **L10n** | `Localizable.strings`(ko/en)에서 로컬라이즈된 문자열을 타입 안전하게 접근한다. 배포/개발 환경 모두 대응하는 번들 해석 로직을 포함한다. |
-| **PriTypeConfig** | 전역 상수 정의. 기본 자판 ID(`"2"`, 두벌식), Finder 바탕화면 임계값(50pt), 설정 창 크기, 더블스페이스 임계값(0.45초). |
+| **PriTypeConfig** | 전역 상수 정의. 자판 ID(`"2"`, 두벌식 — 유일하게 지원하는 자판), Finder 바탕화면 임계값(50pt), 설정 창 크기, 더블스페이스 임계값(0.45초). |
 | **PriTypeError** | 구조화된 에러 타입. CGEventTap 생성 실패, 접근성 권한 거부, IOHIDManager 오류에 대해 복구 제안(`recoverySuggestion`)을 포함한다. |
 | **AboutInfo** | 앱 메타데이터 및 정보 대화상자. 버전은 `Info.plist`의 `CFBundleShortVersionString`에서 읽는다. |
 
@@ -206,7 +210,7 @@ C 기반 libhangul을 순수 Swift로 재구현한 한글 조합 엔진. PriType
 - **`HangulCharacter`**: 초·중·종성 결합/분리 및 호환 자모(Compatibility Jamo) 변환.
 - **`KeyInput`**: 키보드 입력을 `.character("r")` / `.keyCode(51)` 형태로 표현하는 타입 안전 열거형.
 
-두벌식(`"2"`), 세벌식 390(`"3"`), 옛한글(`"2y"`, `"3y"`) 자판을 지원한다.
+두벌식 표준(`"2"`) 자판만 지원한다.
 
 ## Secure Input 처리
 
@@ -214,14 +218,14 @@ macOS의 `IsSecureEventInputEnabled()`는 프로세스 단위가 아닌 **시스
 
 PriType은 2단계 검증으로 이를 처리한다:
 1. **번들 ID 확인**: `SecurityAgent`, `loginwindow`, `screencaptureui`이면 즉시 pass-through.
-2. **필드 속성 확인**: 위 목록에 없으면 `validAttributesForMarkedText()`가 빈 배열인지 검사. 빈 배열이면 비밀번호 필드로 간주하여 pass-through. 그 외에는 오래된(stale) 플래그로 판단하고 정상 입력 처리.
+2. **전역 경고와 필드 신호 조합**: 전역 Secure Input이 켜져 있을 때만 selection을 확인하고, selection이 유효하지 않거나 지원 속성이 없으면 pass-through한다. 전역 경고가 없으면 빈 `validAttributesForMarkedText()`나 범위 API 미지원만으로 한글 조합을 막지 않는다. 이 API는 텍스트 입력 가능 여부가 아닌 지원 속성 목록을 반환한다. 정상 속성·selection을 가진 필드는 기존 stale 플래그 복구 정책을 유지한다.
 
 ## 동시성 (Concurrency) 및 스레드 안전성
 
-PriType은 메인 스레드(IMKServer)와 백그라운드 스레드(CGEventTap, IOKit) 간의 상태 불일치 및 크래시를 방지하기 위해 정교한 동기화 메커니즘을 사용한다.
+PriType은 메인 스레드(IMKServer·IOKit)와 전용 이벤트 탭 스레드(CGEventTap) 간의 상태 불일치 및 크래시를 방지하기 위해 정교한 동기화 메커니즘을 사용한다.
 
 1. **설정 관리 (`ConfigurationManager`)**
-   - 백그라운드 스레드(CGEventTap)에서 매 키 입력마다 `toggleKeyBinding` 및 `hanjaKeyBinding`을 조회한다.
+   - 이벤트 탭 스레드(CGEventTap)에서 매 키 입력마다 `toggleKeyBinding` 및 `hanjaKeyBinding`을 조회한다.
    - 메인 스레드(설정 창)에서 설정이 변경될 때 발생하는 `UserDefaults` 읽기/쓰기 충돌(Race Condition)을 방지하기 위해, 내부적으로 캐시를 유지하고 `NSLock`을 통해 모든 접근을 직렬화한다.
 
 2. **한자 사전 및 LRU 캐시 (`HanjaManager`)**

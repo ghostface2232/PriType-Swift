@@ -99,17 +99,27 @@ public enum CursorRectResolver {
 
     /// Validate that a rect from firstRect is a usable cursor position
     /// Electron/Chromium apps can return garbage values (e.g. x=1.6e-314, y=19896)
-    public static func isValidCursorRect(_ rect: NSRect) -> Bool {
-        // Reject zero origin (uninitialized)
-        guard rect.origin.x != 0 || rect.origin.y != 0 else { return false }
+    ///
+    /// Negative coordinates are legitimate: a display left of or below the main
+    /// one has them. Garbage is recognized by its form (non-finite, or within 1pt
+    /// of zero on either axis — uninitialized memory such as 1.6e-314) and by
+    /// lying on no display.
+    ///
+    /// - Parameter screens: display frames to test against; defaults to the
+    ///   connected screens.
+    public static func isValidCursorRect(_ rect: NSRect, screens: [NSRect]? = nil) -> Bool {
+        let origin = rect.origin
+        guard origin.x.isFinite, origin.y.isFinite,
+              rect.size.width.isFinite, rect.size.height.isFinite else { return false }
         // Reject negative or zero height (malformed)
         guard rect.size.height > 0 else { return false }
-        // Reject absurdly small coordinates (floating point garbage like 1.6e-314)
-        guard rect.origin.x > 1 && rect.origin.y > 1 else { return false }
-        // Check that the point is on any connected screen
-        return NSScreen.screens.contains { screen in
-            screen.frame.contains(NSPoint(x: rect.origin.x, y: rect.origin.y))
-        }
+        // Reject near-zero coordinates: zero, tiny and subnormal values are what an
+        // uninitialized query returns. Magnitude, not sign, so negative
+        // coordinates on secondary displays pass.
+        guard abs(origin.x) > 1, abs(origin.y) > 1 else { return false }
+        // Check that the point is on a connected screen
+        let frames = screens ?? NSScreen.screens.map(\.frame)
+        return frames.contains { $0.contains(origin) }
     }
 
     // MARK: - Accessibility API Cursor Position

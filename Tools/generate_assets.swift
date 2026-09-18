@@ -161,14 +161,17 @@ func centeredTextOrigin(text: String, attributes: [NSAttributedString.Key: Any],
     )
 }
 
+struct GlyphFont {
+    let name: String?
+    let size: CGFloat
+}
+
 func drawInputGlyphRep(
     _ glyph: String,
-    fontName: String?,
-    fontSize: CGFloat,
+    font glyphFont: GlyphFont,
     canvasSize: CGFloat,
     pixels: Int,
-    xOffset: CGFloat,
-    yOffset: CGFloat
+    offset: CGPoint
 ) -> NSBitmapImageRep {
     bitmap(width: pixels, height: pixels, pointSize: canvasSize) { _ in
         NSColor.clear.setFill()
@@ -176,8 +179,8 @@ func drawInputGlyphRep(
 
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
-        let font = fontName.flatMap { NSFont(name: $0, size: fontSize) }
-            ?? NSFont.systemFont(ofSize: fontSize, weight: .bold)
+        let font = glyphFont.name.flatMap { NSFont(name: $0, size: glyphFont.size) }
+            ?? NSFont.systemFont(ofSize: glyphFont.size, weight: .bold)
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: NSColor(calibratedWhite: 0.02, alpha: 0.92),
@@ -188,7 +191,7 @@ func drawInputGlyphRep(
         NSString(
             string: glyph
         ).draw(
-            at: NSPoint(x: origin.x + xOffset, y: origin.y + yOffset),
+            at: NSPoint(x: origin.x + offset.x, y: origin.y + offset.y),
             withAttributes: attrs
         )
     }
@@ -244,8 +247,10 @@ func drawGlyphPDF(
 
 func drawInputGlyph(_ glyph: String, fontName: String?, fontSize: CGFloat, xOffset: CGFloat = 0, yOffset: CGFloat = 0) -> NSImage {
     let image = NSImage(size: NSSize(width: 16, height: 16))
-    image.addRepresentation(drawInputGlyphRep(glyph, fontName: fontName, fontSize: fontSize, canvasSize: 16, pixels: 16, xOffset: xOffset, yOffset: yOffset))
-    image.addRepresentation(drawInputGlyphRep(glyph, fontName: fontName, fontSize: fontSize, canvasSize: 16, pixels: 32, xOffset: xOffset, yOffset: yOffset))
+    let font = GlyphFont(name: fontName, size: fontSize)
+    let offset = CGPoint(x: xOffset, y: yOffset)
+    image.addRepresentation(drawInputGlyphRep(glyph, font: font, canvasSize: 16, pixels: 16, offset: offset))
+    image.addRepresentation(drawInputGlyphRep(glyph, font: font, canvasSize: 16, pixels: 32, offset: offset))
     return image
 }
 

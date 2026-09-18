@@ -56,19 +56,23 @@ CGEventTap / IOKit  ──(키 감지만)──►  InputModeCoordinator   (정�
 
 ### 2.1 단일 소스 등록 (영어 가짜 모드 미등록)
 
-`Info.plist`는 `ComponentInputModeDict` 아래 **단일 모드** `com.pritype.inputmethod.v2`만 등록한다
-(`tsInputModeScriptKey = smKorean`). 별도의 `...english` 가짜 모드는 등록하지 않는다.
+`Info.plist`는 `ComponentInputModeDict` 아래 **두 모드**를 등록한다 —
+`com.pritype.inputmethod.v2`(한국어)와 `com.pritype.inputmethod.v2.english`. 초판은 단일 모드만
+등록했으나 `fbca796`에서 이중 등록으로 바뀌었고, macOS는 실제로 두 모드 사이를 선택한다
+(`TISCopyCurrentKeyboardInputSource`가 둘 중 하나를 반환한다).
 
-과거 RollbackPlan은 Korean/English 두 가짜 모드 등록을 제안했지만 채택하지 않는다. 이유:
+**전환 순서 (2026-09-09 개정).** custom toggle은 이 순서를 지킨다:
 
-- 메뉴바 모드 표시는 [StatusBarManager](../Sources/PriTypeCore/StatusBarManager.swift)의 `가`/`A`가 이미 담당한다.
-  가짜 영어 모드의 유일한 명분(메뉴 표시)이 불필요하다.
-- 두 모드는 전환마다 `selectInputMode:`라는 **또 다른 비동기 IMK 호출을 hot path에 추가**한다.
-  이는 `composer.inputMode`와 desync 가능 → 우리가 제거하려던 race를 재도입한다.
-- 2.7대에서 고생한 입력 소스 중복, `tsVisibleInputModeOrderedArrayKey` 튜닝, stale ID 정리가 다시 필요해진다.
+1. `composer.inputMode`를 **동기적으로** 바꾼다. 이것이 진리이고 다음 keyDown이 곧바로 본다.
+2. 그 뒤 hot path 밖에서 `InputSourceManager.selectPriTypeMode(english:)`가 macOS에 결과를
+   통보한다. 메뉴바 입력 소스가 `가`/`A` 표시와 어긋나지 않게 하기 위한 것이다.
 
-**트레이드오프(수용):** 영어 모드일 때도 macOS 메뉴바의 입력 소스 아이콘은 PriType(한글)로 남는다.
-이는 2.6.5와 동일한 화면상 사소함이며, 사용자에겐 PriType 자체 `가`/`A` 표시가 실질 지표다.
+2.7.x에서 전환 직후 첫 글자가 씹힌 원인은 TIS 선택이 **전환 수단**이었다는 데 있다(비동기라서
+다음 keyDown이 아직 옛 모드를 본다). 위 순서에서는 컴포저가 전환을 이미 끝냈으므로 통보가
+늦거나 실패해도 입력은 영향받지 않고 메뉴바 아이콘만 뒤늦게 따라온다.
+
+`selectInputMode:`는 쓰지 않는다. 클라이언트를 경유하는 방식이라 Latin 전용 호스트를 실제 ABC로
+넘길 수 있다(upstream PR #11, `c5fc75b`에서 제거).
 
 ### 2.2 상태 소유권
 
@@ -77,7 +81,7 @@ CGEventTap / IOKit  ──(키 감지만)──►  InputModeCoordinator   (정�
 | 한/영 진리 | `HangulComposer.inputMode` | 단일 source of truth |
 | 전환 정책(Caps Lock·fallback) | `InputModeCoordinator` | 한 곳에서만 판단 |
 | IMK 세션 edge(commit·override·layout) | `PriTypeInputController` | imperative 경계 |
-| 실제 TIS source 선택 | **macOS만** | Caps Lock 경로 한정 |
+| 실제 TIS source 선택 | macOS + 전환 후 통보 | `InputSourceManager`, hot path 밖 |
 | 사용자 표시(가/A) | `StatusBarManager` | |
 | TIS 조회·stale 정리 | `InputSourceManager` | hot path 제외 |
 
@@ -85,10 +89,15 @@ CGEventTap / IOKit  ──(키 감지만)──►  InputModeCoordinator   (정�
 
 ## 3. 불변식 (회귀 가드)
 
-1. custom toggle hot path에서 `TISSelectInputSource`를 호출하지 않는다.
+1. custom toggle hot path에서 `TISSelectInputSource`를 호출하지 않는다. TIS 선택이 **전환 수단**이
+   되어서는 안 된다는 뜻이며, 전환이 끝난 뒤 hot path 밖에서 결과를 통보하는 것은 허용한다(2.1 참고).
 2. `composer.inputMode`를 바꾸는 writer는 **정확히 둘**뿐이다:
    - `PriTypeInputController.performPriTypeModeTransition` (사용자 토글)
-   - `PriTypeInputController.setValue(_:forTag:)` ingress (macOS가 PriType source 재선택 → 항상 `.korean` 복귀)
+   - `PriTypeInputController.setValue(_:forTag:)` ingress (사용자가 실제로 입력 소스를 바꾼 경우만.
+     IMK는 활성화마다 현재 소스를 재통보하므로 직전에 관측한 값과 같으면 무시한다. 그러지 않으면
+     포커스가 돌아올 때마다 custom toggle이 되돌려진다. 전환 후 통보한 모드가 되돌아오는 echo도
+     `SystemModeEchoFilter`로 소비만 하고 적용하지 않는다. 빠른 연타에서 늦게 도착한 첫 echo가
+     두 번째 전환을 뒤집기 때문이다.)
    `activateServer`(포커스 변경) 등 다른 경로는 모드를 건드리지 않는다.
 3. 모드 전환 전 active composition은 정확히 1회 commit한다.
 4. 전환 직후 keyDown을 막거나 replay하지 않는다. 전환이 즉시 완료되므로 불필요하다.

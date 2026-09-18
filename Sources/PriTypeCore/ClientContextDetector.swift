@@ -1,53 +1,6 @@
 import Cocoa
 import InputMethodKit
 
-// MARK: - SecureInputPolicy
-
-/// Pure policy for deciding whether a secure-input-looking client should bypass IMK composition.
-///
-/// Password fields can still expose partial IMK capabilities. Avoid Accessibility
-/// probing on the keystroke hot path; prefer raw passthrough whenever the client
-/// selection is unavailable or macOS Secure Event Input is active.
-struct SecureInputSignals: Sendable {
-    let bundleId: String
-    let hasTextInputCapability: Bool
-    let hasInvalidSelection: Bool
-    let hasGlobalSecureInput: Bool
-    let hasMarkedTextSupport: Bool
-}
-
-struct SecureInputPolicy: Sendable {
-    static func isSystemSecureClient(_ bundleId: String) -> Bool {
-        bundleId == "com.apple.SecurityAgent" ||
-            bundleId == "com.apple.loginwindow" ||
-            bundleId == "com.apple.screencaptureui"
-    }
-
-    static func shouldPassThrough(_ signals: SecureInputSignals) -> Bool {
-        if isSystemSecureClient(signals.bundleId) {
-            return true
-        }
-
-        guard signals.hasInvalidSelection || signals.hasGlobalSecureInput else {
-            return false
-        }
-
-        if signals.hasInvalidSelection && !signals.hasTextInputCapability {
-            return true
-        }
-
-        if !signals.hasMarkedTextSupport || !signals.hasTextInputCapability {
-            return true
-        }
-
-        if signals.hasInvalidSelection {
-            return true
-        }
-
-        return signals.hasGlobalSecureInput
-    }
-}
-
 // MARK: - ClientContext
 
 /// Represents the context of the current text input client
@@ -59,7 +12,8 @@ public struct ClientContext: Sendable {
     /// Bundle identifier of the client application
     public let bundleId: String
     
-    /// Whether the client has text input capability (based on validAttributesForMarkedText)
+    /// Whether the client advertises marked-text attributes. Despite the legacy
+    /// property name, false does not prove the client cannot accept text.
     public let hasTextInputCapability: Bool
     
     /// Whether the client appears to be in a desktop/non-text area (coordinate heuristic)
@@ -165,7 +119,7 @@ public enum ClientCompatibilityPolicy {
     /// reliably support in-place real-text rewrites (Electron/Chromium/browsers).
     /// Explicit list + a keyword heuristic for unlisted Electron/Chromium wrappers.
     public static func directInsertionDenied(bundleId: String) -> Bool {
-        if directInsertionDenylist.contains(bundleId) { return true }
+        if compositionRenderer(bundleId: bundleId) == .blink || directInsertionDenylist.contains(bundleId) { return true }
         let lower = bundleId.lowercased()
         return lower.contains("electron")
             || lower.contains("chrome")
@@ -256,9 +210,9 @@ public struct ClientContextDetector: Sendable {
 
     public static func analyzeForActivation(client: IMKTextInput) -> ClientContext {
         let frontmostApp = NSWorkspace.shared.frontmostApplication
-        var bundleId = frontmostApp?.bundleIdentifier ?? ""
+        var bundleId = client.bundleIdentifier() ?? ""
         if bundleId.isEmpty {
-            bundleId = client.bundleIdentifier() ?? ""
+            bundleId = frontmostApp?.bundleIdentifier ?? ""
         }
         let isFinder = bundleId == "com.apple.finder"
 
