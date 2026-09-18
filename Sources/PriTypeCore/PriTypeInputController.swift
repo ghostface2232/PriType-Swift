@@ -509,7 +509,11 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             composer.clearLocalBuffer()
             session?.markContextStale()
         }
-        super.commitComposition(sender)
+        // No super call: `commitComposition:` is IMKStateSetting's informal
+        // protocol for input methods to implement. IMKInputController has only the
+        // argument-less `commitComposition`, so `super.commitComposition(sender)`
+        // raised an unrecognized-selector exception on every click-to-commit,
+        // after the work above was already done.
     }
 
     // MARK: - Input Method Menu
