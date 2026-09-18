@@ -37,6 +37,21 @@ struct HanjaDictionaryTests {
         #expect(dictionary.entries(for: "나").map(\.hanja) == ["那"])
     }
 
+    @Test("Glossed words come before unglossed ones; single syllables keep source order")
+    func commonWordsFirst() throws {
+        let source = """
+        한국:寒國:
+        한국:寒菊:
+        한국:韓國:대한민국
+        한국:汗國:
+        한:汗:땀 한
+        한:韓:나라 한
+        """
+        let dictionary = try HanjaDictionary(data: HanjaDictionary.compile(source: source))
+        #expect(dictionary.entries(for: "한국").map(\.hanja) == ["韓國", "寒國", "寒菊", "汗國"])
+        #expect(dictionary.entries(for: "한").map(\.hanja) == ["汗", "韓"])
+    }
+
     @Test("Prefixes, extensions and absent keys find nothing")
     func misses() throws {
         let dictionary = try HanjaDictionary(data: HanjaDictionary.compile(source: Self.sample))
@@ -111,9 +126,10 @@ struct HanjaDictionaryTests {
         keys += ["가", "한", "국", "인", "대한민국", "한국", "ㄱㄴ순"]
         #expect(keys.count > 1000)
         for key in keys {
-            let expected = table.matchExact(key: key).map { list in
-                (0..<list.getSize()).compactMap { list.getNth($0) }.map { [$0.getValue(), $0.getComment()] }
+            let source = table.matchExact(key: key).map { list in
+                (0..<list.getSize()).compactMap { list.getNth($0) }.map { (hanja: $0.getValue(), comment: $0.getComment()) }
             } ?? []
+            let expected = HanjaDictionary.candidateOrder(source, keySyllables: key.count).map { [$0.hanja, $0.comment] }
             let actual = dictionary.entries(for: key).map { [$0.hanja, $0.meaning] }
             #expect(actual == expected, "\(key)")
         }
@@ -270,5 +286,7 @@ struct HanjaWordLookupTests {
         let results = HanjaManager.shared.searchWord(endingWith: "대한민국")
         #expect(results.first?.hanja == "大韓民國")
         #expect(results.contains { $0.hangul == "국" })
+        #expect(HanjaManager.shared.searchWord(endingWith: "한국").first?.hanja == "韓國")
+        #expect(HanjaManager.shared.searchWord(endingWith: "미국").first?.hanja == "美國")
     }
 }

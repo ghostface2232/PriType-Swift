@@ -167,8 +167,9 @@ public struct HanjaDictionary: Sendable {
     /// Compile libhangul's `hanja.txt` format (`key:hanja:comment`, `#` comments).
     ///
     /// Fields are parsed the way libhangul's `HanjaTable` parses them, so the
-    /// compiled dictionary returns the same entries in the same order. The
-    /// leading comment block (the data's license) is kept as the notice.
+    /// compiled dictionary returns the same entries, in the same order except
+    /// for `candidateOrder`. The leading comment block (the data's license) is
+    /// kept as the notice.
     public static func compile(source: String) throws -> Data {
         var notice: [String] = []
         var inHeader = true
@@ -196,6 +197,9 @@ public struct HanjaDictionary: Sendable {
         }
 
         let keys = groups.keys.sorted { $0.lexicographicallyPrecedes($1) }
+        for key in keys {
+            groups[key] = candidateOrder(groups[key] ?? [], keySyllables: utf8(key).count)
+        }
         var pool: [UInt8] = []
         var index: [UInt32] = [0]
         index.reserveCapacity(keys.count + 1)
@@ -226,6 +230,18 @@ public struct HanjaDictionary: Sendable {
         for value in index { append(value, to: &out) }
         out.append(contentsOf: pool)
         return out
+    }
+
+    /// The order candidates are shown in. The source lists a reading's words by
+    /// Hanja code point, not by use, so 한국 offered 寒國 and 寒菊 before 韓國.
+    /// The source glosses only its common words (韓國 "대한민국", 美國
+    /// "아메리카합중국"), so for words of two or more syllables the glossed ones
+    /// move to the front, each group keeping the source order. Single
+    /// syllables are all glossed and keep the source order as is.
+    static func candidateOrder(_ entries: [(hanja: String, comment: String)],
+                               keySyllables: Int) -> [(hanja: String, comment: String)] {
+        guard keySyllables > 1 else { return entries }
+        return entries.filter { !$0.comment.isEmpty } + entries.filter { $0.comment.isEmpty }
     }
 
     private static func append(_ value: UInt32, to data: inout Data) {
