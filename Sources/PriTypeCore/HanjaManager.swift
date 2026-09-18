@@ -167,7 +167,7 @@ public final class HanjaManager: @unchecked Sendable {
         return dictionary.entries(for: key)
     }
 
-    /// Longest word a lookup tries, in syllables. Covers all but a few dozen of
+    /// Longest word a lookup tries, in syllables. Covers all but 150 of
     /// the dictionary's 222,709 keys, and fits in the composer's text buffer.
     public static let maxWordLength = 10
 

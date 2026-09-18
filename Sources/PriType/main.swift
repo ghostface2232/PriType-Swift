@@ -116,6 +116,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     /// missing, `start()` prompts (first time only) and this waits for the grant,
     /// as `setupIOKit` does for Accessibility, instead of leaving the toggle and
     /// Hanja keys dead until the next launch.
+    /// The single wait for Input Monitoring. Replaced, never stacked, when the
+    /// fallback is started again (the tap can fail again after a restart).
+    private var inputMonitoringPoll: Timer?
+
     private func startIOKitFallback() {
         IOKitManager.shared.onRightCommandToggle = {
             InputModeCoordinator.shared.requestToggle(source: .iokitFallback)
@@ -125,7 +129,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         }
         guard !IOKitManager.shared.start() else { return }
         DebugLogger.log("IOKit fallback waiting for Input Monitoring permission")
-        Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { timer in
+        // Polls until granted or until the tap is back: there is no notification
+        // for the grant, and IOHIDCheckAccess is a cheap local query.
+        inputMonitoringPoll?.invalidate()
+        inputMonitoringPoll = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { timer in
             // The event tap may have come back (e.g. Accessibility re-granted
             // from Settings); only one monitor may own the keys.
             if RightCommandSuppressor.shared.isRunning {

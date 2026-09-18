@@ -1113,7 +1113,6 @@ struct SettingsSection<Content: View>: View {
     }
 }
 
-/// A toggle row — icon uses plain background instead of glass
 /// Picks when a lone-modifier toggle key switches (`ToggleTrigger`).
 struct ToggleTriggerRow: View {
     @Binding var trigger: ToggleTrigger
@@ -1155,6 +1154,7 @@ struct ToggleTriggerRow: View {
     }
 }
 
+/// A toggle row — icon uses plain background instead of glass
 struct SettingsToggleRow: View {
     let title: String
     var subtitle: String?

@@ -1,7 +1,8 @@
 # PriType 통합 입력 아키텍처 (Unified Input Architecture)
 
 작성일: 2026-06-01
-상태: **canonical** — 이 문서가 한/영 입력 구조의 정식 명세다.
+상태: **기록** — 2026-06 시점의 한/영 입력 구조 결정 기록이다. 현재 코드의 동작은 [ARCHITECTURE.md](../ARCHITECTURE.md)를 따른다.
+이후 달라진 점: Info.plist는 입력 모드 두 개(한국어·영문)를 등록하며 전환 결과를 macOS에 알린다(에코 필터로 응답을 거른다). `StatusBarManager`와 `handleEnglishModeInput`은 2026-09에 삭제됐다.
 
 이 문서는 `v2.6.5`(내부 모드 통합)와 `v2.7.2`(macOS 입력 소스 통합)의 장점을 결합한
 현재 아키텍처를 기술한다. 과거의 [InputArchitectureHybridRollbackPlan.md](InputArchitectureHybridRollbackPlan.md)는
