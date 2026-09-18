@@ -646,6 +646,9 @@ public class HangulComposer: @unchecked Sendable {
 
         let lookupText: String
         let entries: [HanjaEntry]
+        // Whether the looked-up text is the end of localTextBuffer (after the
+        // preedit is committed below), so a selection can replace it there too.
+        var lookupIsBufferTail = true
         if hadPreedit && !preeditStr.allSatisfy(\.isHangulSyllable) {
             // A lone jamo is not part of a word: ㅁ → ★, ♥, … from the symbol table.
             lookupText = preeditStr
@@ -656,6 +659,7 @@ public class HangulComposer: @unchecked Sendable {
             } else {
                 // Nothing typed here: the caret was moved, e.g. with the arrow keys.
                 lookupText = delegate.textBeforeCursor(length: HanjaManager.maxWordLength) ?? ""
+                lookupIsBufferTail = false
             }
             entries = HanjaManager.shared.searchWord(endingWith: lookupText)
         }
@@ -697,7 +701,7 @@ public class HangulComposer: @unchecked Sendable {
         HanjaCandidateWindow.shared.show(
             entries: entries,
             cursorRect: cursorRect,
-            onSelect: { [weak self] entry in
+            onSelect: { [weak self, lookupIsBufferTail] entry in
                 guard let self = self else { return }
                 
                 // Validate: Ensure the client hasn't changed since the candidate window was shown
@@ -733,7 +737,11 @@ public class HangulComposer: @unchecked Sendable {
                     }
                 }
                 
-                self.localTextBuffer = String(self.localTextBuffer.dropLast(entry.hangul.count)) + entry.hanja
+                // Read from the host, the word was never in the buffer: start over
+                // from what the caret now follows.
+                self.localTextBuffer = lookupIsBufferTail
+                    ? String(self.localTextBuffer.dropLast(entry.hangul.count)) + entry.hanja
+                    : entry.hanja
                 self.hanjaMode = false
                 self.hanjaKey = ""
                 DebugLogger.log("Hanja: Selected '\(entry.hanja)' (\(entry.meaning))")
@@ -751,11 +759,12 @@ public class HangulComposer: @unchecked Sendable {
     /// Whether a candidate may replace the text before the caret. A word spans
     /// several syllables, so a stale buffer (the caret moved by a click the IME
     /// never saw) would replace the wrong text. When the host reports that text
-    /// it must match. A single syllable, or a host that cannot report its text,
-    /// keeps the old behavior of replacing blindly: Chromium hosts can report
-    /// garbage, and one syllable was never checked.
+    /// it must match. A single syllable, or a host that cannot report its text
+    /// (nil, or an empty string from hosts that answer with nothing), keeps the
+    /// old behavior of replacing blindly: Chromium hosts can report garbage, and
+    /// one syllable was never checked.
     static func canReplace(_ current: String?, with entry: HanjaEntry) -> Bool {
-        guard let current, entry.hangul.count > 1 else { return true }
+        guard let current, !current.isEmpty, entry.hangul.count > 1 else { return true }
         return current.precomposedStringWithCanonicalMapping == entry.hangul.precomposedStringWithCanonicalMapping
     }
 

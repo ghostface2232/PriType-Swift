@@ -173,6 +173,24 @@ struct HanjaManagerLoadingTests {
         #expect(attempts.value == 2)
     }
 
+    @Test("Turning Hanja off while the dictionary loads leaves it unmapped")
+    func unloadDuringLoad() throws {
+        let data = try HanjaDictionary.compile(source: HanjaDictionaryTests.sample)
+        let gate = Gate()
+        let manager = HanjaManager(loader: {
+            gate.started.signal()
+            gate.release.wait()
+            return try? HanjaDictionary(data: data)
+        })
+        let finished = DispatchSemaphore(value: 0)
+        Thread { manager.loadIfNeeded(); finished.signal() }.start()
+        gate.started.wait()
+        manager.unload()
+        gate.release.signal()
+        finished.wait()
+        #expect(!manager.isLoaded)
+    }
+
     @Test("Jamo keys use the symbol table even without the dictionary")
     func jamoWithoutDictionary() {
         let manager = HanjaManager(loader: { nil })
@@ -241,6 +259,7 @@ struct HanjaWordLookupTests {
         #expect(HangulComposer.canReplace("대한", with: word))
         #expect(!HangulComposer.canReplace("가한", with: word))
         #expect(HangulComposer.canReplace(nil, with: word))
+        #expect(HangulComposer.canReplace("", with: word), "a host that reports nothing")
         let syllable = HanjaEntry(hangul: "한", hanja: "韓", meaning: "")
         #expect(HangulComposer.canReplace("x", with: syllable))
     }

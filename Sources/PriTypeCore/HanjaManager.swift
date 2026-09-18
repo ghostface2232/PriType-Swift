@@ -20,6 +20,8 @@ public final class HanjaManager: @unchecked Sendable {
     /// Guards `state`; waited on only by `loadIfNeeded`, never by a search.
     private let condition = NSCondition()
     private var state = LoadState.unloaded
+    /// Set by `unload()` while a load is running: its result is thrown away.
+    private var discardLoadInProgress = false
     private let loader: @Sendable () -> HanjaDictionary?
 
     /// Jamo → special symbol mapping (Windows-style)
@@ -52,12 +54,14 @@ public final class HanjaManager: @unchecked Sendable {
     }
 
     /// Drop the mapping and the symbol table, for when Hanja conversion is turned
-    /// off. A load in progress finishes; the next `unload` or search sees it.
+    /// off. A load in progress is left to finish and its result discarded, so a
+    /// quick on-then-off does not leave the dictionary mapped.
     public func unload() {
         condition.withLock {
             switch state {
             case .loaded, .failed: state = .unloaded
-            case .unloaded, .loading: break
+            case .loading: discardLoadInProgress = true
+            case .unloaded: break
             }
         }
         jamoLock.withLock {
@@ -78,7 +82,12 @@ public final class HanjaManager: @unchecked Sendable {
         if claimed {
             let loaded = loader()
             condition.withLock {
-                state = loaded.map(LoadState.loaded) ?? .failed
+                if discardLoadInProgress {
+                    discardLoadInProgress = false
+                    state = .unloaded
+                } else {
+                    state = loaded.map(LoadState.loaded) ?? .failed
+                }
                 condition.broadcast()
             }
         }
