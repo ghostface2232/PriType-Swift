@@ -43,8 +43,7 @@ public class HangulComposer: @unchecked Sendable {
     }
     
     // MARK: - Dependencies
-    
-    
+
     /// Configuration provider (injected for testability)
     private let configuration: ConfigurationProviding
     

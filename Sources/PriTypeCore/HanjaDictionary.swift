@@ -77,8 +77,7 @@ public struct HanjaDictionary: Sendable {
         self.keyCount = count
         self.indexOffset = indexOffset
         self.poolOffset = poolOffset
-        self.notice = String(decoding: data[data.startIndex + noticeOffset ..< data.startIndex + noticeOffset + noticeLength],
-                             as: UTF8.self)
+        self.notice = Self.utf8(data[data.startIndex + noticeOffset ..< data.startIndex + noticeOffset + noticeLength])
     }
 
     /// Entries whose key is exactly `key`, in source order.
@@ -139,8 +138,8 @@ public struct HanjaDictionary: Sendable {
                 if tab > lineStart {
                     entries.append(HanjaEntry(
                         hangul: key,
-                        hanja: String(decoding: UnsafeRawBufferPointer(rebasing: pool[lineStart..<tab]), as: UTF8.self),
-                        meaning: String(decoding: UnsafeRawBufferPointer(rebasing: pool[(tab + 1)..<p]), as: UTF8.self)))
+                        hanja: utf8(UnsafeRawBufferPointer(rebasing: pool[lineStart..<tab])),
+                        meaning: utf8(UnsafeRawBufferPointer(rebasing: pool[(tab + 1)..<p]))))
                 }
                 lineStart = p + 1
                 tab = -1
@@ -150,6 +149,13 @@ public struct HanjaDictionary: Sendable {
             p += 1
         }
         return entries
+    }
+
+    /// Decodes compiled text. The compiler wrote valid UTF-8, and a damaged byte
+    /// should show as U+FFFD rather than drop a candidate, so decoding never fails.
+    private static func utf8<Bytes: Collection>(_ bytes: Bytes) -> String where Bytes.Element == UInt8 {
+        // swiftlint:disable:next optional_data_string_conversion
+        String(decoding: bytes, as: UTF8.self)
     }
 
     private static func readUInt32(_ data: Data, at offset: Int) -> UInt32 {
