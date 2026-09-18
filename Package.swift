@@ -44,6 +44,13 @@ let package = Package(
                 .unsafeFlags(["-framework", "InputMethodKit"])
             ]
         ),
+        .target(
+            name: "PriTypeIMKHarness",
+            dependencies: ["PriTypeCore"],
+            linkerSettings: [
+                .unsafeFlags(["-framework", "InputMethodKit"])
+            ]
+        ),
         .executableTarget(
             name: "PriTypeHanjaCompiler",
             dependencies: ["PriTypeCore"],
@@ -59,12 +66,13 @@ let package = Package(
             name: "PriTypeCoreTests",
             dependencies: [
                 "PriTypeCore",
+                "PriTypeIMKHarness",
                 .product(name: "LibHangul", package: "libhangul-swift")
             ]
         ),
         .executableTarget(
             name: "PriTypeBenchmark",
-            dependencies: ["PriTypeCore"],
+            dependencies: ["PriTypeCore", "PriTypeIMKHarness"],
             linkerSettings: [
                 .unsafeFlags(["-framework", "InputMethodKit"])
             ]

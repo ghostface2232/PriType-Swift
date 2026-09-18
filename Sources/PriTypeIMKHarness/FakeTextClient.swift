@@ -1,0 +1,220 @@
+import Cocoa
+import InputMethodKit
+
+/// A text field for driving PriType's IMK controller without a host app.
+///
+/// It keeps a document, a selection and a marked range the way AppKit's text
+/// system does, answers the `IMKTextInput` queries PriType makes, and logs every
+/// call the input method makes into it, in order. Keys the input method does not
+/// handle get the host's default action (`performHostAction`), as AppKit would
+/// run them through `interpretKeyEvents`.
+public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
+    /// One call into the client, in the order it happened.
+    public enum Call: Equatable, CustomStringConvertible, Sendable {
+        /// `setMarkedText` with the new marked string ("" ends the marked text).
+        case mark(String)
+        /// `insertText` from the input method.
+        case insert(String)
+        /// The host's own handling of a key the input method passed on.
+        case host(String)
+        /// `overrideKeyboardWithKeyboardNamed:`.
+        case overrideKeyboard(String)
+
+        public var description: String {
+            switch self {
+            case .mark(let text): return "mark(\(text))"
+            case .insert(let text): return "insert(\(text))"
+            case .host(let action): return "host(\(action))"
+            case .overrideKeyboard(let name): return "override(\(name))"
+            }
+        }
+    }
+
+    public let bundleID: String
+    public private(set) var calls: [Call] = []
+    /// Called after every logged call; the latency probe listens here.
+    public var onCall: ((Call) -> Void)?
+
+    private var storage = NSMutableString()
+    public private(set) var selection = NSRange(location: 0, length: 0)
+    public private(set) var marked: NSRange?
+
+    public init(bundleID: String = "com.pritype.imk-harness") {
+        self.bundleID = bundleID
+    }
+
+    /// The whole document, marked text included.
+    public var text: String { storage as String }
+    /// The marked (still composing) part of the document, if any.
+    public var markedText: String? { marked.map { storage.substring(with: $0) } }
+    /// The document without its marked text: what a commit has made final.
+    public var committedText: String {
+        guard let marked else { return text }
+        return storage.replacingCharacters(in: marked, with: "")
+    }
+
+    public func clearLog() { calls.removeAll() }
+
+    private func log(_ call: Call) {
+        calls.append(call)
+        onCall?(call)
+    }
+
+    private static func plain(_ string: Any?) -> String {
+        if let attributed = string as? NSAttributedString { return attributed.string }
+        return string as? String ?? ""
+    }
+
+    /// Where an edit lands: the explicit range, else the marked text, else the selection.
+    private func target(for replacementRange: NSRange) -> NSRange {
+        if replacementRange.location != NSNotFound,
+           NSMaxRange(replacementRange) <= storage.length {
+            return replacementRange
+        }
+        return marked ?? selection
+    }
+
+    private func replace(_ range: NSRange, with string: String) -> NSRange {
+        storage.replaceCharacters(in: range, with: string)
+        return NSRange(location: range.location, length: (string as NSString).length)
+    }
+
+    // MARK: IMKTextInput — edits
+
+    public func insertText(_ string: Any!, replacementRange: NSRange) {
+        let text = Self.plain(string)
+        let inserted = replace(target(for: replacementRange), with: text)
+        marked = nil
+        selection = NSRange(location: NSMaxRange(inserted), length: 0)
+        log(.insert(text))
+    }
+
+    public func setMarkedText(_ string: Any!, selectionRange: NSRange, replacementRange: NSRange) {
+        let text = Self.plain(string)
+        let inserted = replace(target(for: replacementRange), with: text)
+        marked = inserted.length > 0 ? inserted : nil
+        selection = NSRange(location: inserted.location + min(selectionRange.location, inserted.length),
+                            length: 0)
+        log(.mark(text))
+    }
+
+    // MARK: IMKTextInput — queries
+
+    public func selectedRange() -> NSRange { selection }
+
+    public func markedRange() -> NSRange {
+        marked ?? NSRange(location: NSNotFound, length: 0)
+    }
+
+    public func attributedSubstring(from range: NSRange) -> NSAttributedString! {
+        guard range.location != NSNotFound, NSMaxRange(range) <= storage.length else { return nil }
+        return NSAttributedString(string: storage.substring(with: range))
+    }
+
+    public func string(from range: NSRange, actualRange: NSRangePointer!) -> String! {
+        guard range.location != NSNotFound, NSMaxRange(range) <= storage.length else { return nil }
+        actualRange?.pointee = range
+        return storage.substring(with: range)
+    }
+
+    public func length() -> Int { storage.length }
+
+    public func characterIndex(for point: NSPoint, tracking mappingMode: IMKLocationToOffsetMappingMode,
+                               inMarkedRange: UnsafeMutablePointer<ObjCBool>!) -> Int {
+        selection.location
+    }
+
+    public func attributes(forCharacterIndex index: Int, lineHeightRectangle lineRect: UnsafeMutablePointer<NSRect>!) -> [AnyHashable: Any]! {
+        lineRect?.pointee = caretRect
+        return [:]
+    }
+
+    public func firstRect(forCharacterRange aRange: NSRange, actualRange: NSRangePointer!) -> NSRect {
+        actualRange?.pointee = aRange
+        return caretRect
+    }
+
+    /// A plausible caret on the main screen, for the Hanja window's placement.
+    private var caretRect: NSRect { NSRect(x: 400, y: 400, width: 1, height: 18) }
+
+    public func validAttributesForMarkedText() -> [Any]! {
+        [NSAttributedString.Key.underlineStyle.rawValue,
+         NSAttributedString.Key.underlineColor.rawValue,
+         NSAttributedString.Key.markedClauseSegment.rawValue]
+    }
+
+    public func overrideKeyboard(withKeyboardNamed keyboardUniqueName: String!) {
+        log(.overrideKeyboard(keyboardUniqueName ?? ""))
+    }
+
+    public func selectMode(_ modeIdentifier: String!) {}
+    public func supportsUnicode() -> Bool { true }
+    public func bundleIdentifier() -> String! { bundleID }
+    public func windowLevel() -> CGWindowLevel { CGWindowLevelForKey(.normalWindow) }
+    public func supportsProperty(_ property: TSMDocumentPropertyTag) -> Bool { false }
+    public func uniqueClientIdentifierString() -> String! { "\(bundleID).\(ObjectIdentifier(self).hashValue)" }
+
+    // MARK: Host behavior
+
+    /// What the host does with a key the input method did not handle, as
+    /// `NSTextView` would: type its characters, delete, break the line, move.
+    public func performHostAction(for event: NSEvent) {
+        let flags = event.modifierFlags.intersection([.command, .control, .option])
+        if !flags.isEmpty {
+            log(.host("shortcut"))
+            return
+        }
+        switch Int(event.keyCode) {
+        case 51: // Backspace
+            deleteBackward()
+        case 36, 76: // Return, keypad Enter
+            insertByHost("\n")
+        case 48: // Tab
+            insertByHost("\t")
+        case 53: // Escape
+            log(.host("escape"))
+        case 123:
+            moveCaret(by: -1)
+        case 124:
+            moveCaret(by: 1)
+        case 125, 126:
+            log(.host("vertical"))
+        default:
+            guard let characters = event.characters, !characters.isEmpty,
+                  characters.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value < 0xF700 }) else {
+                log(.host("ignored"))
+                return
+            }
+            insertByHost(characters)
+        }
+    }
+
+    private func insertByHost(_ string: String) {
+        let inserted = replace(marked ?? selection, with: string)
+        marked = nil
+        selection = NSRange(location: NSMaxRange(inserted), length: 0)
+        log(.host("insert(\(string.replacingOccurrences(of: "\n", with: "\\n")))"))
+    }
+
+    private func deleteBackward() {
+        var range = selection
+        if range.length == 0 {
+            guard range.location > 0 else {
+                log(.host("delete(nothing)"))
+                return
+            }
+            range = storage.rangeOfComposedCharacterSequence(at: range.location - 1)
+        }
+        let removed = storage.substring(with: range)
+        storage.deleteCharacters(in: range)
+        marked = nil
+        selection = NSRange(location: range.location, length: 0)
+        log(.host("delete(\(removed))"))
+    }
+
+    private func moveCaret(by offset: Int) {
+        let location = max(0, min(storage.length, selection.location + offset))
+        selection = NSRange(location: location, length: 0)
+        log(.host(offset < 0 ? "left" : "right"))
+    }
+}

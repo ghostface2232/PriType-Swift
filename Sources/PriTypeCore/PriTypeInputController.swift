@@ -82,6 +82,31 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// - Warning: Access from main thread only.
     nonisolated(unsafe) private static var echoFilter = SystemModeEchoFilter()
 
+    /// Forget what macOS last selected (tests: each starts from a fresh system state).
+    static func resetSystemModeTracking() {
+        lastSystemMode = nil
+        echoFilter.reset()
+    }
+
+    /// Tells macOS which PriType mode a custom toggle selected, so the menu-bar
+    /// input source follows. Called on main right after the toggle; the default
+    /// defers the TIS selection off the hot path. A harness replaces it: driving
+    /// real controllers must not change the machine's input source.
+    /// - Warning: Access from main thread only.
+    nonisolated(unsafe) public static var systemModeReporter: (InputMode) -> Void = { mode in
+        DispatchQueue.main.async {
+            var expected = false
+            let selected = InputSourceManager.shared.selectPriTypeMode(english: mode == .english) {
+                echoFilter.expect(mode, at: ProcessInfo.processInfo.systemUptime)
+                expected = true
+            }
+            // A failed selection sends no echo; do not wait for one.
+            if expected && !selected {
+                echoFilter.withdrawLatest()
+            }
+        }
+    }
+
     /// Session-derived views for collaborators (Hanja lookup in `HangulComposer`).
     public var currentAdapter: (any HangulComposerDelegate)? { session?.adapter }
     public var cachedContext: ClientContext? { session?.context }
@@ -230,17 +255,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // contradicting the composer. Deferred off the hot path, and only after
         // the composer has already switched, so a slow or failing selection
         // cannot delay the next keystroke. See InputSourceManager.
-        DispatchQueue.main.async {
-            var expected = false
-            let selected = InputSourceManager.shared.selectPriTypeMode(english: nextMode == .english) {
-                Self.echoFilter.expect(nextMode, at: ProcessInfo.processInfo.systemUptime)
-                expected = true
-            }
-            // A failed selection sends no echo; do not wait for one.
-            if expected && !selected {
-                Self.echoFilter.withdrawLatest()
-            }
-        }
+        Self.systemModeReporter(nextMode)
     }
 
     // A custom toggle switches the composer synchronously and then reports the

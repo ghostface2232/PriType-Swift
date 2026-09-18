@@ -1,5 +1,6 @@
 import Foundation
 import PriTypeCore
+import PriTypeIMKHarness
 
 // No-op status bar for accurate benchmarking (excludes NSStatusItem overhead)
 final class NoopStatusBar: StatusBarUpdating {
@@ -290,9 +291,100 @@ if composer.inputMode != .korean {
 }
 
 // =============================================
-// 7. 최종 메모리 보고
+// 7. 타이핑 경로 지연 (IMK 하니스)
 // =============================================
-separator("7️⃣  최종 메모리 보고")
+separator("7️⃣  타이핑 경로 지연 (키 → 글자, IMK 하니스)")
+
+// Real PriTypeInputController + composer + delivery adapter, driven by
+// PriTypeIMKHarness against a fake text field. Per key: from the keyDown
+// entering handle() until the field holds the result. Window-server delivery,
+// IMK's XPC hop and the host's drawing are not included.
+func percentile(_ sorted: [UInt64], _ p: Double) -> Double {
+    guard !sorted.isEmpty else { return 0 }
+    let index = min(sorted.count - 1, Int((Double(sorted.count) * p).rounded(.up)) - 1)
+    return Double(sorted[max(0, index)]) / 1000
+}
+
+func reportLatency(_ label: String, _ samples: [UInt64]) {
+    let sorted = samples.sorted()
+    let line = String(format: "p50 %.1fμs, p95 %.1fμs, p99 %.1fμs, max %.1fμs",
+                      percentile(sorted, 0.50), percentile(sorted, 0.95),
+                      percentile(sorted, 0.99), Double(sorted.last ?? 0) / 1000)
+    print("  \(label) (\(samples.count)키): \(line)")
+}
+
+let passage = "다람쥐 헌 쳇바퀴에 타고파. 키스의 고유조건은 입술끼리 만나야 하고 특별한 기술은 필요치 않다. "
+    + "닭갈비와 삶은 달걀, 읽고 앉아 없는 값을 셈했다! 동해 물과 백두산이 마르고 닳도록 하느님이 보우하사 우리나라 만세. "
+let passageKeys = Dubeolsik.keys(for: passage)
+let rounds = 20
+var typingPass = true
+
+let harness = IMKHarness()
+
+// Korean: every key composes or commits.
+var koreanSamples: [UInt64] = []
+for round in 0...rounds {
+    autoreleasepool {
+        let field = harness.makeField()
+        harness.focus(field)
+        harness.resetLatencies()
+        harness.type(passageKeys)
+        if field.client.text != passage { typingPass = false }
+        if round > 0 { koreanSamples += harness.keyLatencies } // round 0 warms up
+    }
+}
+reportLatency("한글 문단 입력", koreanSamples)
+
+// English mode: keys pass straight through to the host.
+var englishSamples: [UInt64] = []
+harness.toggle()
+for round in 0...rounds {
+    autoreleasepool {
+        let field = harness.makeField()
+        harness.focus(field)
+        harness.resetLatencies()
+        harness.type(passageKeys)
+        if field.client.text != passageKeys { typingPass = false }
+        if round > 0 { englishSamples += harness.keyLatencies }
+    }
+}
+harness.toggle()
+reportLatency("영문 모드 입력", englishSamples)
+
+// Backspace through composing syllables and committed text.
+var backspaceSamples: [UInt64] = []
+for _ in 0..<rounds {
+    let field = harness.makeField()
+    harness.focus(field)
+    harness.type(Dubeolsik.keys(for: "닭볶음탕 괜찮다"))
+    harness.resetLatencies()
+    for _ in 0..<30 { harness.press(.backspace) }
+    if !field.client.text.isEmpty { typingPass = false }
+    backspaceSamples += harness.keyLatencies
+}
+reportLatency("백스페이스", backspaceSamples)
+
+// A toggle queued by the key monitor, applied by the next key: that key pays for it.
+var toggleSamples: [UInt64] = []
+for _ in 0..<(rounds * 10) {
+    let field = harness.makeField()
+    harness.focus(field)
+    harness.type("gks")
+    harness.toggleFromKeyMonitor()
+    harness.resetLatencies()
+    harness.type("a")
+    toggleSamples += harness.keyLatencies
+    if field.client.text != "한a" { typingPass = false }
+    harness.toggle()
+}
+reportLatency("한/영 전환 직후 첫 키", toggleSamples)
+harness.finish()
+print("  입력 결과 검증: \(typingPass ? "✅ PASS" : "❌ FAIL")")
+
+// =============================================
+// 8. 최종 메모리 보고
+// =============================================
+separator("8️⃣  최종 메모리 보고")
 let finalMemory = memoryUsageMB()
 print("  초기:       \(String(format: "%6.1f", baseMemory))MB")
 print("  사전 로딩:  \(String(format: "%6.1f", afterDictMemory))MB (\(String(format: "+%.1f", afterDictMemory - baseMemory))MB)")
@@ -305,11 +397,12 @@ print("  벤치마크 후: \(String(format: "%6.1f", finalMemory))MB (\(String(f
 print("\n" + String(repeating: "=", count: 60))
 print("  📋 벤치마크 결과 요약")
 print(String(repeating: "=", count: 60))
-let allPassed = allMatch && concurrentErrors == 0 && concErrors2 == 0 && rectPass
+let allPassed = allMatch && concurrentErrors == 0 && concErrors2 == 0 && rectPass && typingPass
 print("  자모 매핑 일치:  \(allMatch ? "✅ PASS" : "❌ FAIL")")
 print("  순차 안전성:    \(concurrentErrors == 0 ? "✅ PASS" : "❌ FAIL")")
 print("  Thread Safety:  \(concErrors2 == 0 ? "✅ PASS" : "❌ FAIL") (\(totalOps)회 동시 검색)")
 print("  Rect 검증:      \(rectPass ? "✅ PASS" : "❌ FAIL") (\(rectTests.count)개 테스트 케이스)")
+print("  타이핑 경로:    \(typingPass ? "✅ PASS" : "❌ FAIL") (IMK 하니스 입력 결과)")
 print("  메모리 증가:     \(String(format: "+%.1f", finalMemory - baseMemory))MB")
 print(String(repeating: "─", count: 60))
 print("  종합 결과: \(allPassed ? "✅ ALL TESTS PASSED" : "❌ SOME TESTS FAILED")")
