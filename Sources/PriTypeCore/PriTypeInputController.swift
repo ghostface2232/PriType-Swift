@@ -181,16 +181,21 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
 
     // MARK: - Keyboard Layout (English pass-through support)
 
+    /// Runs synchronously on purpose: the first English key after a toggle or
+    /// activation must already see the Roman layout.
     private func syncRomanKeyboardLayout(for client: IMKTextInput, force: Bool = false) {
         guard composer.inputMode == .english else { return }
-        guard let layoutID = InputSourceManager.enabledRomanKeyboardLayoutID(
-            in: InputSourceManager.shared.getEnabledKeyboardInputSources().map(\.id)
-        ) else { return }
+        // Throttle before asking TIS, so a skipped call costs nothing.
         let clientID = ObjectIdentifier(client as AnyObject)
         let now = CFAbsoluteTimeGetCurrent()
         guard force || lastKeyboardOverrideClientID != clientID || now - lastKeyboardOverrideTime > 0.5 else {
             return
         }
+        // Resolved live, not cached: the user can disable ABC at any time, and a
+        // stale answer would override a client with a layout they removed.
+        guard let layoutID = InputSourceManager.enabledRomanKeyboardLayoutID(
+            in: InputSourceManager.shared.getEnabledKeyboardInputSources().map(\.id)
+        ) else { return }
 
         let selector = NSSelectorFromString("overrideKeyboardWithKeyboardNamed:")
         let object = client as AnyObject
