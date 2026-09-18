@@ -33,8 +33,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         setupIOKit()
         
         // Pre-load Hanja dictionary in background for instant lookup
-        DispatchQueue.global(qos: .utility).async {
-            HanjaManager.shared.loadIfNeeded()
+        if ConfigurationManager.shared.hanjaEnabled {
+            DispatchQueue.global(qos: .utility).async {
+                HanjaManager.shared.loadIfNeeded()
+            }
         }
         
         // Setup update notifications

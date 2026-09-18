@@ -41,6 +41,20 @@ struct IOKitShortcutRoutingTests {
                       toggleEnabled: toggleEnabled, paused: paused, at: now)
     }
 
+    @Test("With Hanja conversion off, the Hanja key triggers nothing")
+    func hanjaOff() {
+        var state = HIDShortcutState()
+        #expect(state.consume(usage: HIDUsage.rightOption, pressed: true, device: 1,
+                              toggle: rightCommandBinding, hanja: rightOptionBinding,
+                              hanjaEnabled: false, at: 0) == nil)
+        #expect(state.consume(usage: HIDUsage.rightOption, pressed: false, device: 1,
+                              toggle: rightCommandBinding, hanja: rightOptionBinding,
+                              hanjaEnabled: false, at: 0.1) == nil)
+        #expect(state.consume(usage: HIDUsage.rightOption, pressed: true, device: 1,
+                              toggle: rightCommandBinding, hanja: rightOptionBinding,
+                              hanjaEnabled: true, at: 1) == .hanja)
+    }
+
     @Test("A standalone ordinary key toggles on its own key down")
     func ordinaryKeyToggles() {
         var state = HIDShortcutState()

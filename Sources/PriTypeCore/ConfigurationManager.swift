@@ -394,6 +394,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         static let toggleKey = "com.pritype.toggleKey"  // Legacy
         static let toggleKeyBinding = "com.pritype.toggleKeyBinding"
         static let hanjaKeyBinding = "com.pritype.hanjaKeyBinding"
+        static let hanjaEnabled = "com.pritype.hanjaEnabled"
         static let lastUpdateCheck = "com.pritype.lastUpdateCheck"
         static let autoUpdateCheck = "com.pritype.autoUpdateCheck"
         static let experimentalDirectInsertion = "com.pritype.experimentalDirectInsertion"
@@ -505,6 +506,28 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         }
     }
     
+    // MARK: - Hanja
+
+    private var _cachedHanjaEnabled: Bool?
+
+    /// Whether Hanja conversion is on. When off, the Hanja key is not intercepted
+    /// (it reaches apps as a plain key) and the dictionary is never mapped.
+    /// Default: on. Cached because the event tap reads it on every key event.
+    public var hanjaEnabled: Bool {
+        get {
+            keyBindingLock.withLock {
+                if let cached = _cachedHanjaEnabled { return cached }
+                let value = defaults.object(forKey: Keys.hanjaEnabled) as? Bool ?? true
+                _cachedHanjaEnabled = value
+                return value
+            }
+        }
+        set {
+            keyBindingLock.withLock { _cachedHanjaEnabled = newValue }
+            defaults.set(newValue, forKey: Keys.hanjaEnabled)
+        }
+    }
+
     // MARK: - Toggle Exclusions
 
     /// Bundle IDs of apps that must receive the toggle/hanja key themselves.

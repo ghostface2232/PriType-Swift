@@ -51,6 +51,22 @@ public final class HanjaManager: @unchecked Sendable {
         }
     }
 
+    /// Drop the mapping and the symbol table, for when Hanja conversion is turned
+    /// off. A load in progress finishes; the next `unload` or search sees it.
+    public func unload() {
+        condition.withLock {
+            switch state {
+            case .loaded, .failed: state = .unloaded
+            case .unloaded, .loading: break
+            }
+        }
+        jamoLock.withLock {
+            jamoSymbols = [:]
+            jamoSymbolsLoaded = false
+        }
+        DebugLogger.log("HanjaManager: Unloaded")
+    }
+
     /// The mapped dictionary. Loads it on this thread when nobody has; returns nil
     /// without waiting when another thread is loading it.
     private func dictionary() -> HanjaDictionary? {

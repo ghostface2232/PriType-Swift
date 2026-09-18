@@ -84,7 +84,7 @@ struct HIDShortcutState {
 
     mutating func consume(usage: UInt32, pressed: Bool, device: UInt64 = 0,
                           toggle: KeyBinding, hanja: KeyBinding,
-                          toggleEnabled: Bool = true, paused: Bool = false,
+                          toggleEnabled: Bool = true, hanjaEnabled: Bool = true, paused: Bool = false,
                           at now: TimeInterval = HIDShortcutState.timestamp()) -> Action? {
         expireStaleHolds(before: now - Self.holdExpiry)
         if lastBindings != [toggle, hanja] {
@@ -124,7 +124,7 @@ struct HIDShortcutState {
             }
             return .toggle
         }
-        guard matches(hanja) else { return nil }
+        guard hanjaEnabled, matches(hanja) else { return nil }
         if hanja.isModifierKey, let last = lastHanja, now - last < Self.hanjaDebounce { return nil }
         lastHanja = now
         return .hanja

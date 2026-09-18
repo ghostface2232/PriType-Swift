@@ -214,7 +214,8 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     // Internal entry point permits event-sequence tests without installing a tap.
     func handleEvent(type: CGEventType, event: CGEvent,
                      toggle: KeyBinding? = nil, hanja: KeyBinding? = nil,
-                     toggleEnabled: Bool? = nil, recoveryFlags: UInt64? = nil,
+                     toggleEnabled: Bool? = nil, hanjaEnabled: Bool? = nil,
+                     recoveryFlags: UInt64? = nil,
                      excludedOverride: Bool? = nil) -> Unmanaged<CGEvent>? {
         lock.lock()
         defer { lock.unlock() }
@@ -255,6 +256,11 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         let priTypeToggleEnabled = (toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled) && !excluded
         if !priTypeToggleEnabled {
             toggleModifierIsDown = false
+        }
+        // Hanja conversion turned off: its key is an ordinary key again.
+        let priTypeHanjaEnabled = hanjaEnabled ?? config.hanjaEnabled
+        if !priTypeHanjaEnabled {
+            hanjaModifierIsDown = false
         }
         // Exclusion is enforced by this single early return, NOT by per-branch
         // guards below. Keep it that way: with two mechanisms, removing this return
@@ -311,7 +317,8 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             }
             
             // Dynamic hanja key — modifier key, single-key binding (only if different from toggle key)
-            if hanjaBinding.isModifierKey && hanjaBinding.isModifierOnly && keyCode == hanjaBinding.keyCode && keyCode != toggleBinding.keyCode {
+            if priTypeHanjaEnabled && hanjaBinding.isModifierKey && hanjaBinding.isModifierOnly
+                && keyCode == hanjaBinding.keyCode && keyCode != toggleBinding.keyCode {
                 let isPressed = ModifierKeyState.isDown(keyCode, flags: flags.rawValue)
                 
                 if isPressed && !hanjaModifierIsDown {
@@ -344,7 +351,8 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         if type == .keyDown {
             // Reconcile on every key: a release may have been lost while disabled.
             toggleModifierIsDown = ModifierKeyState.isDown(toggleBinding.keyCode, flags: event.flags.rawValue)
-            hanjaModifierIsDown = ModifierKeyState.isDown(hanjaBinding.keyCode, flags: event.flags.rawValue)
+            hanjaModifierIsDown = priTypeHanjaEnabled
+                && ModifierKeyState.isDown(hanjaBinding.keyCode, flags: event.flags.rawValue)
             // The window server keeps generating keyDown while an ordinary key is
             // held, so acting on every one flaps the input source for as long as
             // the user leans on it. Keep suppressing the repeats — the key must
@@ -375,7 +383,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             // Regular key (non-modifier) as hanja — single key or combo
             // A matching toggle already returned above. Sharing a physical key is
             // valid when the two bindings require different modifiers.
-            if keyCode == hanjaBinding.keyCode && !hanjaBinding.isModifierKey {
+            if priTypeHanjaEnabled && keyCode == hanjaBinding.keyCode && !hanjaBinding.isModifierKey {
                 if hanjaBinding.isModifierOnly || Self.hasRequiredModifiers(flags: event.flags, required: CGEventFlags(rawValue: hanjaBinding.modifiers)) {
                     if isAutorepeat { return nil }
                     DebugLogger.log("RightCommandSuppressor: Regular key hanja (\(hanjaBinding.displayName)) - HANJA")

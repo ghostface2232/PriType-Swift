@@ -160,6 +160,19 @@ struct HanjaManagerLoadingTests {
         #expect(attempts.value == 1)
     }
 
+    @Test("Unloading drops the dictionary; the next search maps it again")
+    func unloadAndReload() throws {
+        let data = try HanjaDictionary.compile(source: HanjaDictionaryTests.sample)
+        let attempts = LockedCounter()
+        let manager = HanjaManager(loader: { attempts.increment(); return try? HanjaDictionary(data: data) })
+        manager.loadIfNeeded()
+        #expect(manager.isLoaded)
+        manager.unload()
+        #expect(!manager.isLoaded)
+        #expect(manager.search(key: "가").count == 3)
+        #expect(attempts.value == 2)
+    }
+
     @Test("Jamo keys use the symbol table even without the dictionary")
     func jamoWithoutDictionary() {
         let manager = HanjaManager(loader: { nil })

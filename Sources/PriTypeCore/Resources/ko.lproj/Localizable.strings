@@ -14,6 +14,9 @@
 "keyBinding.title" = "키 설정";
 "keyBinding.toggleKey" = "한/영 전환키";
 "keyBinding.hanjaKey" = "한자 입력키";
+"keyBinding.hanjaEnabled" = "한자 변환";
+"keyBinding.hanjaEnabledDescription" = "끄면 한자 사전을 불러오지 않고, 한자 입력키는 원래 키로 동작합니다.";
+"keyBinding.disabledByHanjaOff" = "한자 변환이 꺼져 있어 비활성화됨";
 "keyBinding.recording" = "키를 입력하세요...";
 "keyBinding.change" = "변경";
 "keyBinding.conflict" = "같은 키는 사용할 수 없습니다";

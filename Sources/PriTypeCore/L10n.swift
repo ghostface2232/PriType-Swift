@@ -56,6 +56,9 @@ public enum L10n {
         public static var title: String { localized("keyBinding.title") }
         public static var toggleKey: String { localized("keyBinding.toggleKey") }
         public static var hanjaKey: String { localized("keyBinding.hanjaKey") }
+        public static var hanjaEnabled: String { localized("keyBinding.hanjaEnabled") }
+        public static var hanjaEnabledDescription: String { localized("keyBinding.hanjaEnabledDescription") }
+        public static var disabledByHanjaOff: String { localized("keyBinding.disabledByHanjaOff") }
         public static var recording: String { localized("keyBinding.recording") }
         public static var change: String { localized("keyBinding.change") }
         public static var conflict: String { localized("keyBinding.conflict") }

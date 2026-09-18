@@ -619,6 +619,8 @@ public class HangulComposer: @unchecked Sendable {
     /// This is the public entry point for Hanja conversion.
     /// Acts as a toggle: dismisses if already visible, opens if not.
     public func triggerHanjaLookup() {
+        // A lookup queued just before the setting was turned off.
+        guard ConfigurationManager.shared.hanjaEnabled else { return }
         // Toggle behavior: if already showing, dismiss
         if HanjaCandidateWindow.shared.isVisible {
             HanjaCandidateWindow.shared.dismiss()

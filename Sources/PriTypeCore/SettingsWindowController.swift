@@ -94,6 +94,7 @@ extension SettingsWindowController: NSWindowDelegate {
 struct SettingsView: View {
     @State private var toggleKeyBinding = ConfigurationManager.shared.toggleKeyBinding
     @State private var hanjaKeyBinding = ConfigurationManager.shared.hanjaKeyBinding
+    @State private var hanjaEnabled = ConfigurationManager.shared.hanjaEnabled
     @State private var autoUpdateCheckEnabled = ConfigurationManager.shared.autoUpdateCheckEnabled
     @State private var isAccessibilityGranted = false
     @State private var hasKeyConflict = false
@@ -156,6 +157,7 @@ struct SettingsView: View {
         .onAppear {
             toggleKeyBinding = ConfigurationManager.shared.toggleKeyBinding
             hanjaKeyBinding = ConfigurationManager.shared.hanjaKeyBinding
+            hanjaEnabled = ConfigurationManager.shared.hanjaEnabled
             autoUpdateCheckEnabled = ConfigurationManager.shared.autoUpdateCheckEnabled
             experimentalDirectInsertion = ConfigurationManager.shared.experimentalDirectInsertion
             reloadExcludedApps()
@@ -213,14 +215,25 @@ struct SettingsView: View {
                         .opacity(0.2)
                         .padding(.horizontal, 12)
 
+                    SettingsToggleRow(
+                        title: L10n.keyBinding.hanjaEnabled,
+                        subtitle: L10n.keyBinding.hanjaEnabledDescription,
+                        icon: "character.book.closed",
+                        isOn: $hanjaEnabled
+                    )
+
+                    Divider()
+                        .opacity(0.2)
+                        .padding(.horizontal, 12)
+
                     KeyRecorderRow(
                         label: L10n.keyBinding.hanjaKey,
-                        icon: "character.book.closed",
+                        icon: "keyboard",
                         binding: $hanjaKeyBinding,
                         conflictBinding: toggleKeyBinding,
                         hasConflict: $hasKeyConflict,
-                        isDisabled: false,
-                        disabledReason: nil,
+                        isDisabled: !hanjaEnabled,
+                        disabledReason: L10n.keyBinding.disabledByHanjaOff,
                         valueOverride: nil,
                         onCapsLockBlocked: { showCapsLockBlockedAlert = true }
                     )
@@ -270,6 +283,17 @@ struct SettingsView: View {
                 }
                 ConfigurationManager.shared.toggleKeyBinding = newValue
                 clearKeyConflict()
+            }
+            .onChange(of: hanjaEnabled) { _, isOn in
+                ConfigurationManager.shared.hanjaEnabled = isOn
+                if isOn {
+                    DispatchQueue.global(qos: .utility).async {
+                        HanjaManager.shared.loadIfNeeded()
+                    }
+                } else {
+                    PriTypeInputController.sharedComposer.dismissHanjaCandidates(reason: "Hanja turned off")
+                    HanjaManager.shared.unload()
+                }
             }
             .onChange(of: hanjaKeyBinding) { _, newValue in
                 if isRestoringKeyBinding {
@@ -690,7 +714,8 @@ struct SettingsView: View {
         // switching, the toggle key is not consumed at all (the row is disabled and
         // reads "managed by macOS"), so warning about it would tell the user to
         // reassign a system shortcut for no reason.
-        let active = capsLockSwitchEnabled ? [hanjaKeyBinding] : [toggleKeyBinding, hanjaKeyBinding]
+        var active = capsLockSwitchEnabled ? [] : [toggleKeyBinding]
+        if hanjaEnabled { active.append(hanjaKeyBinding) }
         var seen = Set<String>()
         return active
             .compactMap { $0.systemShortcutConflict }

@@ -14,6 +14,9 @@
 "keyBinding.title" = "Key Settings";
 "keyBinding.toggleKey" = "Toggle Key";
 "keyBinding.hanjaKey" = "Hanja Key";
+"keyBinding.hanjaEnabled" = "Hanja Conversion";
+"keyBinding.hanjaEnabledDescription" = "When off, the Hanja dictionary is never loaded and the Hanja key works as its ordinary key.";
+"keyBinding.disabledByHanjaOff" = "Disabled while Hanja conversion is off";
 "keyBinding.recording" = "Press a key...";
 "keyBinding.change" = "Change";
 "keyBinding.conflict" = "Cannot use the same key";

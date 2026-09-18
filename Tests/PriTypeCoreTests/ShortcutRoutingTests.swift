@@ -101,3 +101,51 @@ struct ShortcutRoutingTests {
         #expect(actions.snapshot == ["toggle"])
     }
 }
+
+@Suite("Hanja conversion off")
+@MainActor
+struct HanjaDisabledRoutingTests {
+    @Test("With Hanja off, a modifier Hanja key reaches the app and looks up nothing")
+    func modifierKeyPassesThrough() async throws {
+        let actions = ShortcutActions()
+        let toggle = KeyBinding(keyCode: 54, modifiers: 0, displayName: "Right Command")
+        let hanja = KeyBinding(keyCode: 61, modifiers: 0, displayName: "Right Option")
+        func rightOptionDown() throws -> CGEvent {
+            let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 61, keyDown: true))
+            event.type = .flagsChanged
+            event.flags = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | 0x40)
+            return event
+        }
+        let off = RightCommandSuppressor()
+        off.onHanjaLookup = { _ in actions.record("off") }
+        #expect(off.handleEvent(type: .flagsChanged, event: try rightOptionDown(), toggle: toggle, hanja: hanja,
+            toggleEnabled: true, hanjaEnabled: false, excludedOverride: false) != nil)
+        // The same press with Hanja on is consumed and looks up.
+        let on = RightCommandSuppressor()
+        on.onHanjaLookup = { _ in actions.record("on") }
+        #expect(on.handleEvent(type: .flagsChanged, event: try rightOptionDown(), toggle: toggle, hanja: hanja,
+            toggleEnabled: true, hanjaEnabled: true, excludedOverride: false) == nil)
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        #expect(actions.snapshot == ["on"])
+    }
+
+    @Test("With Hanja off, a regular-key Hanja binding types normally")
+    func regularKeyPassesThrough() async throws {
+        let tap = RightCommandSuppressor()
+        let actions = ShortcutActions()
+        tap.onHanjaLookup = { _ in actions.record("hanja") }
+        let toggle = KeyBinding(keyCode: 54, modifiers: 0, displayName: "Right Command")
+        let hanja = KeyBinding(keyCode: 105, modifiers: 0, displayName: "F13")
+        let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 105, keyDown: true))
+        #expect(tap.handleEvent(type: .keyDown, event: event, toggle: toggle, hanja: hanja,
+            toggleEnabled: true, hanjaEnabled: false, excludedOverride: false) != nil)
+        #expect(tap.handleEvent(type: .keyDown, event: event, toggle: toggle, hanja: hanja,
+            toggleEnabled: true, hanjaEnabled: true, excludedOverride: false) == nil)
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        #expect(actions.snapshot == ["hanja"])
+    }
+}
