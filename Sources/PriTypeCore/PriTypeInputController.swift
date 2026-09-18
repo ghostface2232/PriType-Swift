@@ -78,6 +78,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// - Warning: Access from main thread only (guaranteed by IMK).
     nonisolated(unsafe) private static var lastSystemMode: InputMode?
 
+    /// Reports sent to macOS whose `setValue` echo has not come back yet.
+    /// - Warning: Access from main thread only.
+    nonisolated(unsafe) private static var echoFilter = SystemModeEchoFilter()
+
     /// Session-derived views for collaborators (Hanja lookup in `HangulComposer`).
     public var currentAdapter: (any HangulComposerDelegate)? { session?.adapter }
     public var cachedContext: ClientContext? { session?.context }
@@ -221,9 +225,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // contradicting the composer. Deferred off the hot path, and only after
         // the composer has already switched, so a slow or failing selection
         // cannot delay the next keystroke. See InputSourceManager.
-        let selectEnglish = nextMode == .english
         DispatchQueue.main.async {
-            InputSourceManager.shared.selectPriTypeMode(english: selectEnglish)
+            InputSourceManager.shared.selectPriTypeMode(english: nextMode == .english) {
+                Self.echoFilter.expect(nextMode, at: ProcessInfo.processInfo.systemUptime)
+            }
         }
     }
 
@@ -327,6 +332,15 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             DebugLogger.log("PriTypeInputController: setValue inputMode='\(inputModeID)' target=\(String(describing: targetMode)) current=\(composer.inputMode)")
             guard let targetMode else {
                 super.setValue(value, forTag: tag, client: sender)
+                return
+            }
+
+            // The echo of our own report after a custom toggle. The composer is
+            // already where the user put it — possibly past this value, if they
+            // toggled again before the echo arrived — so only note the system state.
+            if Self.echoFilter.consumeEcho(of: targetMode, at: ProcessInfo.processInfo.systemUptime) {
+                DebugLogger.log("PriTypeInputController: consumed echo of reported mode \(targetMode)")
+                Self.lastSystemMode = targetMode
                 return
             }
 

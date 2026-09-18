@@ -56,9 +56,11 @@ public final class InputSourceManager: @unchecked Sendable {
     /// rather than cached: the user can enable or disable a mode at any time.
     ///
     /// - Important: Call off the toggle hot path.
+    /// - Parameter beforeSelecting: runs only when a selection is actually issued,
+    ///   right before it, so the caller can expect the `setValue` echo it causes.
     /// - Returns: whether the requested mode is now the selected input source.
     @discardableResult
-    public func selectPriTypeMode(english: Bool) -> Bool {
+    public func selectPriTypeMode(english: Bool, beforeSelecting: () -> Void = {}) -> Bool {
         guard let source = priTypeModeSource(english: english) else {
             DebugLogger.log("InputSourceManager: no enabled PriType \(english ? "english" : "korean") mode to select")
             return false
@@ -66,6 +68,7 @@ public final class InputSourceManager: @unchecked Sendable {
         if boolProperty(source, kTISPropertyInputSourceIsSelected) {
             return true
         }
+        beforeSelecting()
         let status = TISSelectInputSource(source)
         guard status == noErr else {
             DebugLogger.log("InputSourceManager: TISSelectInputSource failed (\(status))")

@@ -95,7 +95,9 @@ CGEventTap / IOKit  ──(키 감지만)──►  InputModeCoordinator   (정�
    - `PriTypeInputController.performPriTypeModeTransition` (사용자 토글)
    - `PriTypeInputController.setValue(_:forTag:)` ingress (사용자가 실제로 입력 소스를 바꾼 경우만.
      IMK는 활성화마다 현재 소스를 재통보하므로 직전에 관측한 값과 같으면 무시한다. 그러지 않으면
-     포커스가 돌아올 때마다 custom toggle이 되돌려진다.)
+     포커스가 돌아올 때마다 custom toggle이 되돌려진다. 전환 후 통보한 모드가 되돌아오는 echo도
+     `SystemModeEchoFilter`로 소비만 하고 적용하지 않는다. 빠른 연타에서 늦게 도착한 첫 echo가
+     두 번째 전환을 뒤집기 때문이다.)
    `activateServer`(포커스 변경) 등 다른 경로는 모드를 건드리지 않는다.
 3. 모드 전환 전 active composition은 정확히 1회 commit한다.
 4. 전환 직후 keyDown을 막거나 replay하지 않는다. 전환이 즉시 완료되므로 불필요하다.

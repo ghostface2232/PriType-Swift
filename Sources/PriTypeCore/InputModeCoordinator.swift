@@ -117,6 +117,37 @@ public final class InputModeCoordinator: @unchecked Sendable {
     }
 }
 
+/// Recognizes macOS echoing back a mode PriType reported itself.
+///
+/// A custom toggle switches the composer at once and then reports the result
+/// with `TISSelectInputSource`, which macOS answers later with `setValue`. With two
+/// quick toggles (K→E→K) the echo of the first report can arrive after the
+/// second toggle, and applying it would flip the composer back to English until
+/// the second echo lands — keys typed in between come out in the wrong mode.
+/// Echoes carry no information the composer lacks, so they are consumed instead.
+///
+/// A report whose echo never comes (the selection only moved the menu-bar icon,
+/// or failed) expires, so it cannot swallow a real selection later.
+struct SystemModeEchoFilter {
+    static let lifetime: TimeInterval = 1.0
+
+    private var outstanding: [(mode: InputMode, deadline: TimeInterval)] = []
+
+    /// Record a report that is about to be sent.
+    mutating func expect(_ mode: InputMode, at now: TimeInterval) {
+        outstanding.append((mode, now + Self.lifetime))
+    }
+
+    /// Whether `mode` is the echo of a report. Consumes it and every older report,
+    /// since echoes arrive in order and the system may coalesce them.
+    mutating func consumeEcho(of mode: InputMode, at now: TimeInterval) -> Bool {
+        outstanding.removeAll { $0.deadline < now }
+        guard let index = outstanding.firstIndex(where: { $0.mode == mode }) else { return false }
+        outstanding.removeFirst(index + 1)
+        return true
+    }
+}
+
 /// A mode notification received before its controller owns the engine is only
 /// valid until another explicit mode selection supersedes it.
 struct DeferredInputMode {

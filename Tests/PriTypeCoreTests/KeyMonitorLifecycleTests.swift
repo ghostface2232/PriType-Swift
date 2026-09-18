@@ -247,3 +247,49 @@ struct PendingToggleTests {
         #expect(abs(RightCommandSuppressor.eventTime(of: event) - now) < 1)
     }
 }
+
+@Suite("System mode echo filter")
+struct SystemModeEchoFilterTests {
+    @Test("A late echo of an earlier toggle is consumed, not applied")
+    func lateEchoAfterSecondToggle() {
+        var filter = SystemModeEchoFilter()
+        filter.expect(.english, at: 0)   // K→E reported
+        filter.expect(.korean, at: 0.01) // E→K reported before the first echo
+        let echo1 = filter.consumeEcho(of: .english, at: 0.05)
+        #expect(echo1)
+        let echo2 = filter.consumeEcho(of: .korean, at: 0.06)
+        #expect(echo2)
+        // Nothing outstanding: a real selection afterwards goes through.
+        let echo3 = filter.consumeEcho(of: .english, at: 0.2)
+        #expect(!echo3)
+    }
+
+    @Test("A coalesced echo retires the older reports with it")
+    func coalescedEcho() {
+        var filter = SystemModeEchoFilter()
+        filter.expect(.english, at: 0)
+        filter.expect(.korean, at: 0.01)
+        let echo4 = filter.consumeEcho(of: .korean, at: 0.05)
+        #expect(echo4)
+        let echo5 = filter.consumeEcho(of: .english, at: 0.06)
+        #expect(!echo5)
+    }
+
+    @Test("A report whose echo never came cannot swallow a later selection")
+    func expiredReport() {
+        var filter = SystemModeEchoFilter()
+        filter.expect(.english, at: 0)
+        let echo6 = filter.consumeEcho(of: .english, at: SystemModeEchoFilter.lifetime + 0.1)
+        #expect(!echo6)
+    }
+
+    @Test("A selection of the other mode is never taken for an echo")
+    func otherModeIsReal() {
+        var filter = SystemModeEchoFilter()
+        filter.expect(.english, at: 0)
+        let echo7 = filter.consumeEcho(of: .korean, at: 0.05)
+        #expect(!echo7)
+        let echo8 = filter.consumeEcho(of: .english, at: 0.06)
+        #expect(echo8)
+    }
+}
