@@ -144,6 +144,8 @@ PriType의 `ComponentInputModeDict`는 단일 mode `com.pritype.inputmethod.v2`�
 
 `Tools/hanja/hanja.txt`(항목 303,494개, 키 222,709개)를 `PriTypeHanjaCompiler`로 컴파일한 정렬 바이너리 `hanja.dat`를 메모리 매핑해 이진 탐색으로 exact match 검색을 수행한다(`HanjaDictionary`). `"가"` → `[價, 家, 加, ...]` 형태의 결과를 반환한다. 로딩은 매핑과 오프셋 표 검증뿐이라 약 1ms이고, 다른 스레드가 로딩 중이면 검색은 기다리지 않고 빈 결과를 돌려준다.
 
+한자키는 커서 앞 단어 단위로 찾는다(`searchWord(endingWith:)`). 조합 중인 글자와 `localTextBuffer`(없으면 앱이 알려 주는 커서 앞 글자)에서 끝의 한글 음절을 최대 10개 모아, 가장 긴 끝말부터 한 음절까지 차례로 사전을 찾는다. 후보는 자기 `hangul` 부분만 바꾸며, 여러 음절을 바꿀 때는 앱이 알려 주는 커서 앞 글자와 일치할 때만 바꾼다.
+
 ### 자모 특수문자 검색
 
 자음 입력 후 한자키를 누르면 `jamo_symbols.json`(14개 자음, 390개 특수문자)에서 특수문자 후보를 로딩한다. `"ㅁ"` → `[♥, ♡, ★, ...]` 형태의 결과를 반환한다.

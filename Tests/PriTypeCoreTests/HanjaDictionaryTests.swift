@@ -173,3 +173,70 @@ final class LockedCounter: @unchecked Sendable {
     func increment() { lock.withLock { count += 1 } }
     var value: Int { lock.withLock { count } }
 }
+
+@Suite("Hanja word lookup")
+struct HanjaWordLookupTests {
+    static let source = """
+    국:國:나라 국
+    국:局:판 국
+    민국:民國:
+    대한민국:大韓民國:
+    한국:韓國:
+    한:韓:나라 한
+    가:家:집 가
+    """
+
+    private func manager() throws -> HanjaManager {
+        let data = try HanjaDictionary.compile(source: Self.source)
+        return HanjaManager(loader: { try? HanjaDictionary(data: data) })
+    }
+
+    @Test("Longer words come first, then each shorter ending")
+    func longestFirst() throws {
+        let results = try manager().searchWord(endingWith: "대한민국")
+        #expect(results.map(\.hanja) == ["大韓民國", "民國", "國", "局"])
+        #expect(results.map(\.hangul) == ["대한민국", "민국", "국", "국"])
+    }
+
+    @Test("Only the Hangul run at the end counts")
+    func stopsAtNonHangul() throws {
+        let manager = try manager()
+        #expect(manager.searchWord(endingWith: "우리 한국").map(\.hanja) == ["韓國", "國", "局"])
+        #expect(manager.searchWord(endingWith: "abc한").map(\.hanja) == ["韓"])
+        #expect(manager.searchWord(endingWith: "한국 ").isEmpty)
+        #expect(manager.searchWord(endingWith: "").isEmpty)
+        #expect(manager.searchWord(endingWith: "한ㄱ").isEmpty)
+    }
+
+    @Test("Text without a dictionary word before the last syllable still finds it")
+    func unknownPrefix() throws {
+        #expect(try manager().searchWord(endingWith: "오늘가").map(\.hanja) == ["家"])
+    }
+
+    @Test("The word is capped at maxWordLength syllables")
+    func capsLength() {
+        let long = String(repeating: "가", count: 25)
+        #expect(HanjaManager.trailingHangulWord(in: long).count == HanjaManager.maxWordLength)
+        #expect(HanjaManager.trailingHangulWord(in: "x대한") == "대한")
+        let decomposed = "대한".decomposedStringWithCanonicalMapping
+        #expect(HanjaManager.trailingHangulWord(in: decomposed) == "대한")
+    }
+
+    @Test("A word replaces only the text it was looked up from")
+    func replacementCheck() {
+        let word = HanjaEntry(hangul: "대한", hanja: "大韓", meaning: "")
+        #expect(HangulComposer.canReplace("대한", with: word))
+        #expect(!HangulComposer.canReplace("가한", with: word))
+        #expect(HangulComposer.canReplace(nil, with: word))
+        let syllable = HanjaEntry(hangul: "한", hanja: "韓", meaning: "")
+        #expect(HangulComposer.canReplace("x", with: syllable))
+    }
+
+    @Test("The bundled dictionary converts a whole word")
+    func bundledWord() {
+        HanjaManager.shared.loadIfNeeded()
+        let results = HanjaManager.shared.searchWord(endingWith: "대한민국")
+        #expect(results.first?.hanja == "大韓民國")
+        #expect(results.contains { $0.hangul == "국" })
+    }
+}

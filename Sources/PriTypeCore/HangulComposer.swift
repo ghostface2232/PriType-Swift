@@ -647,56 +647,41 @@ public class HangulComposer: @unchecked Sendable {
             return false
         }
         
-        // Search key: only use OWNED state (preedit or localTextBuffer).
-        // Previously we had fallback strategies using textBeforeCursor/attributedSubstring,
-        // but those pick up existing text in the field that wasn't just typed,
-        // causing false-positive hanja windows in Chromium/Electron apps.
-        var searchKey = ""
-        var hadPreedit = false
-        
-        // Strategy 1: Current preedit (composing text) — most reliable
+        // Look up the word ending at the caret. Text comes from OWNED state first
+        // (preedit, then localTextBuffer). Reading the host's text is the last
+        // resort: in Chromium/Electron it picks up text that wasn't just typed.
         let preedit = context.getPreeditString()
         let preeditStr = CompositionHelpers.convertAndNormalize(preedit)
-        
-        if !preeditStr.isEmpty {
-            searchKey = preeditStr
-            hadPreedit = true
-            DebugLogger.log("Hanja: searchKey from preedit: '\(searchKey)'")
-        }
-        
-        // Strategy 2: localTextBuffer (last typed character) — only if from the same app
-        // Cross-app check: if the current focused app differs from the app that populated
-        // the buffer, the buffer content is stale and should not trigger hanja.
-        if searchKey.isEmpty {
-            // Use NSWorkspace as the primary source of truth for frontmost app, because
-            // cachedContext might be stale if the user clicked a non-text area in a new app.
-            let currentBundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-                ?? PriTypeInputController.sharedController?.cachedContext?.bundleId ?? ""
-            if isBufferFromApp(currentBundleId),
-               let lastChar = localTextBuffer.last, lastChar.isHangulChar {
-                searchKey = String(lastChar)
-                DebugLogger.log("Hanja: searchKey from localTextBuffer: '\(searchKey)'")
+        let hadPreedit = !preeditStr.isEmpty
+
+        // The buffer counts only if it was filled in the app that has focus now.
+        // Use NSWorkspace as the primary source of truth for frontmost app, because
+        // cachedContext might be stale if the user clicked a non-text area in a new app.
+        let currentBundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            ?? PriTypeInputController.sharedController?.cachedContext?.bundleId ?? ""
+        let buffer = isBufferFromApp(currentBundleId) ? localTextBuffer : ""
+
+        let lookupText: String
+        let entries: [HanjaEntry]
+        if hadPreedit && !preeditStr.allSatisfy(\.isHangulSyllable) {
+            // A lone jamo is not part of a word: ㅁ → ★, ♥, … from the symbol table.
+            lookupText = preeditStr
+            entries = HanjaManager.shared.search(key: preeditStr)
+        } else {
+            if hadPreedit || !HanjaManager.trailingHangulWord(in: buffer).isEmpty {
+                lookupText = buffer + preeditStr
+            } else {
+                // Nothing typed here: the caret was moved, e.g. with the arrow keys.
+                lookupText = delegate.textBeforeCursor(length: HanjaManager.maxWordLength) ?? ""
             }
+            entries = HanjaManager.shared.searchWord(endingWith: lookupText)
         }
-        
-        // Strategy 3: Read text before cursor if buffer is empty and no preedit
-        // This handles cases where the user used arrow keys to move the cursor
-        if searchKey.isEmpty {
-            if let text = delegate.textBeforeCursor(length: 1), let lastChar = text.last, lastChar.isHangulChar {
-                searchKey = String(lastChar)
-                DebugLogger.log("Hanja: searchKey from textBeforeCursor: '\(searchKey)'")
-            }
-        }
-        
-        guard !searchKey.isEmpty else {
-            DebugLogger.log("Hanja: No Hangul text to look up (buffer='\(localTextBuffer)', preedit='\(preeditStr)')")
-            return true // Consume the key but don't open the window
-        }
-        
-        let entries = HanjaManager.shared.search(key: searchKey)
+        let searchKey = entries.first?.hangul ?? ""
+        DebugLogger.logSensitive("Hanja: lookup", sensitiveContent: "'\(lookupText)' (preedit='\(preeditStr)')")
+
         guard !entries.isEmpty else {
-            DebugLogger.log("Hanja: No results for '\(searchKey)'")
-            return true
+            DebugLogger.log("Hanja: No candidates")
+            return true // Consume the key but don't open the window
         }
         
         DebugLogger.log("Hanja: Found \(entries.count) entries for '\(searchKey)'")
@@ -715,9 +700,6 @@ public class HangulComposer: @unchecked Sendable {
         if hadPreedit {
             commitComposition(delegate: delegate)
         }
-        
-        // Capture the hanjaKey length for use in the callback
-        let replacementLength = searchKey.utf16.count
         
         // Snapshot: Capture client identity at show time for validation at select time.
         // Use ObjectIdentifier instead of weak reference: if the weak ref is deallocated,
@@ -748,9 +730,19 @@ public class HangulComposer: @unchecked Sendable {
                         return
                     }
                     
+                    // The candidate replaces the text it was looked up from, which
+                    // may be a whole word ending at the caret.
+                    let replacementLength = entry.hangul.utf16.count
                     let selRange = client.selectedRange()
                     if selRange.location != NSNotFound && selRange.location < 10000000 && selRange.location >= replacementLength {
                         let replaceRange = NSRange(location: selRange.location - replacementLength, length: replacementLength)
+                        let current = client.attributedSubstring(from: replaceRange)?.string
+                        guard Self.canReplace(current, with: entry) else {
+                            DebugLogger.log("Hanja: text before the caret changed since show — aborting selection")
+                            self.hanjaMode = false
+                            self.hanjaKey = ""
+                            return
+                        }
                         client.insertText(entry.hanja, replacementRange: replaceRange)
                     } else {
                         // Fallback: just insert
@@ -758,7 +750,7 @@ public class HangulComposer: @unchecked Sendable {
                     }
                 }
                 
-                self.localTextBuffer = String(self.localTextBuffer.dropLast(self.hanjaKey.count)) + entry.hanja
+                self.localTextBuffer = String(self.localTextBuffer.dropLast(entry.hangul.count)) + entry.hanja
                 self.hanjaMode = false
                 self.hanjaKey = ""
                 DebugLogger.log("Hanja: Selected '\(entry.hanja)' (\(entry.meaning))")
@@ -773,6 +765,17 @@ public class HangulComposer: @unchecked Sendable {
         return true
     }
     
+    /// Whether a candidate may replace the text before the caret. A word spans
+    /// several syllables, so a stale buffer (the caret moved by a click the IME
+    /// never saw) would replace the wrong text. When the host reports that text
+    /// it must match. A single syllable, or a host that cannot report its text,
+    /// keeps the old behavior of replacing blindly: Chromium hosts can report
+    /// garbage, and one syllable was never checked.
+    static func canReplace(_ current: String?, with entry: HanjaEntry) -> Bool {
+        guard let current, entry.hangul.count > 1 else { return true }
+        return current.precomposedStringWithCanonicalMapping == entry.hangul.precomposedStringWithCanonicalMapping
+    }
+
     // MARK: - Cursor Position Validation
 
     /// Forwarder kept for API stability (tests/benchmark). The implementation and

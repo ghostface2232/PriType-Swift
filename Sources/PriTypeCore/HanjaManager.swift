@@ -142,6 +142,30 @@ public final class HanjaManager: @unchecked Sendable {
         return dictionary.entries(for: key)
     }
 
+    /// Longest word a lookup tries, in syllables. Covers all but a few dozen of
+    /// the dictionary's 222,709 keys, and fits in the composer's text buffer.
+    public static let maxWordLength = 10
+
+    /// Candidates for the Hangul word that ends `text`: the longest ending that is
+    /// a dictionary word first, then each shorter one down to the last syllable.
+    /// Each entry's `hangul` is the text it replaces.
+    ///
+    /// "대한민국" gives 大韓民國, then 民國, then 國 and the other readings of 국.
+    public func searchWord(endingWith text: String) -> [HanjaEntry] {
+        var word = Substring(Self.trailingHangulWord(in: text))
+        var results: [HanjaEntry] = []
+        while !word.isEmpty {
+            results += search(key: String(word))
+            word = word.dropFirst()
+        }
+        return results
+    }
+
+    /// The Hangul syllables at the end of `text`, at most `maxWordLength` of them.
+    static func trailingHangulWord(in text: String) -> String {
+        String(text.precomposedStringWithCanonicalMapping.reversed().prefix { $0.isHangulSyllable }.prefix(maxWordLength).reversed())
+    }
+
     /// Resource bundle for loading dictionary data
     private static let resourceBundle: Bundle = {
         if let resourceURL = Bundle.main.resourceURL,
@@ -171,6 +195,12 @@ public struct HanjaEntry: Sendable {
 
 // MARK: - Character Extension for Jamo detection
 extension Character {
+    /// Returns true for a precomposed Hangul syllable (가-힣, U+AC00-U+D7A3)
+    var isHangulSyllable: Bool {
+        guard unicodeScalars.count == 1, let scalar = unicodeScalars.first else { return false }
+        return (0xAC00...0xD7A3).contains(scalar.value)
+    }
+
     /// Returns true if this character is a Hangul Compatibility Jamo consonant (ㄱ-ㅎ, U+3131-U+314E)
     var isJamoConsonant: Bool {
         guard let scalar = unicodeScalars.first else { return false }

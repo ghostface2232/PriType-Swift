@@ -458,11 +458,12 @@ private struct HanjaCandidateRow: View {
                     .frame(width: 18, height: 18)
                     .background(Circle().fill(.primary.opacity(0.06)))
                 
-                // Hanja character
+                // Hanja: one character, or a whole word that must not be clipped
                 Text(entry.hanja)
                     .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(.primary)
-                    .frame(width: 28, alignment: .center)
+                    .fixedSize()
+                    .frame(minWidth: 28, alignment: .center)
                 
                 // Meaning
                 Text(entry.meaning)
