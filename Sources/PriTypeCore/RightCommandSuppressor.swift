@@ -21,8 +21,10 @@ import ApplicationServices
 /// If CGEventTap creation fails (e.g., permission issues), `IOKitManager` takes over.
 ///
 /// ## Key Features
-/// - **Instant toggle**: Switches on key press, not release
-/// - **Modifier stripping**: When toggle modifier is held, removes its modifier from other keys
+/// - **Toggle trigger**: A lone-modifier toggle key switches on press (default),
+///   or on a tap with no other key (`ToggleTrigger.tapAlone`)
+/// - **Modifier stripping**: In press mode, while the toggle modifier is held,
+///   removes its modifier from other keys
 /// - **Dynamic binding**: Supports any key via KeyBinding struct
 ///
 /// ## Threading
@@ -75,6 +77,9 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     
     /// Track toggle modifier state
     private var toggleModifierIsDown = false
+
+    /// In tap mode, whether the current toggle-modifier press can still be a tap.
+    private var toggleTap = ModifierTapDetector()
     
     /// Track hanja modifier state
     private var hanjaModifierIsDown = false
@@ -140,8 +145,11 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             return false
         }
         
-        // Monitor flagsChanged AND keyDown events
+        // Monitor flagsChanged AND keyDown events, plus clicks: a ⌘-click is not
+        // a tap of ⌘ (`ToggleTrigger.tapAlone`).
         let eventMask = (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.rightMouseDown.rawValue)
+            | (1 << CGEventType.otherMouseDown.rawValue)
         
         // Create event tap
         eventTap = CGEvent.tapCreate(
@@ -204,6 +212,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         tapThread = nil
         eventTap = nil
         toggleModifierIsDown = false
+        toggleTap.interrupt()
         hanjaModifierIsDown = false
         controlIsDown = false
         DebugLogger.log("RightCommandSuppressor: Stopped")
@@ -215,7 +224,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     func handleEvent(type: CGEventType, event: CGEvent,
                      toggle: KeyBinding? = nil, hanja: KeyBinding? = nil,
                      toggleEnabled: Bool? = nil, hanjaEnabled: Bool? = nil,
-                     recoveryFlags: UInt64? = nil,
+                     trigger: ToggleTrigger? = nil, recoveryFlags: UInt64? = nil,
                      excludedOverride: Bool? = nil) -> Unmanaged<CGEvent>? {
         lock.lock()
         defer { lock.unlock() }
@@ -235,6 +244,8 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                 DebugLogger.log("RightCommandSuppressor: Tap disabled (\(attempt)/\(failureTracker.maxRetries)), re-enabling")
                 let flags = recoveryFlags ?? CGEventSource.flagsState(.combinedSessionState).rawValue
                 toggleModifierIsDown = ModifierKeyState.isDown((toggle ?? ConfigurationManager.shared.toggleKeyBinding).keyCode, flags: flags)
+                // A press that began while the tap was off was never seen whole.
+                toggleTap.interrupt()
                 hanjaModifierIsDown = ModifierKeyState.isDown((hanja ?? ConfigurationManager.shared.hanjaKeyBinding).keyCode, flags: flags)
                 if let tap = eventTap {
                     CGEvent.tapEnable(tap: tap, enable: true)
@@ -245,6 +256,12 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
         
+        // A click while the toggle modifier is down makes it a ⌘-click, not a tap.
+        if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown {
+            toggleTap.interrupt()
+            return Unmanaged.passUnretained(event)
+        }
+
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let config = ConfigurationManager.shared
         let toggleBinding = toggle ?? config.toggleKeyBinding
@@ -256,7 +273,9 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         let priTypeToggleEnabled = (toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled) && !excluded
         if !priTypeToggleEnabled {
             toggleModifierIsDown = false
+            toggleTap.interrupt()
         }
+        let toggleTrigger = trigger ?? config.toggleTrigger
         // Hanja conversion turned off: its key is an ordinary key again.
         let priTypeHanjaEnabled = hanjaEnabled ?? config.hanjaEnabled
         if !priTypeHanjaEnabled {
@@ -301,7 +320,22 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             // Dynamic toggle key — modifier key, single-key binding
             if priTypeToggleEnabled && toggleBinding.isModifierKey && toggleBinding.isModifierOnly && keyCode == toggleBinding.keyCode {
                 let isPressed = ModifierKeyState.isDown(keyCode, flags: flags.rawValue)
-                
+
+                if toggleTrigger == .tapAlone {
+                    // The modifier stays a modifier, so both edges reach the app.
+                    if isPressed && !toggleModifierIsDown {
+                        toggleModifierIsDown = true
+                        toggleTap.press(at: Self.eventTime(of: event))
+                    } else if !isPressed && toggleModifierIsDown {
+                        toggleModifierIsDown = false
+                        if toggleTap.release(at: Self.eventTime(of: event)) {
+                            DebugLogger.log("RightCommandSuppressor: Toggle key tapped alone (\(toggleBinding.displayName)) - TOGGLE")
+                            triggerToggle(event)
+                        }
+                    }
+                    return Unmanaged.passUnretained(event)
+                }
+
                 if isPressed && !toggleModifierIsDown {
                     // Toggle modifier pressed - toggle immediately!
                     toggleModifierIsDown = true
@@ -349,6 +383,8 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         
         // Handle keyDown
         if type == .keyDown {
+            // Any key while the toggle modifier is down makes it a shortcut, not a tap.
+            toggleTap.interrupt()
             // Reconcile on every key: a release may have been lost while disabled.
             toggleModifierIsDown = ModifierKeyState.isDown(toggleBinding.keyCode, flags: event.flags.rawValue)
             hanjaModifierIsDown = priTypeHanjaEnabled
@@ -415,7 +451,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
 
             // When toggle modifier is held, strip its modifier from key events
             // This makes keys act as regular character input, not shortcuts
-            if priTypeToggleEnabled && toggleModifierIsDown && toggleBinding.isModifierKey {
+            if priTypeToggleEnabled && toggleTrigger == .press && toggleModifierIsDown && toggleBinding.isModifierKey {
                 let modifierMask = Self.modifierMask(for: toggleBinding.keyCode)
                 var newFlags = event.flags
                 newFlags.remove(CGEventFlags(rawValue: ModifierKeyState.mask(for: toggleBinding.keyCode)))

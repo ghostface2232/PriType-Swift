@@ -14,6 +14,12 @@
 "keyBinding.title" = "Key Settings";
 "keyBinding.toggleKey" = "Toggle Key";
 "keyBinding.hanjaKey" = "Hanja Key";
+"keyBinding.toggleTrigger" = "Switch Timing";
+"keyBinding.toggleTriggerPress" = "On Press";
+"keyBinding.toggleTriggerTap" = "Tap Alone";
+"keyBinding.toggleTriggerPressDescription" = "Switches as soon as the key goes down. The key no longer combines with others: Right ⌘ + C types c instead of copying.";
+"keyBinding.toggleTriggerTapDescription" = "Switches when the key is pressed and released on its own (within 1 second). Used with another key or a click, it stays a modifier, so Right ⌘ + C copies.";
+"keyBinding.toggleTriggerOnlyModifiers" = "Applies only when the toggle key is a single modifier such as Right ⌘.";
 "keyBinding.hanjaEnabled" = "Hanja Conversion";
 "keyBinding.hanjaEnabledDescription" = "When off, the Hanja dictionary is never loaded and the Hanja key works as its ordinary key.";
 "keyBinding.disabledByHanjaOff" = "Disabled while Hanja conversion is off";

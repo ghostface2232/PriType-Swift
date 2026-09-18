@@ -14,6 +14,12 @@
 "keyBinding.title" = "키 설정";
 "keyBinding.toggleKey" = "한/영 전환키";
 "keyBinding.hanjaKey" = "한자 입력키";
+"keyBinding.toggleTrigger" = "전환 시점";
+"keyBinding.toggleTriggerPress" = "누르는 순간";
+"keyBinding.toggleTriggerTap" = "단독으로 탭";
+"keyBinding.toggleTriggerPressDescription" = "키를 누르자마자 전환합니다. 이 키는 다른 키와 조합되지 않아, 예를 들어 우측 ⌘ + C가 복사 대신 c를 입력합니다.";
+"keyBinding.toggleTriggerTapDescription" = "다른 키 없이 눌렀다 떼면(1초 이내) 전환합니다. 다른 키나 클릭과 함께 쓰면 원래 수정키로 동작해 우측 ⌘ + C가 복사됩니다.";
+"keyBinding.toggleTriggerOnlyModifiers" = "전환키가 수정키 하나(우측 ⌘ 등)일 때만 적용됩니다.";
 "keyBinding.hanjaEnabled" = "한자 변환";
 "keyBinding.hanjaEnabledDescription" = "끄면 한자 사전을 불러오지 않고, 한자 입력키는 원래 키로 동작합니다.";
 "keyBinding.disabledByHanjaOff" = "한자 변환이 꺼져 있어 비활성화됨";

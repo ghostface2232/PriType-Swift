@@ -95,6 +95,7 @@ struct SettingsView: View {
     @State private var toggleKeyBinding = ConfigurationManager.shared.toggleKeyBinding
     @State private var hanjaKeyBinding = ConfigurationManager.shared.hanjaKeyBinding
     @State private var hanjaEnabled = ConfigurationManager.shared.hanjaEnabled
+    @State private var toggleTrigger = ConfigurationManager.shared.toggleTrigger
     @State private var autoUpdateCheckEnabled = ConfigurationManager.shared.autoUpdateCheckEnabled
     @State private var isAccessibilityGranted = false
     @State private var hasKeyConflict = false
@@ -158,6 +159,7 @@ struct SettingsView: View {
             toggleKeyBinding = ConfigurationManager.shared.toggleKeyBinding
             hanjaKeyBinding = ConfigurationManager.shared.hanjaKeyBinding
             hanjaEnabled = ConfigurationManager.shared.hanjaEnabled
+            toggleTrigger = ConfigurationManager.shared.toggleTrigger
             autoUpdateCheckEnabled = ConfigurationManager.shared.autoUpdateCheckEnabled
             experimentalDirectInsertion = ConfigurationManager.shared.experimentalDirectInsertion
             reloadExcludedApps()
@@ -209,6 +211,12 @@ struct SettingsView: View {
                         disabledReason: L10n.keyBinding.disabledByCapsLock,
                         valueOverride: capsLockSwitchEnabled ? L10n.keyBinding.managedByMacOS : nil,
                         onCapsLockBlocked: { showCapsLockBlockedAlert = true }
+                    )
+
+                    ToggleTriggerRow(
+                        trigger: $toggleTrigger,
+                        isDisabled: capsLockSwitchEnabled || !toggleKeyBinding.isModifierKey
+                            || !toggleKeyBinding.isModifierOnly
                     )
 
                     Divider()
@@ -283,6 +291,9 @@ struct SettingsView: View {
                 }
                 ConfigurationManager.shared.toggleKeyBinding = newValue
                 clearKeyConflict()
+            }
+            .onChange(of: toggleTrigger) { _, newValue in
+                ConfigurationManager.shared.toggleTrigger = newValue
             }
             .onChange(of: hanjaEnabled) { _, isOn in
                 ConfigurationManager.shared.hanjaEnabled = isOn
@@ -1049,6 +1060,47 @@ struct SettingsSection<Content: View>: View {
 }
 
 /// A toggle row — icon uses plain background instead of glass
+/// Picks when a lone-modifier toggle key switches (`ToggleTrigger`).
+struct ToggleTriggerRow: View {
+    @Binding var trigger: ToggleTrigger
+    /// Caps Lock switching owns the toggle, or the toggle key is not a lone modifier.
+    let isDisabled: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            SettingsRowIcon(systemName: "hand.tap")
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.keyBinding.toggleTrigger)
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(.primary)
+
+                Text(isDisabled ? L10n.keyBinding.toggleTriggerOnlyModifiers
+                     : trigger == .press ? L10n.keyBinding.toggleTriggerPressDescription
+                     : L10n.keyBinding.toggleTriggerTapDescription)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .layoutPriority(1)
+
+            Spacer()
+
+            Picker("", selection: $trigger) {
+                Text(L10n.keyBinding.toggleTriggerPress).tag(ToggleTrigger.press)
+                Text(L10n.keyBinding.toggleTriggerTap).tag(ToggleTrigger.tapAlone)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .disabled(isDisabled)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .opacity(isDisabled ? 0.6 : 1)
+    }
+}
+
 struct SettingsToggleRow: View {
     let title: String
     var subtitle: String?

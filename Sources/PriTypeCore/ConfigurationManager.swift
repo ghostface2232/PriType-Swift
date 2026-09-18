@@ -395,6 +395,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         static let toggleKeyBinding = "com.pritype.toggleKeyBinding"
         static let hanjaKeyBinding = "com.pritype.hanjaKeyBinding"
         static let hanjaEnabled = "com.pritype.hanjaEnabled"
+        static let toggleTrigger = "com.pritype.toggleTrigger"
         static let lastUpdateCheck = "com.pritype.lastUpdateCheck"
         static let autoUpdateCheck = "com.pritype.autoUpdateCheck"
         static let experimentalDirectInsertion = "com.pritype.experimentalDirectInsertion"
@@ -506,6 +507,28 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         }
     }
     
+    // MARK: - Toggle Trigger
+
+    private var _cachedToggleTrigger: ToggleTrigger?
+
+    /// When a lone-modifier toggle key switches: on press (default, the
+    /// long-standing behavior) or on a tap with no other key. Cached because the
+    /// event tap and the IOKit monitor read it on every key event.
+    public var toggleTrigger: ToggleTrigger {
+        get {
+            keyBindingLock.withLock {
+                if let cached = _cachedToggleTrigger { return cached }
+                let value = defaults.string(forKey: Keys.toggleTrigger).flatMap(ToggleTrigger.init(rawValue:)) ?? .press
+                _cachedToggleTrigger = value
+                return value
+            }
+        }
+        set {
+            keyBindingLock.withLock { _cachedToggleTrigger = newValue }
+            defaults.set(newValue.rawValue, forKey: Keys.toggleTrigger)
+        }
+    }
+
     // MARK: - Hanja
 
     private var _cachedHanjaEnabled: Bool?

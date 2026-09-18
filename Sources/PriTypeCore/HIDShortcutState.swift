@@ -39,9 +39,13 @@ enum HIDKeyMapping {
     }
 }
 
-/// IOKit observes keys; it cannot suppress their delivery to the host. Preserve
-/// the existing modifier-only toggle-on-release contract so Command shortcuts
-/// do not toggle. Ordinary shortcut keys fire on their first down transition.
+/// The IOKit fallback's shortcut rules, matching the CGEventTap path.
+///
+/// A lone-modifier toggle follows `ToggleTrigger`: on press, or on a tap with no
+/// other key (`ModifierTapDetector`, the same rule the tap uses). IOKit observes
+/// keys but cannot suppress them, so in press mode the modifier still reaches the
+/// app: right ⌘ + C both switches and copies, where the tap would type "c".
+/// Ordinary shortcut keys fire on their first down transition.
 struct HIDShortcutState {
     enum Action: Equatable { case toggle, hanja }
     private struct Key: Hashable { let device: UInt64; let usage: UInt32 }
@@ -65,6 +69,7 @@ struct HIDShortcutState {
 
     private var held: [Key: TimeInterval] = [:]
     private var pendingToggle: Key?
+    private var toggleTap = ModifierTapDetector()
     private var lastBindings: [KeyBinding] = []
     private var lastHanja: TimeInterval?
 
@@ -80,11 +85,13 @@ struct HIDShortcutState {
     mutating func handleDeviceRemoval() {
         held.removeAll()
         pendingToggle = nil
+        toggleTap.interrupt()
     }
 
     mutating func consume(usage: UInt32, pressed: Bool, device: UInt64 = 0,
                           toggle: KeyBinding, hanja: KeyBinding,
-                          toggleEnabled: Bool = true, hanjaEnabled: Bool = true, paused: Bool = false,
+                          toggleEnabled: Bool = true, hanjaEnabled: Bool = true,
+                          trigger: ToggleTrigger = .press, paused: Bool = false,
                           at now: TimeInterval = HIDShortcutState.timestamp()) -> Action? {
         expireStaleHolds(before: now - Self.holdExpiry)
         if lastBindings != [toggle, hanja] {
@@ -101,24 +108,28 @@ struct HIDShortcutState {
         if !pressed {
             guard toggleEnabled, pendingToggle == key else { return nil }
             pendingToggle = nil
-            return .toggle
+            return toggleTap.release(at: now) ? .toggle : nil
         }
 
         // Any second ordinary key cancels a pending standalone modifier tap,
         // including a key on another keyboard. This retains native Command
         // shortcut behavior. A chorded modifier is not a shortcut on its own, so
         // Shift held across the tap must not cancel it.
-        if HIDKeyMapping.modifierMask(for: usage) == 0 { pendingToggle = nil }
+        if HIDKeyMapping.modifierMask(for: usage) == 0 {
+            pendingToggle = nil
+            toggleTap.interrupt()
+        }
         func matches(_ binding: KeyBinding) -> Bool {
             HIDKeyMapping.usages[binding.keyCode] == usage
                 && flags & binding.modifiers == binding.modifiers
         }
         if toggleEnabled && matches(toggle) {
-            if toggle.isModifierKey {
-                // Only an ordinary key already held disqualifies the tap; the
-                // CGEventTap path toggles regardless of other modifiers.
+            if toggle.isModifierKey && trigger == .tapAlone {
+                // Only an ordinary key already held disqualifies the tap; other
+                // modifiers do not, as on the CGEventTap path.
                 if held.keys.allSatisfy({ HIDKeyMapping.modifierMask(for: $0.usage) != 0 }) {
                     pendingToggle = key
+                    toggleTap.press(at: now)
                 }
                 return nil
             }

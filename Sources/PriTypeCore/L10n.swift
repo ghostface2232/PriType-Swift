@@ -56,6 +56,12 @@ public enum L10n {
         public static var title: String { localized("keyBinding.title") }
         public static var toggleKey: String { localized("keyBinding.toggleKey") }
         public static var hanjaKey: String { localized("keyBinding.hanjaKey") }
+        public static var toggleTrigger: String { localized("keyBinding.toggleTrigger") }
+        public static var toggleTriggerPress: String { localized("keyBinding.toggleTriggerPress") }
+        public static var toggleTriggerTap: String { localized("keyBinding.toggleTriggerTap") }
+        public static var toggleTriggerPressDescription: String { localized("keyBinding.toggleTriggerPressDescription") }
+        public static var toggleTriggerTapDescription: String { localized("keyBinding.toggleTriggerTapDescription") }
+        public static var toggleTriggerOnlyModifiers: String { localized("keyBinding.toggleTriggerOnlyModifiers") }
         public static var hanjaEnabled: String { localized("keyBinding.hanjaEnabled") }
         public static var hanjaEnabledDescription: String { localized("keyBinding.hanjaEnabledDescription") }
         public static var disabledByHanjaOff: String { localized("keyBinding.disabledByHanjaOff") }

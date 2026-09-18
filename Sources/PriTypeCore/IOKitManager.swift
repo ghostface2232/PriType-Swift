@@ -161,7 +161,8 @@ public final class IOKitManager: @unchecked Sendable {
     /// Internal entry point for hardware-event tests without opening devices.
     func handleKeyboardEvent(usage: UInt32, pressed: Bool, device: UInt64 = 0,
                              toggle: KeyBinding? = nil, hanja: KeyBinding? = nil,
-                             toggleEnabled: Bool? = nil, hanjaEnabled: Bool? = nil, paused: Bool? = nil) {
+                             toggleEnabled: Bool? = nil, hanjaEnabled: Bool? = nil,
+                             trigger: ToggleTrigger? = nil, paused: Bool? = nil) {
         let config = ConfigurationManager.shared
         let action = shortcutState.consume(
             usage: usage, pressed: pressed, device: device,
@@ -169,6 +170,7 @@ public final class IOKitManager: @unchecked Sendable {
             hanja: hanja ?? config.hanjaKeyBinding,
             toggleEnabled: toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled,
             hanjaEnabled: hanjaEnabled ?? config.hanjaEnabled,
+            trigger: trigger ?? config.toggleTrigger,
             paused: paused ?? (ToggleExclusionPolicy.shared.isTogglePaused || RightCommandSuppressor.shared.isRecordingKey)
         )
         let callback: (@Sendable () -> Void)?

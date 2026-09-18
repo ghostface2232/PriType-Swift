@@ -149,3 +149,95 @@ struct HanjaDisabledRoutingTests {
         #expect(actions.snapshot == ["hanja"])
     }
 }
+
+@Suite("Toggle on a lone tap")
+@MainActor
+struct ToggleTapAloneTests {
+    private let toggle = KeyBinding(keyCode: 54, modifiers: 0, displayName: "Right Command")
+    private let hanja = KeyBinding(keyCode: 61, modifiers: 0, displayName: "Right Option")
+    private static let rightCommandFlags = CGEventFlags(rawValue: CGEventFlags.maskCommand.rawValue | 0x10)
+
+    private func modifier(down: Bool, at seconds: Double) throws -> CGEvent {
+        let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 54, keyDown: down))
+        event.type = .flagsChanged
+        event.flags = down ? Self.rightCommandFlags : []
+        event.timestamp = CGEventTimestamp(seconds * 1_000_000_000)
+        return event
+    }
+
+    private func send(_ tap: RightCommandSuppressor, _ event: CGEvent, _ type: CGEventType? = nil) -> Bool {
+        tap.handleEvent(type: type ?? event.type, event: event, toggle: toggle, hanja: hanja,
+                        toggleEnabled: true, hanjaEnabled: true, trigger: .tapAlone,
+                        excludedOverride: false) != nil
+    }
+
+    private func settle() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
+    @Test("A lone tap toggles on release, and both edges reach the app")
+    func loneTap() async throws {
+        let tap = RightCommandSuppressor()
+        let actions = ShortcutActions()
+        tap.onToggle = { _ in actions.record("toggle") }
+        #expect(send(tap, try modifier(down: true, at: 100)))
+        #expect(actions.snapshot.isEmpty)
+        #expect(send(tap, try modifier(down: false, at: 100.2)))
+        await settle()
+        #expect(actions.snapshot == ["toggle"])
+    }
+
+    @Test("Right ⌘ + C stays a shortcut: the C keeps ⌘ and nothing toggles")
+    func shortcutDoesNotToggle() async throws {
+        let tap = RightCommandSuppressor()
+        let actions = ShortcutActions()
+        tap.onToggle = { _ in actions.record("toggle") }
+        #expect(send(tap, try modifier(down: true, at: 100)))
+        let c = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 8, keyDown: true))
+        c.flags = Self.rightCommandFlags
+        #expect(send(tap, c, .keyDown))
+        #expect(c.flags.contains(.maskCommand), "tap mode must not strip ⌘")
+        #expect(send(tap, try modifier(down: false, at: 100.2)))
+        await settle()
+        #expect(actions.snapshot.isEmpty)
+    }
+
+    @Test("A ⌘-click is not a tap")
+    func clickCancels() async throws {
+        let tap = RightCommandSuppressor()
+        let actions = ShortcutActions()
+        tap.onToggle = { _ in actions.record("toggle") }
+        #expect(send(tap, try modifier(down: true, at: 100)))
+        let click = try #require(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
+                                         mouseCursorPosition: .zero, mouseButton: .left))
+        #expect(send(tap, click, .leftMouseDown))
+        #expect(send(tap, try modifier(down: false, at: 100.2)))
+        await settle()
+        #expect(actions.snapshot.isEmpty)
+    }
+
+    @Test("Held past the limit, the release does not toggle")
+    func longHold() async throws {
+        let tap = RightCommandSuppressor()
+        let actions = ShortcutActions()
+        tap.onToggle = { _ in actions.record("toggle") }
+        #expect(send(tap, try modifier(down: true, at: 100)))
+        #expect(send(tap, try modifier(down: false, at: 100 + ModifierTapDetector.maxHold + 0.1)))
+        await settle()
+        #expect(actions.snapshot.isEmpty)
+    }
+
+    @Test("Press mode still toggles on down and swallows the key")
+    func pressModeUnchanged() async throws {
+        let tap = RightCommandSuppressor()
+        let actions = ShortcutActions()
+        tap.onToggle = { _ in actions.record("toggle") }
+        let down = try modifier(down: true, at: 100)
+        #expect(tap.handleEvent(type: .flagsChanged, event: down, toggle: toggle, hanja: hanja,
+                                toggleEnabled: true, trigger: .press, excludedOverride: false) == nil)
+        await settle()
+        #expect(actions.snapshot == ["toggle"])
+    }
+}

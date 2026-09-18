@@ -33,12 +33,44 @@ private final class ShortcutActions: @unchecked Sendable {
 @Suite("IOKit shortcut routing")
 struct IOKitShortcutRoutingTests {
 
+    /// Modifier-toggle cases below describe tap mode, which is where they differ
+    /// from the CGEventTap's default; press mode has its own tests.
     private func press(_ state: inout HIDShortcutState, _ usage: UInt32, _ pressed: Bool,
                        device: UInt64 = 1, toggle: KeyBinding, hanja: KeyBinding,
-                       toggleEnabled: Bool = true, paused: Bool = false,
-                       at now: TimeInterval = 0) -> HIDShortcutState.Action? {
+                       toggleEnabled: Bool = true, trigger: ToggleTrigger = .tapAlone,
+                       paused: Bool = false, at now: TimeInterval = 0) -> HIDShortcutState.Action? {
         state.consume(usage: usage, pressed: pressed, device: device, toggle: toggle, hanja: hanja,
-                      toggleEnabled: toggleEnabled, paused: paused, at: now)
+                      toggleEnabled: toggleEnabled, trigger: trigger, paused: paused, at: now)
+    }
+
+    @Test("In press mode a modifier toggles on key down, like the event tap")
+    func pressModeTogglesOnDown() {
+        var state = HIDShortcutState()
+        #expect(press(&state, HIDUsage.rightCommand, true, toggle: rightCommandBinding,
+                      hanja: rightOptionBinding, trigger: .press) == .toggle)
+        #expect(press(&state, HIDUsage.rightCommand, false, toggle: rightCommandBinding,
+                      hanja: rightOptionBinding, trigger: .press) == nil)
+        // Used in a shortcut it has already toggled; IOKit cannot hold the key back.
+        #expect(press(&state, HIDUsage.rightCommand, true, toggle: rightCommandBinding,
+                      hanja: rightOptionBinding, trigger: .press, at: 1) == .toggle)
+        #expect(press(&state, HIDUsage.a, true, toggle: rightCommandBinding,
+                      hanja: rightOptionBinding, trigger: .press, at: 1.1) == nil)
+        #expect(press(&state, HIDUsage.rightCommand, false, toggle: rightCommandBinding,
+                      hanja: rightOptionBinding, trigger: .press, at: 1.2) == nil)
+    }
+
+    @Test("A tap held past the limit is a hesitation, not a toggle")
+    func longHoldIsNotATap() {
+        var state = HIDShortcutState()
+        let limit = ModifierTapDetector.maxHold
+        #expect(press(&state, HIDUsage.rightCommand, true, toggle: rightCommandBinding,
+                      hanja: rightOptionBinding, at: 0) == nil)
+        #expect(press(&state, HIDUsage.rightCommand, false, toggle: rightCommandBinding,
+                      hanja: rightOptionBinding, at: limit + 0.1) == nil)
+        #expect(press(&state, HIDUsage.rightCommand, true, toggle: rightCommandBinding,
+                      hanja: rightOptionBinding, at: 5) == nil)
+        #expect(press(&state, HIDUsage.rightCommand, false, toggle: rightCommandBinding,
+                      hanja: rightOptionBinding, at: 5 + limit - 0.1) == .toggle)
     }
 
     @Test("With Hanja conversion off, the Hanja key triggers nothing")
