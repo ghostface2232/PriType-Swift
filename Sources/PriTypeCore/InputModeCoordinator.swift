@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Coordinates PriType-owned language toggles.
 ///
@@ -27,16 +28,52 @@ public final class InputModeCoordinator: @unchecked Sendable {
         }
     }
 
+    /// Toggles requested off the main thread that have not been applied yet.
+    ///
+    /// The key monitor runs on its own thread, so a toggle is recorded here the
+    /// moment its key is seen, before the hop to main. The keystroke typed right
+    /// after the toggle travels host → IMK → `handle()` on main, and nothing orders
+    /// that message against the hop. `handle()` therefore drains this list before
+    /// composing, which makes "the first key after a toggle is already in the new
+    /// mode" a property of the code rather than of queue timing.
+    private let pendingToggles = OSAllocatedUnfairLock<[ToggleSource]>(initialState: [])
+
     private init() {}
 
+    /// Request a toggle. Callable from any thread: off main it records the toggle
+    /// and applies it on main, or earlier if a keystroke reaches `handle()` first.
     public func requestToggle(source: ToggleSource) {
         guard Thread.isMainThread else {
+            pendingToggles.withLock { $0.append(source) }
             DispatchQueue.main.async {
-                self.requestToggle(source: source)
+                self.applyPendingToggles()
             }
             return
         }
 
+        // Toggles recorded earlier must land before this one.
+        applyPendingToggles()
+        performToggle(source: source)
+    }
+
+    /// Apply toggles recorded off the main thread, in order. Main thread only.
+    /// A no-op when nothing is pending, so every caller can invoke it freely.
+    public func applyPendingToggles() {
+        let sources = pendingToggles.withLock { pending -> [ToggleSource] in
+            defer { pending.removeAll() }
+            return pending
+        }
+        for source in sources {
+            performToggle(source: source)
+        }
+    }
+
+    /// Number of recorded toggles still waiting for main (for tests).
+    var pendingToggleCount: Int {
+        pendingToggles.withLock { $0.count }
+    }
+
+    private func performToggle(source: ToggleSource) {
         guard !ConfigurationManager.shared.capsLockInputSourceSwitchEnabled else {
             DebugLogger.log("InputModeCoordinator: ignored custom toggle because Caps Lock owns switching")
             return

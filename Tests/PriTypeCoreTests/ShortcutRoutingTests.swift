@@ -20,11 +20,17 @@ struct ShortcutRoutingTests {
         tap.onHanjaLookup = { actions.record("hanja") }
         let toggle = KeyBinding(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue, displayName: "Control Space")
         let hanja = KeyBinding(keyCode: 49, modifiers: CGEventFlags.maskAlternate.rawValue, displayName: "Option Space")
-        for flags: CGEventFlags in [.maskAlternate, .maskControl] {
+        // Toggle is handed over synchronously while hanja hops to main, so check
+        // each event's action on its own rather than the interleaved order.
+        for (flags, expected) in [(CGEventFlags.maskAlternate, ["hanja"]), (.maskControl, ["hanja", "toggle"])] {
             let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 49, keyDown: true))
             event.flags = flags
             #expect(tap.handleEvent(type: .keyDown, event: event, toggle: toggle, hanja: hanja,
                 toggleEnabled: true, excludedOverride: false) == nil)
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async { continuation.resume() }
+            }
+            #expect(actions.snapshot == expected)
         }
         let plain = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 49, keyDown: true))
         plain.flags = []

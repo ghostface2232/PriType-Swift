@@ -74,6 +74,8 @@ keyDown ──► PriTypeInputController.handle()
 
 `RightCommandSuppressor`가 `CGEventTap`으로 시스템 레벨 키 이벤트를 가로채서 사용자가 설정한 전환키(기본: 우측 Command)와 한자키(기본: 우측 Option)를 처리한다. Key Recorder 방식으로 아무 키나 등록할 수 있다. CGEventTap이 시스템에 의해 반복 비활성화되면 `IOKitManager`(IOHIDManager 기반)로 자동 전환된다.
 
+탭은 메인 런루프가 아닌 전용 스레드(`EventTapThread`, QoS userInteractive)에서 돈다. 시스템의 모든 키 입력이 이 콜백을 거친 뒤에야 앱에 도달하므로, IMK 처리·동기 클라이언트 IPC·설정 UI로 바쁜 메인 스레드에 두면 전역 타이핑이 함께 지연된다. 전환키는 눌린 순간 탭 스레드에서 `InputModeCoordinator`에 기록되고, 메인에서 적용된다. `handle()`은 조합 전에 기록된 전환을 먼저 적용하므로, 전환 직후 첫 키는 메인 큐 순서와 무관하게 새 모드로 처리된다.
+
 현재 한/영 전환 구조의 정식 명세는 [UnifiedInputArchitecture.md](Docs/UnifiedInputArchitecture.md)다(선택지 비교 원본은 [InputArchitectureHybridRollbackPlan.md](Docs/InputArchitectureHybridRollbackPlan.md), superseded). 핵심은 custom 전환키 경로에서 실제 ABC 입력 소스를 선택하지 않고, PriType 내부 mode 전환을 단일 트랜잭션으로 처리하는 것이다. PriType 단일 입력 소스가 IMK 세션을 영구 소유하고, 영어는 조합 없이 raw key를 그대로 pass-through한다.
 
 ```mermaid
@@ -177,7 +179,7 @@ libhangul preedit: ᄆ (U+1106)
 | **CursorRectResolver** | 한자 후보창 좌표 전략 체인(firstRect → attributes → 캐시 → AX → 마우스)과 좌표 유효성 검증. |
 | **ClientContextDetector** | 입력 클라이언트 분석기. 번들 ID, `validAttributesForMarkedText`, 좌표 휴리스틱을 조합해 `ClientContext` 구조체를 생성한다. Finder 바탕화면은 좌표 기반(`y < 50`)으로 판별한다. |
 | **SecureInputPolicy** | 시스템 보안 client와 현재 필드의 selection/capability 신호를 조합하는 순수 정책. 정상 capable field에서는 다른 앱이 남긴 stale 전역 Secure Event Input flag를 무시한다. |
-| **RightCommandSuppressor** | `CGEventTap` 기반 시스템 레벨 키 인터셉터. `ConfigurationManager`의 `toggleKeyBinding`/`hanjaKeyBinding`을 읽어 사용자 지정 키를 동적으로 처리한다. Key Recorder 모드를 지원하여 설정 창에서 키 캡처가 가능하다. 이벤트 탭 비활성화 시 재활성화를 시도하며, 60초 내 3회 실패 시 IOKit 백업으로 자동 전환한다. |
+| **RightCommandSuppressor** | `CGEventTap` 기반 시스템 레벨 키 인터셉터. `ConfigurationManager`의 `toggleKeyBinding`/`hanjaKeyBinding`을 읽어 사용자 지정 키를 동적으로 처리한다. Key Recorder 모드를 지원하여 설정 창에서 키 캡처가 가능하다. 전용 스레드에서 동작하며 모든 가변 상태는 재귀 잠금 하나로 보호한다. 이벤트 탭 비활성화 시 재활성화를 시도하며, 60초 내 3회 실패 시 IOKit 백업으로 자동 전환한다. |
 | **IOKitManager** | `IOHIDManager` 기반 하드웨어 레벨 키 모니터. CGEventTap 실패 시 백업 핸들러로 동작한다. HID usage 매핑 테이블을 통해 사용자 지정 키를 동적으로 처리한다. |
 | **HanjaCandidateWindow** | SwiftUI 기반 한자 후보 패널. `NSPanel`을 재사용하며, `screenSaver + 1` 윈도우 레벨로 Electron 앱 위에 표시된다. 1~9 숫자키 선택, 방향키/Tab 페이지 이동을 지원한다. |
 | **HanjaManager** | 한자 사전 로더 + 자모 특수문자 검색. `hanja.txt`를 `HanjaTable`에 적재하고, `jamo_symbols.json`에서 자모 특수문자를 로딩한다. LRU 캐시(32개, NSLock 보호)로 재검색 시 사전 접근을 생략한다. 초성 자모(U+1100~) → 호환 자모(U+3131~) 변환을 포함한다. |
@@ -220,10 +222,10 @@ PriType은 2단계 검증으로 이를 처리한다:
 
 ## 동시성 (Concurrency) 및 스레드 안전성
 
-PriType은 메인 스레드(IMKServer)와 백그라운드 스레드(CGEventTap, IOKit) 간의 상태 불일치 및 크래시를 방지하기 위해 정교한 동기화 메커니즘을 사용한다.
+PriType은 메인 스레드(IMKServer·IOKit)와 전용 이벤트 탭 스레드(CGEventTap) 간의 상태 불일치 및 크래시를 방지하기 위해 정교한 동기화 메커니즘을 사용한다.
 
 1. **설정 관리 (`ConfigurationManager`)**
-   - 백그라운드 스레드(CGEventTap)에서 매 키 입력마다 `toggleKeyBinding` 및 `hanjaKeyBinding`을 조회한다.
+   - 이벤트 탭 스레드(CGEventTap)에서 매 키 입력마다 `toggleKeyBinding` 및 `hanjaKeyBinding`을 조회한다.
    - 메인 스레드(설정 창)에서 설정이 변경될 때 발생하는 `UserDefaults` 읽기/쓰기 충돌(Race Condition)을 방지하기 위해, 내부적으로 캐시를 유지하고 `NSLock`을 통해 모든 접근을 직렬화한다.
 
 2. **한자 사전 및 LRU 캐시 (`HanjaManager`)**

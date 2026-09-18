@@ -381,6 +381,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // 1. Resolve the session FIRST — all subsequent logic uses its fresh context.
         let session = ensureSession(for: client)
 
+        // A toggle pressed just before this key may still be waiting for its hop
+        // from the key-monitor thread. Apply it now so this key lands in the new mode.
+        InputModeCoordinator.shared.applyPendingToggles()
+
         // 2. Duplicate-keyDown suppression. Some hosts (observed: KakaoTalk) deliver
         // the same physical keyDown to the IME twice. That double-processes input —
         // notably one backspace decomposing TWO jamo, i.e. a composing syllable

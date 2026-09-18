@@ -126,3 +126,77 @@ struct ToggleRecoveryEventTests {
         #expect(composer.inputMode == .korean)
     }
 }
+
+@Suite("Event tap thread")
+struct EventTapThreadTests {
+    private final class Fired: @unchecked Sendable {
+        let semaphore = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var onMain: Bool?
+    }
+
+    /// A version-0 source that records which thread serviced it.
+    private func makeSource(_ fired: Fired) -> CFRunLoopSource {
+        var context = CFRunLoopSourceContext()
+        context.info = Unmanaged.passUnretained(fired).toOpaque()
+        context.perform = { info in
+            let fired = Unmanaged<Fired>.fromOpaque(info!).takeUnretainedValue()
+            fired.lock.withLock { fired.onMain = Thread.isMainThread }
+            fired.semaphore.signal()
+        }
+        return CFRunLoopSourceCreate(kCFAllocatorDefault, 0, &context)
+    }
+
+    private func waitUntilFinished(_ thread: Thread) -> Bool {
+        let deadline = Date().addingTimeInterval(2)
+        while !thread.isFinished && Date() < deadline { usleep(1_000) }
+        return thread.isFinished
+    }
+
+    @Test("The source is serviced off the main thread and the thread ends on stop")
+    func servicesOffMainAndStops() throws {
+        let fired = Fired()
+        let source = makeSource(fired)
+        let thread = EventTapThread(source: source)
+        #expect(thread.startAndWait())
+
+        CFRunLoopSourceSignal(source)
+        thread.wake()
+        #expect(fired.semaphore.wait(timeout: .now() + 2) == .success)
+        #expect(fired.lock.withLock { fired.onMain } == false)
+
+        thread.stopRunLoop()
+        #expect(waitUntilFinished(thread))
+    }
+
+    @Test("Stopping before the thread attaches its source still ends the thread")
+    func stopBeforeAttach() {
+        let fired = Fired()
+        let thread = EventTapThread(source: makeSource(fired))
+        thread.stopRunLoop()          // never attached: cancels
+        #expect(!thread.startAndWait())
+        #expect(waitUntilFinished(thread))
+    }
+}
+
+@Suite("Toggle ordering across threads")
+@MainActor
+struct PendingToggleTests {
+    @Test("An off-main toggle is recorded at once and drained on main")
+    func offMainToggleIsRecordedThenDrained() {
+        let coordinator = InputModeCoordinator.shared
+        coordinator.applyPendingToggles()
+        // A real thread (GCD `sync` may run the block on main itself); waiting for
+        // it blocks main, so the hop to main cannot drain it before we look.
+        let done = DispatchSemaphore(value: 0)
+        let thread = Thread {
+            coordinator.requestToggle(source: .customKey)
+            done.signal()
+        }
+        thread.start()
+        done.wait()
+        #expect(coordinator.pendingToggleCount == 1)
+        coordinator.applyPendingToggles()
+        #expect(coordinator.pendingToggleCount == 0)
+    }
+}
