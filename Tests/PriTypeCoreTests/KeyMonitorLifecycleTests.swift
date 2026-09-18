@@ -169,34 +169,81 @@ struct EventTapThreadTests {
         #expect(waitUntilFinished(thread))
     }
 
-    @Test("Stopping before the thread attaches its source still ends the thread")
+    @Test("A stop that lands before the source is attached keeps main() from attaching")
     func stopBeforeAttach() {
         let fired = Fired()
         let thread = EventTapThread(source: makeSource(fired))
-        thread.stopRunLoop()          // never attached: cancels
-        #expect(!thread.startAndWait())
-        #expect(waitUntilFinished(thread))
+        thread.stopRunLoop()          // not attached yet: cancels
+        // Run the body directly so the cancelled branch of main() is what executes.
+        // Had it attached the source, CFRunLoopRun would never return.
+        let returned = DispatchSemaphore(value: 0)
+        Thread {
+            thread.main()
+            returned.signal()
+        }.start()
+        #expect(returned.wait(timeout: .now() + 2) == .success)
+    }
+
+    @Test("A cancelled thread reports that it did not start")
+    func cancelledThreadDoesNotStart() {
+        let thread = EventTapThread(source: makeSource(Fired()))
+        thread.stopRunLoop()
+        #expect(!thread.startAndWait(timeout: .milliseconds(100)))
     }
 }
 
 @Suite("Toggle ordering across threads")
 @MainActor
 struct PendingToggleTests {
+    /// Record toggles from a real thread (GCD `sync` may run the block on main
+    /// itself). Waiting blocks main, so the hop to main cannot drain them first.
+    private func requestOffMain(at times: [TimeInterval]) {
+        let done = DispatchSemaphore(value: 0)
+        Thread {
+            for time in times {
+                InputModeCoordinator.shared.requestToggle(source: .customKey, eventTime: time)
+            }
+            done.signal()
+        }.start()
+        done.wait()
+    }
+
     @Test("An off-main toggle is recorded at once and drained on main")
     func offMainToggleIsRecordedThenDrained() {
         let coordinator = InputModeCoordinator.shared
         coordinator.applyPendingToggles()
-        // A real thread (GCD `sync` may run the block on main itself); waiting for
-        // it blocks main, so the hop to main cannot drain it before we look.
-        let done = DispatchSemaphore(value: 0)
-        let thread = Thread {
-            coordinator.requestToggle(source: .customKey)
-            done.signal()
-        }
-        thread.start()
-        done.wait()
+        requestOffMain(at: [1])
         #expect(coordinator.pendingToggleCount == 1)
         coordinator.applyPendingToggles()
         #expect(coordinator.pendingToggleCount == 0)
+    }
+
+    @Test("A keystroke applies only toggles pressed before it")
+    func keystrokeAppliesOnlyEarlierToggles() {
+        let coordinator = InputModeCoordinator.shared
+        coordinator.applyPendingToggles()
+        requestOffMain(at: [10, 30])
+        // A key typed at 20 was in flight when the second toggle was pressed; it
+        // takes the first toggle and must leave the second for later.
+        coordinator.applyPendingToggles(before: 20)
+        #expect(coordinator.pendingToggleCount == 1)
+        // A key typed before both toggles changes nothing.
+        coordinator.applyPendingToggles(before: 5)
+        #expect(coordinator.pendingToggleCount == 1)
+        coordinator.applyPendingToggles(before: 31)
+        #expect(coordinator.pendingToggleCount == 0)
+    }
+
+    @Test("Toggle times use NSEvent's clock")
+    func eventTimeMatchesNSEvent() throws {
+        let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 54, keyDown: true))
+        event.timestamp = 1_234_567_890_000
+        let expected = try #require(NSEvent(cgEvent: event)).timestamp
+        #expect(abs(RightCommandSuppressor.eventTime(of: event) - expected) < 0.001)
+
+        // A synthetic event without a timestamp counts as pressed now.
+        event.timestamp = 0
+        let now = ProcessInfo.processInfo.systemUptime
+        #expect(abs(RightCommandSuppressor.eventTime(of: event) - now) < 1)
     }
 }

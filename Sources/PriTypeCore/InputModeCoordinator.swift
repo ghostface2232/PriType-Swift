@@ -28,23 +28,35 @@ public final class InputModeCoordinator: @unchecked Sendable {
         }
     }
 
+    private struct PendingToggle {
+        let source: ToggleSource
+        /// When the toggle key was pressed, on `NSEvent.timestamp`'s clock.
+        let eventTime: TimeInterval
+    }
+
     /// Toggles requested off the main thread that have not been applied yet.
     ///
     /// The key monitor runs on its own thread, so a toggle is recorded here the
-    /// moment its key is seen, before the hop to main. The keystroke typed right
-    /// after the toggle travels host → IMK → `handle()` on main, and nothing orders
-    /// that message against the hop. `handle()` therefore drains this list before
-    /// composing, which makes "the first key after a toggle is already in the new
-    /// mode" a property of the code rather than of queue timing.
-    private let pendingToggles = OSAllocatedUnfairLock<[ToggleSource]>(initialState: [])
+    /// moment its key is seen, before the hop to main. Keystrokes travel
+    /// host → IMK → `handle()` on main, and nothing orders that message against the
+    /// hop in either direction. `handle()` therefore applies exactly the toggles
+    /// pressed before its key: a key typed after the toggle lands in the new mode,
+    /// and one typed just before it — still in flight to IMK — stays in the old one.
+    private let pendingToggles = OSAllocatedUnfairLock<[PendingToggle]>(initialState: [])
 
     private init() {}
 
     /// Request a toggle. Callable from any thread: off main it records the toggle
-    /// and applies it on main, or earlier if a keystroke reaches `handle()` first.
-    public func requestToggle(source: ToggleSource) {
+    /// and applies it on main, or earlier if a later keystroke reaches `handle()`
+    /// first. `eventTime` is when the toggle key was pressed (`NSEvent.timestamp`'s
+    /// clock); without it the toggle counts as pressed now.
+    public func requestToggle(source: ToggleSource, eventTime: TimeInterval? = nil) {
         guard Thread.isMainThread else {
-            pendingToggles.withLock { $0.append(source) }
+            let toggle = PendingToggle(
+                source: source,
+                eventTime: eventTime ?? ProcessInfo.processInfo.systemUptime
+            )
+            pendingToggles.withLock { $0.append(toggle) }
             DispatchQueue.main.async {
                 self.applyPendingToggles()
             }
@@ -58,13 +70,23 @@ public final class InputModeCoordinator: @unchecked Sendable {
 
     /// Apply toggles recorded off the main thread, in order. Main thread only.
     /// A no-op when nothing is pending, so every caller can invoke it freely.
-    public func applyPendingToggles() {
-        let sources = pendingToggles.withLock { pending -> [ToggleSource] in
-            defer { pending.removeAll() }
-            return pending
+    ///
+    /// - Parameter keyTime: the `NSEvent.timestamp` of a keystroke about to be
+    ///   handled. Only toggles pressed before it are applied; later ones stay
+    ///   pending for their own hop. `nil` applies everything.
+    public func applyPendingToggles(before keyTime: TimeInterval? = nil) {
+        let due = pendingToggles.withLock { pending -> [PendingToggle] in
+            guard let keyTime else {
+                defer { pending.removeAll() }
+                return pending
+            }
+            // Pending toggles arrive in key order, so the due ones are a prefix.
+            let count = pending.prefix { $0.eventTime < keyTime }.count
+            defer { pending.removeFirst(count) }
+            return Array(pending.prefix(count))
         }
-        for source in sources {
-            performToggle(source: source)
+        for toggle in due {
+            performToggle(source: toggle.source)
         }
     }
 

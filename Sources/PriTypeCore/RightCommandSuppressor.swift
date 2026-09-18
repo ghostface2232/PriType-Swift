@@ -54,11 +54,15 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     /// Callback for toggle. Called on the event-tap thread at the moment the key is
     /// seen, so it must be thread-safe and must not block.
     /// `InputModeCoordinator.requestToggle` is both.
-    public var onToggle: (@Sendable () -> Void)? {
+    ///
+    /// `eventTime` is when the key was pressed, on the same clock as
+    /// `NSEvent.timestamp` (seconds of uptime), so the owner can tell keystrokes
+    /// typed before the toggle from those typed after it.
+    public var onToggle: (@Sendable (_ eventTime: TimeInterval) -> Void)? {
         get { lock.withLock { _onToggle } }
         set { lock.withLock { _onToggle = newValue } }
     }
-    private var _onToggle: (@Sendable () -> Void)?
+    private var _onToggle: (@Sendable (_ eventTime: TimeInterval) -> Void)?
     
     /// Callback for Hanja lookup. Delivered on the main queue.
     public var onHanjaLookup: (@Sendable () -> Void)? {
@@ -294,7 +298,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                     // Toggle modifier pressed - toggle immediately!
                     toggleModifierIsDown = true
                     DebugLogger.log("RightCommandSuppressor: Toggle key DOWN (\(toggleBinding.displayName)) - TOGGLE (instant)")
-                    triggerToggle()
+                    triggerToggle(event)
                     return nil  // Suppress the modifier event
                 } else if !isPressed && toggleModifierIsDown {
                     // Toggle modifier released
@@ -352,7 +356,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                     if isAutorepeat { return nil }
                     // Single regular key as toggle (e.g., F13, Caps Lock via keyDown)
                     DebugLogger.log("RightCommandSuppressor: Regular key toggle (\(toggleBinding.displayName)) - TOGGLE")
-                    triggerToggle()
+                    triggerToggle(event)
                     return nil
                 } else {
                     // Combo toggle (e.g., Control+Space, Option+G)
@@ -360,7 +364,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                     if Self.hasRequiredModifiers(flags: event.flags, required: requiredFlags) {
                         if isAutorepeat { return nil }
                         DebugLogger.log("RightCommandSuppressor: Combo toggle (\(toggleBinding.displayName)) - TOGGLE triggered")
-                        triggerToggle()
+                        triggerToggle(event)
                         return nil
                     }
                 }
@@ -415,13 +419,22 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         return flags.intersection(required) == required
     }
 
-    private func triggerToggle() {
+    private func triggerToggle(_ event: CGEvent) {
         // Hand the toggle over right here, on the tap thread. The owner records it
-        // at key time and applies it on main (`InputModeCoordinator.requestToggle`),
-        // so the keystroke typed next cannot overtake it. IMK commit and
-        // keyboard-override work still stay off this callback, which protects
-        // against `kCGEventTapDisabledByTimeout`.
-        _onToggle?()
+        // with the key's time and applies it on main (`InputModeCoordinator
+        // .requestToggle`), so the keystroke typed next cannot overtake it. IMK
+        // commit and keyboard-override work still stay off this callback, which
+        // protects against `kCGEventTapDisabledByTimeout`.
+        _onToggle?(Self.eventTime(of: event))
+    }
+
+    /// The event's time on `NSEvent.timestamp`'s clock. AppKit reads a CGEvent
+    /// timestamp as nanoseconds of uptime; a synthetic event may carry 0, so fall
+    /// back to now.
+    static func eventTime(of event: CGEvent) -> TimeInterval {
+        event.timestamp == 0
+            ? ProcessInfo.processInfo.systemUptime
+            : TimeInterval(event.timestamp) / 1_000_000_000
     }
     
     private func triggerHanjaLookup() {

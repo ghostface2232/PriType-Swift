@@ -146,7 +146,7 @@ struct ToggleExclusionEventTapTests {
     func excludedAppKeepsItsKey() throws {
         let tap = RightCommandSuppressor()
         let toggled = CallbackFlag()
-        tap.onToggle = { toggled.fire() }
+        tap.onToggle = { _ in toggled.fire() }
 
         let event = try rightCommandDown()
         let result = tap.handleEvent(

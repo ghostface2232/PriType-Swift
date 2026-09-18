@@ -819,8 +819,8 @@ struct SettingsView: View {
 
                 // Auto-start key monitoring that was skipped at launch
                 if !RightCommandSuppressor.shared.isRunning {
-                    RightCommandSuppressor.shared.onToggle = {
-                        InputModeCoordinator.shared.requestToggle(source: .customKey)
+                    RightCommandSuppressor.shared.onToggle = { eventTime in
+                        InputModeCoordinator.shared.requestToggle(source: .customKey, eventTime: eventTime)
                     }
                     RightCommandSuppressor.shared.onHanjaLookup = {
                         PriTypeInputController.sharedComposer.triggerHanjaLookup()

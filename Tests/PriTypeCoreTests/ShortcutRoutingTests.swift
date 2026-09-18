@@ -16,7 +16,7 @@ struct ShortcutRoutingTests {
     func sharedPhysicalKey() async throws {
         let tap = RightCommandSuppressor()
         let actions = ShortcutActions()
-        tap.onToggle = { actions.record("toggle") }
+        tap.onToggle = { _ in actions.record("toggle") }
         tap.onHanjaLookup = { actions.record("hanja") }
         let toggle = KeyBinding(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue, displayName: "Control Space")
         let hanja = KeyBinding(keyCode: 49, modifiers: CGEventFlags.maskAlternate.rawValue, displayName: "Option Space")
@@ -46,7 +46,7 @@ struct ShortcutRoutingTests {
     func autorepeatFiresOnce() async throws {
         let tap = RightCommandSuppressor()
         let actions = ShortcutActions()
-        tap.onToggle = { actions.record("toggle") }
+        tap.onToggle = { _ in actions.record("toggle") }
         tap.onHanjaLookup = { actions.record("hanja") }
         let binding = KeyBinding(keyCode: 105, modifiers: 0, displayName: "F13")
         let hanja = KeyBinding(keyCode: 61, modifiers: 0, displayName: "Right Option")
@@ -70,7 +70,7 @@ struct ShortcutRoutingTests {
     func autorepeatOfUnboundKeyPassesThrough() async throws {
         let tap = RightCommandSuppressor()
         let actions = ShortcutActions()
-        tap.onToggle = { actions.record("toggle") }
+        tap.onToggle = { _ in actions.record("toggle") }
         tap.onHanjaLookup = { actions.record("hanja") }
         // Space alone does not match Control+Space, so holding it must type.
         let toggle = KeyBinding(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue, displayName: "Control Space")
@@ -90,7 +90,7 @@ struct ShortcutRoutingTests {
     func identicalBindings() async throws {
         let tap = RightCommandSuppressor()
         let actions = ShortcutActions()
-        tap.onToggle = { actions.record("toggle") }
+        tap.onToggle = { _ in actions.record("toggle") }
         tap.onHanjaLookup = { actions.record("hanja") }
         let binding = KeyBinding(keyCode: 105, modifiers: 0, displayName: "F13")
         let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 105, keyDown: true))

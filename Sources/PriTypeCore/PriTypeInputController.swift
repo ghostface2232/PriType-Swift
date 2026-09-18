@@ -382,8 +382,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         let session = ensureSession(for: client)
 
         // A toggle pressed just before this key may still be waiting for its hop
-        // from the key-monitor thread. Apply it now so this key lands in the new mode.
-        InputModeCoordinator.shared.applyPendingToggles()
+        // from the key-monitor thread. Apply it now so this key lands in the new
+        // mode — but only toggles pressed before this key: one pressed after it is
+        // not this key's business, and applying it would flip a key typed earlier.
+        InputModeCoordinator.shared.applyPendingToggles(before: event.timestamp)
 
         // 2. Duplicate-keyDown suppression. Some hosts (observed: KakaoTalk) deliver
         // the same physical keyDown to the IME twice. That double-processes input —
