@@ -522,10 +522,19 @@ struct CursorRectValidationTests {
     func rejectsFloatGarbage() {
         // Representative Chromium garbage: subnormal x/width with negative height.
         #expect(!HangulComposer.isValidCursorRect(NSRect(x: 1.6e-314, y: 95886, width: 1.6e-314, height: -1)))
-        // Subnormal origin with an otherwise plausible rect.
+        // Near-zero or non-finite values on an otherwise on-screen rect.
         let screens = [NSRect(x: 0, y: 0, width: 1920, height: 1080)]
-        #expect(!CursorRectResolver.isValidCursorRect(NSRect(x: 1.6e-314, y: 500, width: 1, height: 18), screens: screens))
-        #expect(!CursorRectResolver.isValidCursorRect(NSRect(x: CGFloat.nan, y: 500, width: 1, height: 18), screens: screens))
+        for rect in [
+            NSRect(x: 1.6e-314, y: 500, width: 1, height: 18),   // subnormal
+            NSRect(x: 1e-300, y: 500, width: 1, height: 18),     // tiny but normal
+            NSRect(x: 0.5, y: 0.5, width: 10, height: 10),
+            NSRect(x: 1, y: 1, width: 10, height: 10),
+            NSRect(x: 0, y: 500, width: 1, height: 18),
+            NSRect(x: CGFloat.nan, y: 500, width: 1, height: 18),
+            NSRect(x: 500, y: 500, width: CGFloat.nan, height: 18)
+        ] {
+            #expect(!CursorRectResolver.isValidCursorRect(rect, screens: screens), "\(rect)")
+        }
     }
 
     @Test("Accepts a caret on a display left of or below the main one")

@@ -134,7 +134,7 @@ PriType의 `ComponentInputModeDict`는 단일 mode `com.pritype.inputmethod.v2`�
 - 비정규화 부동소수점: `(1.6e-314, 95886, 1.6e-314, -1)` — 초기화되지 않은 메모리
 - 음수 height: `(x, y, w, -1)` — 비정상 응답
 
-검증 기준: origin이 유한하고 (0, 0)이 아닐 것, height > 0, origin이 비정규화(subnormal) 부동소수점이 아닐 것(쓰레기값 배제), origin이 연결된 `NSScreen.frame` 중 하나의 내부에 있을 것. 음수 좌표는 주 화면 왼쪽·아래에 놓인 보조 모니터에서 정상이므로 거부하지 않는다.
+검증 기준: 좌표와 크기가 유한할 것, height > 0, origin의 x·y 절댓값이 각각 1보다 클 것(0·비정규화 부동소수점 같은 쓰레기값 배제), origin이 연결된 `NSScreen.frame` 중 하나의 내부에 있을 것. 음수 좌표는 주 화면 왼쪽·아래에 놓인 보조 모니터에서 정상이므로 거부하지 않는다.
 
 ## 한자 검색과 자모 특수문자
 
