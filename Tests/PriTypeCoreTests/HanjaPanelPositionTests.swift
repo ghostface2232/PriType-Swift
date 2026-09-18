@@ -55,3 +55,41 @@ struct HanjaPanelPositionTests {
         #expect(left.contains(NSRect(origin: origin, size: panel)))
     }
 }
+
+@Suite("Hanja candidate key routing", .serialized)
+struct HanjaCandidateRoutingTests {
+    @Test("Candidate keys are consumed, arrows close and pass, the rest is left alone")
+    func routes() {
+        typealias W = HanjaCandidateWindow
+        #expect(W.route(keyCode: 53, flags: []) == .consume(digit: nil))      // Esc
+        #expect(W.route(keyCode: 36, flags: []) == .consume(digit: nil))      // Return
+        #expect(W.route(keyCode: 125, flags: []) == .consume(digit: nil))     // ↓
+        #expect(W.route(keyCode: 18, flags: []) == .consume(digit: 1))        // 1
+        #expect(W.route(keyCode: 25, flags: []) == .consume(digit: 9))        // 9
+        #expect(W.route(keyCode: 92, flags: []) == .consume(digit: 9))        // keypad 9
+        #expect(W.route(keyCode: 123, flags: []) == .dismissAndPass)          // ←
+        #expect(W.route(keyCode: 124, flags: []) == .dismissAndPass)          // →
+        #expect(W.route(keyCode: 15, flags: []) == .ignore)                   // r
+        #expect(W.route(keyCode: 18, flags: .maskShift) == .ignore)           // !
+        #expect(W.route(keyCode: 53, flags: .maskCommand) == .ignore)         // ⌘Esc
+    }
+
+    @Test("The event tap consumes Escape and passes the arrows only while candidates show")
+    func tapRoutesOnlyWhileShowing() throws {
+        let tap = RightCommandSuppressor()
+        defer { HanjaCandidateWindow.setAcceptingKeys(false) }
+        func keyDown(_ code: CGKeyCode) throws -> CGEvent {
+            let e = try #require(CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true))
+            e.flags = []
+            return e
+        }
+        HanjaCandidateWindow.setAcceptingKeys(true)
+        #expect(tap.handleEvent(type: .keyDown, event: try keyDown(53), toggle: .defaultToggle,
+                                hanja: .defaultHanja, toggleEnabled: true, excludedOverride: false) == nil)
+        #expect(tap.handleEvent(type: .keyDown, event: try keyDown(123), toggle: .defaultToggle,
+                                hanja: .defaultHanja, toggleEnabled: true, excludedOverride: false) != nil)
+        HanjaCandidateWindow.setAcceptingKeys(false)
+        #expect(tap.handleEvent(type: .keyDown, event: try keyDown(53), toggle: .defaultToggle,
+                                hanja: .defaultHanja, toggleEnabled: true, excludedOverride: false) != nil)
+    }
+}

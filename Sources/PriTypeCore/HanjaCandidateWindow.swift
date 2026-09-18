@@ -1,5 +1,6 @@
 import Cocoa
 import SwiftUI
+import os
 
 /// Custom floating candidate window for Hanja selection
 ///
@@ -22,7 +23,18 @@ public final class HanjaCandidateWindow: @unchecked Sendable {
             window?.isVisible ?? false
         }
     }
-    
+
+    /// Whether the window is showing candidates, readable from any thread.
+    ///
+    /// The event tap consults it on every keyDown so it can route candidate keys
+    /// itself. Some clients never hand those keys to the input method: once the
+    /// syllable is committed for the lookup, Terminal sends Escape, the arrows
+    /// and Return straight to the shell — Return would run the command line
+    /// instead of choosing a candidate. Set on show, cleared on every dismissal.
+    private static let acceptingKeysState = OSAllocatedUnfairLock(initialState: false)
+    public static var isAcceptingKeys: Bool { acceptingKeysState.withLock { $0 } }
+    static func setAcceptingKeys(_ value: Bool) { acceptingKeysState.withLock { $0 = value } }
+
     private init() {}
     
     /// Show the candidate window with the given entries
@@ -106,6 +118,7 @@ public final class HanjaCandidateWindow: @unchecked Sendable {
         updateContent()
         positionWindow(near: cursorRect)
         panel.orderFrontRegardless()
+        Self.setAcceptingKeys(true)
         
         DebugLogger.log("Hanja: Window shown at \(panel.frame), level=\(panel.level.rawValue)")
     }
@@ -119,6 +132,7 @@ public final class HanjaCandidateWindow: @unchecked Sendable {
 
     @MainActor
     private func dismissOnMain() {
+        Self.setAcceptingKeys(false)
         window?.orderOut(nil)
         candidates = []
         let dismissCallback = onDismiss
@@ -135,6 +149,38 @@ public final class HanjaCandidateWindow: @unchecked Sendable {
 
         return MainActor.assumeIsolated {
             handleKeyOnMain(keyCode: keyCode, digit: digit)
+        }
+    }
+
+    /// Apply a candidate key routed by the event tap. Main thread only.
+    public func handleRoutedKey(keyCode: UInt16, digit: Int?) {
+        MainActor.assumeIsolated {
+            _ = handleKeyOnMain(keyCode: keyCode, digit: digit)
+        }
+    }
+
+    /// How the event tap treats a keyDown while candidates are showing.
+    public enum RoutedKey: Equatable {
+        /// Handle it in the window and keep it from the app (select, page, close).
+        case consume(digit: Int?)
+        /// Close the window and let the app have the key (caret movement).
+        case dismissAndPass
+        /// Not a candidate key; leave it to the input-method path.
+        case ignore
+    }
+
+    /// Candidate-key routing by physical key, so digits work on any layout
+    /// (AZERTY types them only with Shift). Keys with Command, Control or Option
+    /// are shortcuts and are never routed.
+    public static func route(keyCode: Int64, flags: CGEventFlags) -> RoutedKey {
+        if !flags.intersection([.maskCommand, .maskControl, .maskAlternate]).isEmpty { return .ignore }
+        let digits: [Int64: Int] = [18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9,
+                                    83: 1, 84: 2, 85: 3, 86: 4, 87: 5, 88: 6, 89: 7, 91: 8, 92: 9]
+        if let digit = digits[keyCode], !flags.contains(.maskShift) { return .consume(digit: digit) }
+        switch keyCode {
+        case 53, 36, 76, 125, 126, 48, 30, 33: return .consume(digit: nil)   // Esc Return Enter ↓ ↑ Tab ] [
+        case 123, 124: return .dismissAndPass                                 // ← →
+        default: return .ignore
         }
     }
 
@@ -224,6 +270,7 @@ public final class HanjaCandidateWindow: @unchecked Sendable {
     /// Used after selection, where the onSelect callback already handles state cleanup
     @MainActor
     private func dismissWithoutCallback() {
+        Self.setAcceptingKeys(false)
         window?.orderOut(nil)
         candidates = []
         onSelect = nil
