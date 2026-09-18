@@ -28,21 +28,31 @@ public final class InputModeCoordinator: @unchecked Sendable {
         }
     }
 
-    private struct PendingToggle {
-        let source: ToggleSource
-        /// When the toggle key was pressed, on `NSEvent.timestamp`'s clock.
+    /// A key action seen by a key monitor, waiting to run on main.
+    private enum KeyAction {
+        case toggle(ToggleSource)
+        case hanja
+    }
+
+    private struct PendingAction {
+        let action: KeyAction
+        /// When the key was pressed, on `NSEvent.timestamp`'s clock.
         let eventTime: TimeInterval
     }
 
-    /// Toggles requested off the main thread that have not been applied yet.
+    /// Key actions requested off the main thread that have not run yet.
     ///
-    /// The key monitor runs on its own thread, so a toggle is recorded here the
+    /// The key monitor runs on its own thread, so an action is recorded here the
     /// moment its key is seen, before the hop to main. Keystrokes travel
     /// host → IMK → `handle()` on main, and nothing orders that message against the
-    /// hop in either direction. `handle()` therefore applies exactly the toggles
+    /// hop in either direction. `handle()` therefore runs exactly the actions
     /// pressed before its key: a key typed after the toggle lands in the new mode,
-    /// and one typed just before it — still in flight to IMK — stays in the old one.
-    private let pendingToggles = OSAllocatedUnfairLock<[PendingToggle]>(initialState: [])
+    /// one typed just before it — still in flight to IMK — stays in the old one,
+    /// and a key typed after the Hanja key reaches the candidate window.
+    ///
+    /// Toggles and Hanja lookups share this one list because their order matters
+    /// to each other: Hanja then toggle must look up in the mode it was pressed in.
+    private let pendingActions = OSAllocatedUnfairLock<[PendingAction]>(initialState: [])
 
     private init() {}
 
@@ -51,48 +61,67 @@ public final class InputModeCoordinator: @unchecked Sendable {
     /// first. `eventTime` is when the toggle key was pressed (`NSEvent.timestamp`'s
     /// clock); without it the toggle counts as pressed now.
     public func requestToggle(source: ToggleSource, eventTime: TimeInterval? = nil) {
+        request(.toggle(source), eventTime: eventTime)
+    }
+
+    /// Request a Hanja lookup, ordered with toggles and keystrokes exactly like
+    /// `requestToggle`.
+    public func requestHanjaLookup(eventTime: TimeInterval? = nil) {
+        request(.hanja, eventTime: eventTime)
+    }
+
+    private func request(_ action: KeyAction, eventTime: TimeInterval?) {
         guard Thread.isMainThread else {
-            let toggle = PendingToggle(
-                source: source,
+            let pending = PendingAction(
+                action: action,
                 eventTime: eventTime ?? ProcessInfo.processInfo.systemUptime
             )
-            pendingToggles.withLock { $0.append(toggle) }
+            pendingActions.withLock { $0.append(pending) }
             DispatchQueue.main.async {
-                self.applyPendingToggles()
+                self.applyPendingKeyActions()
             }
             return
         }
 
-        // Toggles recorded earlier must land before this one.
-        applyPendingToggles()
-        performToggle(source: source)
+        // Actions recorded earlier must run before this one.
+        applyPendingKeyActions()
+        perform(action)
     }
 
-    /// Apply toggles recorded off the main thread, in order. Main thread only.
+    /// Run key actions recorded off the main thread, in order. Main thread only.
     /// A no-op when nothing is pending, so every caller can invoke it freely.
     ///
     /// - Parameter keyTime: the `NSEvent.timestamp` of a keystroke about to be
-    ///   handled. Only toggles pressed before it are applied; later ones stay
-    ///   pending for their own hop. `nil` applies everything.
-    public func applyPendingToggles(before keyTime: TimeInterval? = nil) {
-        let due = pendingToggles.withLock { pending -> [PendingToggle] in
+    ///   handled. Only actions pressed before it run; later ones stay pending for
+    ///   their own hop. `nil` runs everything.
+    public func applyPendingKeyActions(before keyTime: TimeInterval? = nil) {
+        let due = pendingActions.withLock { pending -> [PendingAction] in
             guard let keyTime else {
                 defer { pending.removeAll() }
                 return pending
             }
-            // Pending toggles arrive in key order, so the due ones are a prefix.
+            // Pending actions arrive in key order, so the due ones are a prefix.
             let count = pending.prefix { $0.eventTime < keyTime }.count
             defer { pending.removeFirst(count) }
             return Array(pending.prefix(count))
         }
-        for toggle in due {
-            performToggle(source: toggle.source)
+        for pending in due {
+            perform(pending.action)
         }
     }
 
-    /// Number of recorded toggles still waiting for main (for tests).
-    var pendingToggleCount: Int {
-        pendingToggles.withLock { $0.count }
+    /// Number of recorded key actions still waiting for main (for tests).
+    var pendingActionCount: Int {
+        pendingActions.withLock { $0.count }
+    }
+
+    private func perform(_ action: KeyAction) {
+        switch action {
+        case .toggle(let source):
+            performToggle(source: source)
+        case .hanja:
+            PriTypeInputController.sharedComposer.triggerHanjaLookup()
+        }
     }
 
     private func performToggle(source: ToggleSource) {

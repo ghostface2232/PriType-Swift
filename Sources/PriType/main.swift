@@ -85,8 +85,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         }
         
         // Set callback for Right Option key → Hanja lookup
-        RightCommandSuppressor.shared.onHanjaLookup = {
-            PriTypeInputController.sharedComposer.triggerHanjaLookup()
+        RightCommandSuppressor.shared.onHanjaLookup = { eventTime in
+            InputModeCoordinator.shared.requestHanjaLookup(eventTime: eventTime)
         }
         
         // Track if CGEventTap started successfully
@@ -104,7 +104,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                     InputModeCoordinator.shared.requestToggle(source: .iokitFallback)
                 }
                 IOKitManager.shared.onRightOptionHanja = {
-                    PriTypeInputController.sharedComposer.triggerHanjaLookup()
+                    InputModeCoordinator.shared.requestHanjaLookup()
                 }
                 IOKitManager.shared.start()
             }
@@ -115,7 +115,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 InputModeCoordinator.shared.requestToggle(source: .iokitFallback)
             }
             IOKitManager.shared.onRightOptionHanja = {
-                PriTypeInputController.sharedComposer.triggerHanjaLookup()
+                InputModeCoordinator.shared.requestHanjaLookup()
             }
             IOKitManager.shared.start()
         }

@@ -195,7 +195,7 @@ struct ToggleExclusionEventTapTests {
     func excludedAppSuppressesHanja() throws {
         let tap = RightCommandSuppressor()
         let hanjaFired = CallbackFlag()
-        tap.onHanjaLookup = { hanjaFired.fire() }
+        tap.onHanjaLookup = { _ in hanjaFired.fire() }
 
         let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 61, keyDown: true))
         event.type = .flagsChanged

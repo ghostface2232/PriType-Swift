@@ -64,12 +64,14 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     }
     private var _onToggle: (@Sendable (_ eventTime: TimeInterval) -> Void)?
     
-    /// Callback for Hanja lookup. Delivered on the main queue.
-    public var onHanjaLookup: (@Sendable () -> Void)? {
+    /// Callback for Hanja lookup. Called on the event-tap thread with the key's
+    /// time, like `onToggle`, so it must be thread-safe and must not block.
+    /// `InputModeCoordinator.requestHanjaLookup` is both.
+    public var onHanjaLookup: (@Sendable (_ eventTime: TimeInterval) -> Void)? {
         get { lock.withLock { _onHanjaLookup } }
         set { lock.withLock { _onHanjaLookup = newValue } }
     }
-    private var _onHanjaLookup: (@Sendable () -> Void)?
+    private var _onHanjaLookup: (@Sendable (_ eventTime: TimeInterval) -> Void)?
     
     /// Track toggle modifier state
     private var toggleModifierIsDown = false
@@ -326,7 +328,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                     lastHanjaTriggerTime = now
                     
                     DebugLogger.log("RightCommandSuppressor: Hanja key DOWN (\(hanjaBinding.displayName)) - HANJA")
-                    triggerHanjaLookup()
+                    triggerHanjaLookup(event)
                     return nil  // Suppress
                 } else if !isPressed && hanjaModifierIsDown {
                     hanjaModifierIsDown = false
@@ -377,7 +379,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                 if hanjaBinding.isModifierOnly || Self.hasRequiredModifiers(flags: event.flags, required: CGEventFlags(rawValue: hanjaBinding.modifiers)) {
                     if isAutorepeat { return nil }
                     DebugLogger.log("RightCommandSuppressor: Regular key hanja (\(hanjaBinding.displayName)) - HANJA")
-                    triggerHanjaLookup()
+                    triggerHanjaLookup(event)
                     return nil
                 }
             }
@@ -437,11 +439,10 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             : TimeInterval(event.timestamp) / 1_000_000_000
     }
     
-    private func triggerHanjaLookup() {
-        let callback = _onHanjaLookup
-        DispatchQueue.main.async {
-            callback?()
-        }
+    private func triggerHanjaLookup(_ event: CGEvent) {
+        // Same hand-over as the toggle, so the two keep their relative order and a
+        // key typed after the Hanja key reaches the candidate window.
+        _onHanjaLookup?(Self.eventTime(of: event))
     }
 }
 

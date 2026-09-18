@@ -17,11 +17,10 @@ struct ShortcutRoutingTests {
         let tap = RightCommandSuppressor()
         let actions = ShortcutActions()
         tap.onToggle = { _ in actions.record("toggle") }
-        tap.onHanjaLookup = { actions.record("hanja") }
+        tap.onHanjaLookup = { _ in actions.record("hanja") }
         let toggle = KeyBinding(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue, displayName: "Control Space")
         let hanja = KeyBinding(keyCode: 49, modifiers: CGEventFlags.maskAlternate.rawValue, displayName: "Option Space")
-        // Toggle is handed over synchronously while hanja hops to main, so check
-        // each event's action on its own rather than the interleaved order.
+        // Check each event's action on its own, not just the final list.
         for (flags, expected) in [(CGEventFlags.maskAlternate, ["hanja"]), (.maskControl, ["hanja", "toggle"])] {
             let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 49, keyDown: true))
             event.flags = flags
@@ -47,7 +46,7 @@ struct ShortcutRoutingTests {
         let tap = RightCommandSuppressor()
         let actions = ShortcutActions()
         tap.onToggle = { _ in actions.record("toggle") }
-        tap.onHanjaLookup = { actions.record("hanja") }
+        tap.onHanjaLookup = { _ in actions.record("hanja") }
         let binding = KeyBinding(keyCode: 105, modifiers: 0, displayName: "F13")
         let hanja = KeyBinding(keyCode: 61, modifiers: 0, displayName: "Right Option")
         let first = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 105, keyDown: true))
@@ -71,7 +70,7 @@ struct ShortcutRoutingTests {
         let tap = RightCommandSuppressor()
         let actions = ShortcutActions()
         tap.onToggle = { _ in actions.record("toggle") }
-        tap.onHanjaLookup = { actions.record("hanja") }
+        tap.onHanjaLookup = { _ in actions.record("hanja") }
         // Space alone does not match Control+Space, so holding it must type.
         let toggle = KeyBinding(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue, displayName: "Control Space")
         let hanja = KeyBinding(keyCode: 61, modifiers: 0, displayName: "Right Option")
@@ -91,7 +90,7 @@ struct ShortcutRoutingTests {
         let tap = RightCommandSuppressor()
         let actions = ShortcutActions()
         tap.onToggle = { _ in actions.record("toggle") }
-        tap.onHanjaLookup = { actions.record("hanja") }
+        tap.onHanjaLookup = { _ in actions.record("hanja") }
         let binding = KeyBinding(keyCode: 105, modifiers: 0, displayName: "F13")
         let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 105, keyDown: true))
         #expect(tap.handleEvent(type: .keyDown, event: event, toggle: binding, hanja: binding,

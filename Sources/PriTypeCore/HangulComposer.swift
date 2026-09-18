@@ -577,7 +577,7 @@ public class HangulComposer: @unchecked Sendable {
     
     // MARK: - Hanja Lookup
     
-    /// Trigger Hanja lookup externally (called by RightCommandSuppressor via CGEventTap)
+    /// Trigger Hanja lookup externally (run by `InputModeCoordinator`, in key order)
     ///
     /// This is the public entry point for Hanja conversion.
     /// Acts as a toggle: dismisses if already visible, opens if not.

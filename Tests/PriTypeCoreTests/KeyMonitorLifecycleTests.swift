@@ -211,27 +211,47 @@ struct PendingToggleTests {
     @Test("An off-main toggle is recorded at once and drained on main")
     func offMainToggleIsRecordedThenDrained() {
         let coordinator = InputModeCoordinator.shared
-        coordinator.applyPendingToggles()
+        coordinator.applyPendingKeyActions()
         requestOffMain(at: [1])
-        #expect(coordinator.pendingToggleCount == 1)
-        coordinator.applyPendingToggles()
-        #expect(coordinator.pendingToggleCount == 0)
+        #expect(coordinator.pendingActionCount == 1)
+        coordinator.applyPendingKeyActions()
+        #expect(coordinator.pendingActionCount == 0)
     }
 
     @Test("A keystroke applies only toggles pressed before it")
     func keystrokeAppliesOnlyEarlierToggles() {
         let coordinator = InputModeCoordinator.shared
-        coordinator.applyPendingToggles()
+        coordinator.applyPendingKeyActions()
         requestOffMain(at: [10, 30])
         // A key typed at 20 was in flight when the second toggle was pressed; it
         // takes the first toggle and must leave the second for later.
-        coordinator.applyPendingToggles(before: 20)
-        #expect(coordinator.pendingToggleCount == 1)
+        coordinator.applyPendingKeyActions(before: 20)
+        #expect(coordinator.pendingActionCount == 1)
         // A key typed before both toggles changes nothing.
-        coordinator.applyPendingToggles(before: 5)
-        #expect(coordinator.pendingToggleCount == 1)
-        coordinator.applyPendingToggles(before: 31)
-        #expect(coordinator.pendingToggleCount == 0)
+        coordinator.applyPendingKeyActions(before: 5)
+        #expect(coordinator.pendingActionCount == 1)
+        coordinator.applyPendingKeyActions(before: 31)
+        #expect(coordinator.pendingActionCount == 0)
+    }
+
+    @Test("A Hanja key keeps its place in the order")
+    func hanjaIsOrderedWithToggles() {
+        let coordinator = InputModeCoordinator.shared
+        coordinator.applyPendingKeyActions()
+        // Hanja at 10, toggle at 30, recorded off main like the event tap does.
+        let done = DispatchSemaphore(value: 0)
+        Thread {
+            coordinator.requestHanjaLookup(eventTime: 10)
+            coordinator.requestToggle(source: .customKey, eventTime: 30)
+            done.signal()
+        }.start()
+        done.wait()
+        #expect(coordinator.pendingActionCount == 2)
+        // A key typed at 20 runs the Hanja lookup, not the later toggle.
+        coordinator.applyPendingKeyActions(before: 20)
+        #expect(coordinator.pendingActionCount == 1)
+        coordinator.applyPendingKeyActions()
+        #expect(coordinator.pendingActionCount == 0)
     }
 
     @Test("Toggle times use NSEvent's clock")
