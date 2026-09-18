@@ -194,7 +194,7 @@ func verify() {
     // Test 6: Unknown char (e.g. '!') - Keycode 18 (1) + Shift? 
     // Just manual char '!'
     print("Test 6: Typing '!'")
-    let eventBang = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, characters: "!", charactersIgnoringModifiers: "!", isARepeat: false, keyCode: 18)
+    let eventBang = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.shift], timestamp: 0, windowNumber: 0, context: nil, characters: "!", charactersIgnoringModifiers: "!", isARepeat: false, keyCode: 18)
     
     // LibHangul might map '!' (Shift+1) to something or just pass it?
     // In 2-set, Shift+1 is ! (not mapped to hangul).

@@ -384,11 +384,13 @@ public class HangulComposer: @unchecked Sendable {
              return false
         }
         
-        guard let characters = event.characters, !characters.isEmpty else {
+        // Compose from the key's position, not the active Latin layout: the Hangul
+        // layout is defined on QWERTY positions, and only Shift (never Caps Lock)
+        // picks the upper row. Keys outside the main block keep their characters.
+        let positional = QwertyKeyMap.character(for: keyCode, shifted: event.modifierFlags.contains(.shift))
+        guard let inputCharacters = positional ?? event.characters, !inputCharacters.isEmpty else {
             return false
         }
-        
-        let inputCharacters = characters
         
         // Handle special keys (Return, Escape, Space, Arrow, Tab, Backspace)
         if let result = handleSpecialKey(keyCode: keyCode, delegate: delegate) {

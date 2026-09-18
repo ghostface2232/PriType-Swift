@@ -114,3 +114,34 @@ public enum KeyCode {
         return isFunctionKey(charCode) || isIgnorableControlChar(charCode)
     }
 }
+
+// MARK: - QwertyKeyMap
+
+/// US QWERTY characters by virtual key code, for the main typing block.
+///
+/// Hangul layouts are defined by key *position*: 두벌식 ㄱ is the key labelled R
+/// on a US keyboard, whatever the active Latin layout calls it. Reading
+/// `event.characters` instead ties composition to that layout, so a Dvorak,
+/// Colemak or AZERTY user types the wrong jamo, and Caps Lock turns every
+/// consonant into its doubled form. Keys outside this table (keypad, JIS/ISO
+/// extras, function keys) keep the characters the system produced.
+public enum QwertyKeyMap {
+    private static let table: [UInt16: (plain: String, shifted: String)] = [
+        0: ("a", "A"), 1: ("s", "S"), 2: ("d", "D"), 3: ("f", "F"), 4: ("h", "H"),
+        5: ("g", "G"), 6: ("z", "Z"), 7: ("x", "X"), 8: ("c", "C"), 9: ("v", "V"),
+        11: ("b", "B"), 12: ("q", "Q"), 13: ("w", "W"), 14: ("e", "E"), 15: ("r", "R"),
+        16: ("y", "Y"), 17: ("t", "T"), 18: ("1", "!"), 19: ("2", "@"), 20: ("3", "#"),
+        21: ("4", "$"), 22: ("6", "^"), 23: ("5", "%"), 24: ("=", "+"), 25: ("9", "("),
+        26: ("7", "&"), 27: ("-", "_"), 28: ("8", "*"), 29: ("0", ")"), 30: ("]", "}"),
+        31: ("o", "O"), 32: ("u", "U"), 33: ("[", "{"), 34: ("i", "I"), 35: ("p", "P"),
+        37: ("l", "L"), 38: ("j", "J"), 39: ("'", "\""), 40: ("k", "K"), 41: (";", ":"),
+        42: ("\\", "|"), 43: (",", "<"), 44: ("/", "?"), 45: ("n", "N"), 46: ("m", "M"),
+        47: (".", ">"), 50: ("`", "~")
+    ]
+
+    /// The QWERTY character at `keyCode`, or `nil` for a key outside the table.
+    /// Only Shift selects the upper character; Caps Lock is deliberately ignored.
+    public static func character(for keyCode: UInt16, shifted: Bool) -> String? {
+        table[keyCode].map { shifted ? $0.shifted : $0.plain }
+    }
+}
