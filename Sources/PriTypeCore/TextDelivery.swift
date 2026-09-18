@@ -15,10 +15,11 @@ enum InputDeliveryMode: Equatable {
 /// Single decision point for how composition is delivered to a client.
 ///
 /// Default is canonical marked text. Direct insertion (experimental) is attempted in
-/// EVERY app when the flag is ON — there is no per-app allowlist. The only gate is the
-/// activation probe `documentAccessSafe`: apps that cannot report a usable selection
-/// range (e.g. terminals) physically cannot do in-place rewrites, so they keep the
-/// marked-text path. Apps that pass the probe but misbehave at runtime degrade to
+/// every app when the flag is ON (and always for Hermes) — there is no per-app
+/// allowlist. Two gates remain: the activation probe `documentAccessSafe` (apps that
+/// cannot report a usable selection range, e.g. terminals, physically cannot do
+/// in-place rewrites) and the Electron/browser denylist in `ClientCompatibilityPolicy`
+/// (their selection reports lag the document). Both keep the marked-text path. Apps that pass the probe but misbehave at runtime degrade to
 /// marked text via the adapter's caret-stability guard / bail path — so enabling it
 /// everywhere never corrupts text, it just falls back where it can't work.
 enum TextDeliveryPolicy {
@@ -205,9 +206,9 @@ final class ImmediateModeAdapter: BaseClientAdapter {
 /// stays unchanged: the composer keeps calling `insertText`/`setMarkedText` and this
 /// adapter reinterprets them as in-place real-text rewrites.
 ///
-/// Selected only when `experimentalDirectInsertion` is ON, the host is on the
-/// `directInsertionAllowed` allowlist, AND the activation probe found
-/// `documentAccessSafe`. OFF by default. See Docs/KoreanWindowsInputFeasibility.md.
+/// Selected only when `experimentalDirectInsertion` is ON (or the host is Hermes),
+/// the host is not on the `directInsertionDenied` denylist, AND the activation probe
+/// found `documentAccessSafe`. OFF by default. See Docs/KoreanWindowsInputFeasibility.md.
 final class DirectInsertionAdapter: BaseClientAdapter {
     override var deliveryMode: InputDeliveryMode { .directInsertion }
 
