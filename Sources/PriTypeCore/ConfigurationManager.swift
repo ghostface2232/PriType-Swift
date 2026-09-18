@@ -301,18 +301,6 @@ public protocol ConfigurationProviding: AnyObject, Sendable {
     /// Whether the system double-space period feature is enabled.
     var doubleSpacePeriodEnabled: Bool { get }
 
-    /// Whether the system auto-capitalization feature is enabled.
-    ///
-    /// PriType does not reimplement this in Korean composition; English mode is
-    /// pure pass-through so macOS owns the feature just like the ABC input source.
-    var autoCapitalizationEnabled: Bool { get }
-
-    /// Whether the system smart quote substitution feature is enabled.
-    var smartQuoteSubstitutionEnabled: Bool { get }
-
-    /// Whether the system smart dash substitution feature is enabled.
-    var smartDashSubstitutionEnabled: Bool { get }
-
     /// Experimental: deliver the in-progress syllable as REAL text (Windows-style
     /// direct insertion) instead of marked text, on probe-verified allowlisted hosts.
     /// Default OFF. See Docs/KoreanWindowsInputFeasibility.md (Phase 3).
@@ -327,11 +315,6 @@ public extension ConfigurationProviding {
     /// inherit this unless they override it; only `ConfigurationManager` reads the flag.
     var experimentalDirectInsertion: Bool { false }
     var toggleExcludedBundleIDs: [String] { [] }
-
-    /// Default: enabled, matching macOS's normal text-input default.
-    var autoCapitalizationEnabled: Bool { true }
-    var smartQuoteSubstitutionEnabled: Bool { true }
-    var smartDashSubstitutionEnabled: Bool { true }
 }
 
 // MARK: - ConfigurationManager
@@ -370,18 +353,6 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         key: SystemTextInputKeys.automaticPeriodSubstitution,
         defaultValue: true
     )
-    private var cachedAutoCapitalizationEnabled: Bool = ConfigurationManager.readSystemTextFeature(
-        key: SystemTextInputKeys.automaticCapitalization,
-        defaultValue: true
-    )
-    private var cachedSmartQuoteSubstitutionEnabled: Bool = ConfigurationManager.readSystemTextFeature(
-        key: SystemTextInputKeys.automaticQuoteSubstitution,
-        defaultValue: true
-    )
-    private var cachedSmartDashSubstitutionEnabled: Bool = ConfigurationManager.readSystemTextFeature(
-        key: SystemTextInputKeys.automaticDashSubstitution,
-        defaultValue: true
-    )
     
     private init() {
         defaults.removeObject(forKey: "com.pritype.autoCapitalize")
@@ -403,10 +374,7 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     }
 
     private enum SystemTextInputKeys {
-        static let automaticCapitalization = "NSAutomaticCapitalizationEnabled"
-        static let automaticDashSubstitution = "NSAutomaticDashSubstitutionEnabled"
         static let automaticPeriodSubstitution = "NSAutomaticPeriodSubstitutionEnabled"
-        static let automaticQuoteSubstitution = "NSAutomaticQuoteSubstitutionEnabled"
     }
 
     // MARK: - Toggle Key (Legacy)
@@ -702,9 +670,6 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
             guard now - lastSystemTextRefresh >= 2 else { return }
             lastSystemTextRefresh = now
             cachedDoubleSpacePeriodEnabled = Self.readSystemTextFeature(key: SystemTextInputKeys.automaticPeriodSubstitution, defaultValue: true)
-            cachedAutoCapitalizationEnabled = Self.readSystemTextFeature(key: SystemTextInputKeys.automaticCapitalization, defaultValue: true)
-            cachedSmartQuoteSubstitutionEnabled = Self.readSystemTextFeature(key: SystemTextInputKeys.automaticQuoteSubstitution, defaultValue: true)
-            cachedSmartDashSubstitutionEnabled = Self.readSystemTextFeature(key: SystemTextInputKeys.automaticDashSubstitution, defaultValue: true)
         }
     }
 
@@ -712,28 +677,6 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     public var doubleSpacePeriodEnabled: Bool {
         refreshSystemTextFeaturesIfNeeded()
         return systemTextFeatureLock.withLock { cachedDoubleSpacePeriodEnabled }
-    }
-
-    /// Mirrors macOS "Capitalize words automatically".
-    ///
-    /// PriType reads and caches this setting for observability, but does not
-    /// apply it in Korean composition. English mode passes through to macOS, so
-    /// the system handles capitalization without PriType tracking text context.
-    public var autoCapitalizationEnabled: Bool {
-        refreshSystemTextFeaturesIfNeeded()
-        return systemTextFeatureLock.withLock { cachedAutoCapitalizationEnabled }
-    }
-
-    /// Mirrors macOS "Use smart quotes".
-    public var smartQuoteSubstitutionEnabled: Bool {
-        refreshSystemTextFeaturesIfNeeded()
-        return systemTextFeatureLock.withLock { cachedSmartQuoteSubstitutionEnabled }
-    }
-
-    /// Mirrors macOS "Use smart dashes".
-    public var smartDashSubstitutionEnabled: Bool {
-        refreshSystemTextFeaturesIfNeeded()
-        return systemTextFeatureLock.withLock { cachedSmartDashSubstitutionEnabled }
     }
 
     private static func readSystemTextFeature(key: String, defaultValue: Bool) -> Bool {

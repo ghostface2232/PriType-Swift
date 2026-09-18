@@ -42,6 +42,5 @@ PriTypeCore는 libhangul 기반의 현대적인 macOS 한글 입력기 엔진입
 
 ### 시스템 통합
 
-- ``StatusBarManager``
 - ``InputSourceManager``
 - ``PriTypeInputController``

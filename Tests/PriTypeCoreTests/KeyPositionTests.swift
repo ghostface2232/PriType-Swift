@@ -6,7 +6,7 @@ import Testing
 @Suite("Key position composition")
 struct KeyPositionTests {
     private func makeComposer() -> (HangulComposer, MockComposerDelegate) {
-        (HangulComposer(statusBar: MockStatusBar(), configuration: MockConfiguration()), MockComposerDelegate())
+        (HangulComposer(configuration: MockConfiguration()), MockComposerDelegate())
     }
 
     private func type(_ keys: [(char: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags)],

@@ -2,11 +2,6 @@ import Foundation
 import PriTypeCore
 import PriTypeIMKHarness
 
-// No-op status bar for accurate benchmarking (excludes NSStatusItem overhead)
-final class NoopStatusBar: StatusBarUpdating {
-    func setMode(_ mode: InputMode) {}
-}
-
 // MARK: - Benchmark Utilities
 
 @discardableResult
@@ -278,10 +273,10 @@ measure("isValidCursorRect 버스트 (100,000회)", iterations: 100000) {
 separator("6️⃣  HangulComposer 인스턴스 성능")
 
 measure("HangulComposer 생성") {
-    _ = HangulComposer(statusBar: NoopStatusBar())
+    _ = HangulComposer()
 }
 
-let composer = HangulComposer(statusBar: NoopStatusBar())
+let composer = HangulComposer()
 measure("입력모드 전환 (10,000회)", iterations: 10000) {
     composer.setInputMode(composer.inputMode.toggled)
 }

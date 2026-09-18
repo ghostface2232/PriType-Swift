@@ -99,7 +99,7 @@ struct ToggleRecoveryEventTests {
 
     @Test("Later explicit mode selection invalidates a delayed old controller value")
     func oldModeCannotOverrideNewSelection() {
-        let composer = HangulComposer(statusBar: MockStatusBar(), configuration: MockConfiguration())
+        let composer = HangulComposer(configuration: MockConfiguration())
         let pending = DeferredInputMode(mode: .english, revision: composer.modeSelectionRevision)
         #expect(pending.resolve(currentRevision: composer.modeSelectionRevision) == .english)
         composer.setInputMode(.korean)
@@ -108,7 +108,7 @@ struct ToggleRecoveryEventTests {
 
     @Test("Applying a pending mode equal to the current one still retires older pendings")
     func sameModePendingStillBumpsRevision() throws {
-        let composer = HangulComposer(statusBar: MockStatusBar(), configuration: MockConfiguration())
+        let composer = HangulComposer(configuration: MockConfiguration())
         #expect(composer.inputMode == .korean)
         // An old English value and a newer Korean value are both parked while
         // neither controller owns the engine, so both carry the same revision.

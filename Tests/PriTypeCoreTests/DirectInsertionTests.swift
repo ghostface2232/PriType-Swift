@@ -211,7 +211,7 @@ final class FakeIMKTextInput: NSObject, IMKTextInput {
 @Suite("Direct insertion session state")
 struct DirectInsertionSessionTests {
     private func makeSession() -> (HangulComposer, FakeIMKTextInput, InputSession) {
-        let composer = HangulComposer(statusBar: MockStatusBar(), configuration: MockConfiguration())
+        let composer = HangulComposer(configuration: MockConfiguration())
         let client = FakeIMKTextInput()
         let context = ClientContext(
             bundleId: "com.nousresearch.hermes",
@@ -420,8 +420,7 @@ struct CommitBeforeMarkOrderingTests {
     /// the experimental direct-insertion path.
     @Test("받침 migration commits previous syllable before marking the new one")
     func migrationOrdering() {
-        let statusBar = MockStatusBar()
-        let composer = HangulComposer(statusBar: statusBar, configuration: MockConfiguration())
+        let composer = HangulComposer(configuration: MockConfiguration())
         let delegate = MockComposerDelegate()
 
         // Type 안 (ㅇ ㅏ ㄴ)
@@ -485,7 +484,7 @@ final class FakeDirectInsertionClient: HangulComposerDelegate {
 struct DirectInsertionEndToEndTests {
 
     private func makeComposer() -> (HangulComposer, FakeDirectInsertionClient) {
-        let composer = HangulComposer(statusBar: MockStatusBar(), configuration: MockConfiguration())
+        let composer = HangulComposer(configuration: MockConfiguration())
         return (composer, FakeDirectInsertionClient())
     }
 
@@ -544,7 +543,7 @@ struct LegacyClientFocusRecoveryTests {
     @Test("Empty supported attributes survive activation and repeated context refresh")
     func reactivationKeepsKoreanWorking() {
         let client = FakeIMKTextInput()
-        let composer = HangulComposer(statusBar: MockStatusBar(), configuration: MockConfiguration())
+        let composer = HangulComposer(configuration: MockConfiguration())
         let session = InputSession(client: client,
             context: ClientContextDetector.analyzeForActivation(client: client), composer: composer)
         #expect(session.context.bundleId == client.bundleIdentifier())

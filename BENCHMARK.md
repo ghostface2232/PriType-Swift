@@ -115,7 +115,7 @@ libhangul은 preedit 문자를 초성 자모(Choseong Jamo, U+1100~U+1112)로 �
 | 항목 | 수치 | 설명 |
 | --- | ---: | --- |
 | 인스턴스 생성 | 0.07ms | libhangul 컨텍스트 초기화 포함 |
-| 입력모드 전환 10,000회 | 0.01μs/op | `setInputMode(composer.inputMode.toggled)` 호출. 상태 바 업데이트 제외 |
+| 입력모드 전환 10,000회 | 0.01μs/op | `setInputMode(composer.inputMode.toggled)` 호출 |
 
 ## 타이핑 경로
 

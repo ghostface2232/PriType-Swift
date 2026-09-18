@@ -11,7 +11,7 @@ struct CompositionEdgeCaseTests {
     
     @Test("Double consonant ㄲ (Shift+r → R)")
     func doubleConsonantGG() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         // Shift+R = ㄲ
         _ = composer.handle(TestEventFactory.keyEvent(char: "R", keyCode: 15, modifiers: [.shift])!, delegate: delegate)
         
@@ -20,7 +20,7 @@ struct CompositionEdgeCaseTests {
     
     @Test("Double consonant ㄸ (Shift+e → E)")
     func doubleConsonantDD() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "E", keyCode: 14, modifiers: [.shift])!, delegate: delegate)
         
         #expect(!delegate.markedText.isEmpty, "ㄸ should produce marked text")
@@ -28,7 +28,7 @@ struct CompositionEdgeCaseTests {
     
     @Test("Double consonant ㅃ (Shift+q → Q)")
     func doubleConsonantBB() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "Q", keyCode: 12, modifiers: [.shift])!, delegate: delegate)
         
         #expect(!delegate.markedText.isEmpty, "ㅃ should produce marked text")
@@ -36,7 +36,7 @@ struct CompositionEdgeCaseTests {
     
     @Test("Double consonant ㅆ (Shift+t → T)")
     func doubleConsonantSS() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "T", keyCode: 17, modifiers: [.shift])!, delegate: delegate)
         
         #expect(!delegate.markedText.isEmpty, "ㅆ should produce marked text")
@@ -44,7 +44,7 @@ struct CompositionEdgeCaseTests {
     
     @Test("Double consonant ㅉ (Shift+w → W)")
     func doubleConsonantJJ() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "W", keyCode: 13, modifiers: [.shift])!, delegate: delegate)
         
         #expect(!delegate.markedText.isEmpty, "ㅉ should produce marked text")
@@ -54,7 +54,7 @@ struct CompositionEdgeCaseTests {
     
     @Test("Complex jongseong ㄳ (ㄱ+ㅅ)")
     func complexJongseongGS() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         // 가 + ㄱ + ㅅ → 갃? No: 각 → need vowel first
         // ㅁ+ㅏ+ㄹ+ㄱ = 막 (ㄹㄱ = ㄺ)
         // Actually: 가 = r+k, then ㄹ = f, ㄱ = r → 갈ㄱ? 
@@ -70,7 +70,7 @@ struct CompositionEdgeCaseTests {
     
     @Test("Complex jongseong splits on next vowel")
     func complexJongseongSplitsOnVowel() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         // Type: 닭 = ㄷ+ㅏ+ㄹ+ㄱ
         _ = composer.handle(TestEventFactory.keyEvent(char: "e", keyCode: 14)!, delegate: delegate)  // ㄷ
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)  // ㅏ → 다
@@ -88,7 +88,7 @@ struct CompositionEdgeCaseTests {
     
     @Test("Consecutive backspaces decompose fully")
     func consecutiveBackspaces() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         // Type 안 = ㅇ+ㅏ+ㄴ
         _ = composer.handle(TestEventFactory.keyEvent(char: "d", keyCode: 2)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
@@ -112,7 +112,7 @@ struct CompositionEdgeCaseTests {
     
     @Test("Full sentence typing: 안녕하세요")
     func fullSentenceTyping() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         
         // 안 = d+k+s
         _ = composer.handle(TestEventFactory.keyEvent(char: "d", keyCode: 2)!, delegate: delegate)
@@ -137,7 +137,7 @@ struct CompositionEdgeCaseTests {
     
     @Test("Full word typing: 한글")
     func fullWordHangul() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         
         // 한 = g+k+s (ㅎ+ㅏ+ㄴ)
         _ = composer.handle(TestEventFactory.keyEvent(char: "g", keyCode: 5)!, delegate: delegate)
@@ -160,7 +160,7 @@ struct CompositionEdgeCaseTests {
     
     @Test("Space commits composition and passes through")
     func spaceCommitsComposition() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
         #expect(delegate.markedText == "가")
@@ -175,7 +175,7 @@ struct CompositionEdgeCaseTests {
     
     @Test("Tab commits composition and passes through")
     func tabCommitsComposition() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
         
@@ -190,7 +190,7 @@ struct CompositionEdgeCaseTests {
     
     @Test("Escape clears or commits composition")
     func escapeHandlesComposition() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
         #expect(delegate.markedText == "가")
@@ -204,10 +204,9 @@ struct CompositionEdgeCaseTests {
     
     // MARK: - Helper
     
-    private func makeComposer() -> (HangulComposer, MockComposerDelegate, MockStatusBar) {
-        let statusBar = MockStatusBar()
-        let composer = HangulComposer(statusBar: statusBar, configuration: MockConfiguration())
+    private func makeComposer() -> (HangulComposer, MockComposerDelegate) {
+        let composer = HangulComposer(configuration: MockConfiguration())
         let delegate = MockComposerDelegate()
-        return (composer, delegate, statusBar)
+        return (composer, delegate)
     }
 }

@@ -4,17 +4,6 @@ import Cocoa
 
 // MARK: - Shared Test Helpers
 
-/// Mock implementation of StatusBarUpdating for tests
-final class MockStatusBar: StatusBarUpdating {
-    var currentMode: InputMode = .korean
-    var modeChanges: [InputMode] = []
-    
-    func setMode(_ mode: InputMode) {
-        currentMode = mode
-        modeChanges.append(mode)
-    }
-}
-
 /// Mock implementation of ConfigurationProviding for tests
 final class MockConfiguration: ConfigurationProviding, @unchecked Sendable {
     var toggleKey: ToggleKey = .rightCommand
@@ -22,9 +11,6 @@ final class MockConfiguration: ConfigurationProviding, @unchecked Sendable {
     var controlSpaceAsToggle: Bool { false }
     var capsLockInputSourceSwitchEnabled: Bool { false }
     var doubleSpacePeriodEnabled: Bool { true }
-    var autoCapitalizationEnabled: Bool { true }
-    var smartQuoteSubstitutionEnabled: Bool { true }
-    var smartDashSubstitutionEnabled: Bool { true }
 }
 
 /// Mock implementation of HangulComposerDelegate for tests

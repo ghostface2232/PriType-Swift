@@ -47,7 +47,6 @@
 
 /* App */
 "app.copyright" = "© 2025";
-"app.quit" = "Quit PriType";
 
 /* Update */
 "update.title" = "Update";

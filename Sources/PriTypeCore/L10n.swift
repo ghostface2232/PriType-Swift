@@ -96,7 +96,6 @@ public enum L10n {
     public enum app {
         public static var name: String { "PriType" }
         public static var copyright: String { localized("app.copyright") }
-        public static var quit: String { localized("app.quit") }
     }
     
     // MARK: - Update

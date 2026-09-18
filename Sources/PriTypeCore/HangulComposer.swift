@@ -44,8 +44,6 @@ public class HangulComposer: @unchecked Sendable {
     
     // MARK: - Dependencies
     
-    /// Status bar updater (injected for testability)
-    private let statusBar: StatusBarUpdating
     
     /// Configuration provider (injected for testability)
     private let configuration: ConfigurationProviding
@@ -96,27 +94,12 @@ public class HangulComposer: @unchecked Sendable {
     // MARK: - Initialization
     
     /// Creates a new HangulComposer with default settings
-    /// - Parameters:
-    ///   - statusBar: Status bar updater (defaults to shared manager)
-    ///   - configuration: Configuration provider (defaults to shared manager)
-    public init(
-        statusBar: StatusBarUpdating = StatusBarManager.shared,
-        configuration: ConfigurationProviding = ConfigurationManager.shared
-    ) {
-        self.statusBar = statusBar
+    /// - Parameter configuration: Configuration provider (defaults to shared manager)
+    public init(configuration: ConfigurationProviding = ConfigurationManager.shared) {
         self.configuration = configuration
         self.textConvenience = TextConvenienceHandler(
             isDoubleSpacePeriodEnabled: {
                 configuration.doubleSpacePeriodEnabled
-            },
-            isAutoCapitalizationEnabled: {
-                configuration.autoCapitalizationEnabled
-            },
-            isSmartQuoteSubstitutionEnabled: {
-                configuration.smartQuoteSubstitutionEnabled
-            },
-            isSmartDashSubstitutionEnabled: {
-                configuration.smartDashSubstitutionEnabled
             }
         )
         DebugLogger.log("HangulComposer init")
@@ -158,7 +141,6 @@ public class HangulComposer: @unchecked Sendable {
         inputMode = mode
         localTextBuffer = ""
         textConvenience.resetSpaceState()
-        statusBar.setMode(inputMode)
         DebugLogger.log("Mode set to: \(inputMode)")
     }
 

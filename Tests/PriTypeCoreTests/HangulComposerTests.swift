@@ -11,7 +11,7 @@ struct HangulComposerTests {
     
     @Test("Single choseong input")
     func singleChoseong() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         let event = TestEventFactory.keyEvent(char: "r", keyCode: 15)!
         let handled = composer.handle(event, delegate: delegate)
         
@@ -26,7 +26,7 @@ struct HangulComposerTests {
     
     @Test("Choseong + Jungseong = syllable")
     func choseongPlusJungseong() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
         
@@ -35,7 +35,7 @@ struct HangulComposerTests {
     
     @Test("Full syllable with jongseong")
     func fullSyllable() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "d", keyCode: 2)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "s", keyCode: 1)!, delegate: delegate)
@@ -47,7 +47,7 @@ struct HangulComposerTests {
     
     @Test("Syllable boundary commits previous and starts new")
     func syllableBoundary() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "d", keyCode: 2)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "s", keyCode: 1)!, delegate: delegate)
@@ -67,7 +67,7 @@ struct HangulComposerTests {
     
     @Test("Backspace during composition removes last jamo")
     func backspaceInComposition() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
         
@@ -87,7 +87,7 @@ struct HangulComposerTests {
     
     @Test("Backspace on empty context passes through")
     func backspaceOnEmptyContext() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         let backspace = TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!
         let handled = composer.handle(backspace, delegate: delegate)
         
@@ -98,12 +98,11 @@ struct HangulComposerTests {
     
     @Test("Set input mode")
     func setInputMode() {
-        let (composer, _, mockStatusBar) = makeComposer()
+        let (composer, _) = makeComposer()
         #expect(composer.inputMode == .korean)
         
         composer.setInputMode(.english)
         #expect(composer.inputMode == .english)
-        #expect(mockStatusBar.currentMode == .english)
         
         composer.setInputMode(.korean)
         #expect(composer.inputMode == .korean)
@@ -111,7 +110,7 @@ struct HangulComposerTests {
     
     @Test("English mode passes through ordinary printable keys")
     func englishModePassthrough() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         composer.setInputMode(.english)
         #expect(composer.inputMode == .english)
         delegate.fullText = "middle"
@@ -126,7 +125,7 @@ struct HangulComposerTests {
 
     @Test("English conveniences remain host-owned at empty and sentence-boundary fields")
     func englishConveniencesPassThrough() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         composer.setInputMode(.english)
         for text in ["", "Hello. ", "h ", "-", "Hello"] {
             for (char, code): (String, UInt16) in [("h", 4), ("w", 13), ("\"", 39), ("-", 27), (" ", KeyCode.space)] {
@@ -141,7 +140,7 @@ struct HangulComposerTests {
 
     @Test("Deleting preedit preserves committed text for Hanja lookup")
     func backspacePreservesCommittedBuffer() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         composer.localTextBuffer = "대한"
         delegate.fullText = "대한"
         #expect(composer.handle(TestEventFactory.keyEvent(char: "a", keyCode: 0)!, delegate: delegate))
@@ -159,7 +158,7 @@ struct HangulComposerTests {
 
     @Test("Full preedit decomposition never touches committed text or the document")
     func backspaceDecompositionKeepsCommittedText() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         composer.localTextBuffer = "한글"
         delegate.fullText = "한글"
 
@@ -197,7 +196,7 @@ struct HangulComposerTests {
 
     @Test("Backspace after an empty preedit never deletes host text itself")
     func backspaceAfterEmptyPreeditDefersToHost() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         composer.localTextBuffer = "가나"
         delegate.fullText = "가나"
 
@@ -219,14 +218,14 @@ struct HangulComposerTests {
 
     @Test("Idle Korean Space reaches host shortcuts")
     func idleSpacePassThrough() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         #expect(!composer.handle(TestEventFactory.keyEvent(char: " ", keyCode: KeyCode.space)!, delegate: delegate))
         #expect(delegate.insertedTexts.isEmpty)
     }
 
     @Test("English mode passes every printable key through without inserting")
     func englishModePassesAllPrintableThrough() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         composer.setInputMode(.english)
 
         // All printable keys flow to the host untouched.
@@ -249,7 +248,7 @@ struct HangulComposerTests {
 
     @Test("English mode passes through modifier combos without inserting")
     func englishModeModifierComboPassthrough() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         composer.setInputMode(.english)
 
         let cmdC = TestEventFactory.keyEvent(char: "c", keyCode: 8, modifiers: [.command])!
@@ -265,7 +264,7 @@ struct HangulComposerTests {
 
     @Test("Switching to English commits the active Korean composition once")
     func switchToEnglishCommitsActiveComposition() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
 
         // Compose "가" (still in marked/preedit state, not yet committed).
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
@@ -282,7 +281,7 @@ struct HangulComposerTests {
 
     @Test("setInputMode clears the local text buffer")
     func setInputModeClearsLocalBuffer() {
-        let (composer, _, _) = makeComposer()
+        let (composer, _) = makeComposer()
         composer.localTextBuffer = "stale"
         composer.setInputMode(.english)
         #expect(composer.localTextBuffer == "")
@@ -290,7 +289,7 @@ struct HangulComposerTests {
 
     @Test("Korean → English → Korean round-trips cleanly")
     func koreanEnglishKoreanRoundTrip() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
 
         // Korean: compose and commit "가".
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
@@ -314,7 +313,7 @@ struct HangulComposerTests {
     
     @Test("Command+key passes through")
     func modifierKeyPassthrough() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
         
         let cmdEvent = TestEventFactory.keyEvent(char: "s", keyCode: 1, modifiers: [.command])!
@@ -327,7 +326,7 @@ struct HangulComposerTests {
     
     @Test("Return key commits composition")
     func returnKeyCommit() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
         
@@ -342,7 +341,7 @@ struct HangulComposerTests {
 
     @Test("Return key uses GoodNotes compatibility newline")
     func returnKeyGoodNotesCompatibility() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         composer.markKeystroke(bundleId: "com.goodnotesapp.x")
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
@@ -358,7 +357,7 @@ struct HangulComposerTests {
 
     @Test("Return key commits and consumes original Return for Hermes")
     func returnKeyHermesCompatibility() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         composer.markKeystroke(bundleId: "com.nousresearch.hermes")
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
@@ -374,7 +373,7 @@ struct HangulComposerTests {
 
     @Test("Return key passes through without composition")
     func returnKeyPassthroughWithoutComposition() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
 
         let returnEvent = TestEventFactory.keyEvent(char: "\r", keyCode: KeyCode.`return`)!
         let handled = composer.handle(returnEvent, delegate: delegate)
@@ -385,7 +384,7 @@ struct HangulComposerTests {
     
     @Test("Arrow key commits composition")
     func arrowKeyCommit() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
         
@@ -400,7 +399,7 @@ struct HangulComposerTests {
     
     @Test("Cmd+Arrow commits composition before pass-through")
     func cmdArrowCommitsComposition() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
         #expect(delegate.markedText == "가")
@@ -416,7 +415,7 @@ struct HangulComposerTests {
     
     @Test("Option+Arrow commits composition before pass-through")
     func optionArrowCommitsComposition() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
         
@@ -430,7 +429,7 @@ struct HangulComposerTests {
     
     @Test("Home key commits composition before pass-through")
     func homeKeyCommitsComposition() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
         
@@ -444,7 +443,7 @@ struct HangulComposerTests {
     
     @Test("Cmd shortcut without composition just passes through")
     func cmdShortcutWithoutComposition() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         let cmdS = TestEventFactory.keyEvent(char: "s", keyCode: 1, modifiers: [.command])!
         let handled = composer.handle(cmdS, delegate: delegate)
         
@@ -461,7 +460,7 @@ struct HangulComposerTests {
 
     @Test("Double-stroke does NOT combine: ㄱ+ㄱ → ㄱㄱ, not ㄲ (combinationOnDoubleStroke OFF)")
     func doubleStrokeDoesNotCombine() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         // 'r' = ㄱ in 2-bulsik. Pressing it twice must commit the first ㄱ and start a new ㄱ,
         // NOT auto-combine into ㄲ (which would require combinationOnDoubleStroke = true).
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
@@ -480,7 +479,7 @@ struct HangulComposerTests {
 
     @Test("Fine-grained backspace decomposes a compound vowel: 와 → 오 → ㅇ (fineGrainedBackspace ON)")
     func fineGrainedBackspaceDecomposesCompoundVowel() {
-        let (composer, delegate, _) = makeComposer()
+        let (composer, delegate) = makeComposer()
         // 와 = ㅇ(d) + ㅘ, where ㅘ = ㅗ(h) + ㅏ(k).
         _ = composer.handle(TestEventFactory.keyEvent(char: "d", keyCode: 2)!, delegate: delegate)
         _ = composer.handle(TestEventFactory.keyEvent(char: "h", keyCode: 4)!, delegate: delegate)
@@ -503,11 +502,10 @@ struct HangulComposerTests {
 
     // MARK: - Helper
     
-    private func makeComposer() -> (HangulComposer, MockComposerDelegate, MockStatusBar) {
-        let statusBar = MockStatusBar()
-        let composer = HangulComposer(statusBar: statusBar, configuration: MockConfiguration())
+    private func makeComposer() -> (HangulComposer, MockComposerDelegate) {
+        let composer = HangulComposer(configuration: MockConfiguration())
         let delegate = MockComposerDelegate()
-        return (composer, delegate, statusBar)
+        return (composer, delegate)
     }
 }
 
