@@ -1,69 +1,105 @@
 import Foundation
-import LibHangul
 
-/// Manages loading and searching the Hanja dictionary
+/// Loads and searches the Hanja dictionary.
 ///
-/// Uses `HanjaTable` from libhangul-swift with the bundled `hanja.txt` dictionary.
-/// The dictionary is loaded lazily on first search to avoid blocking app startup.
+/// The dictionary is the compiled `hanja.dat` (see `HanjaDictionary`), memory-mapped
+/// rather than parsed, so loading is a file open and a scan of its offset table.
+/// A search never waits for a load running on another thread: it returns no
+/// entries and the next key press finds the dictionary ready.
 public final class HanjaManager: @unchecked Sendable {
-    
+
     public static let shared = HanjaManager()
-    
-    private var table: HanjaTable?
-    private var isLoaded = false
-    private let loadLock = NSLock()
-    
+
+    private enum LoadState {
+        case unloaded
+        case loading
+        case loaded(HanjaDictionary)
+        case failed
+    }
+
+    /// Guards `state`; waited on only by `loadIfNeeded`, never by a search.
+    private let condition = NSCondition()
+    private var state = LoadState.unloaded
+    private let loader: @Sendable () -> HanjaDictionary?
+
     /// Jamo → special symbol mapping (Windows-style)
     private var jamoSymbols: [String: [HanjaEntry]] = [:]
     private var jamoSymbolsLoaded = false
     private let jamoLock = NSLock()
-    
-    private init() {}
-    
-    /// Load the Hanja dictionary from the app bundle's resources
-    /// Called lazily on first search, or can be called explicitly at startup
+
+    private convenience init() {
+        let url = Self.resourceBundle.url(forResource: "hanja", withExtension: "dat")
+        self.init(loader: { Self.load(from: url) })
+    }
+
+    /// For tests: a manager whose dictionary comes from `loader`.
+    init(loader: @escaping @Sendable () -> HanjaDictionary?) {
+        self.loader = loader
+    }
+
+    /// Whether the dictionary is mapped and ready for lookups.
+    public var isLoaded: Bool {
+        condition.withLock { if case .loaded = state { return true } else { return false } }
+    }
+
+    /// Map the dictionary, or wait for the thread that is mapping it. For the
+    /// launch-time preload; key presses go through `search`, which never waits.
     public func loadIfNeeded() {
-        loadLock.lock()
-        defer { loadLock.unlock() }
-        
-        guard !isLoaded else { return }
-        
-        let table = HanjaTable()
-        
-        // Try to find hanja.txt in the resource bundle
-        let bundle = Self.resourceBundle
-        if let path = bundle.path(forResource: "hanja", ofType: "txt") {
-            if table.load(filename: path) {
-                self.table = table
-                self.isLoaded = true
-                DebugLogger.log("HanjaManager: Loaded dictionary from bundle: \(path)")
-                return
-            }
-        }
-        
-        // Fallback: try HanjaTable.loadDefault() which searches common paths
-        if table.load() {
-            self.table = table
-            self.isLoaded = true
-            DebugLogger.log("HanjaManager: Loaded dictionary from default path")
-        } else {
-            DebugLogger.log("HanjaManager: WARNING - Failed to load hanja dictionary")
+        guard dictionary() == nil else { return }
+        condition.withLock {
+            while case .loading = state { condition.wait() }
         }
     }
-    
+
+    /// The mapped dictionary. Loads it on this thread when nobody has; returns nil
+    /// without waiting when another thread is loading it.
+    private func dictionary() -> HanjaDictionary? {
+        let claimed: Bool = condition.withLock {
+            guard case .unloaded = state else { return false }
+            state = .loading
+            return true
+        }
+        if claimed {
+            let loaded = loader()
+            condition.withLock {
+                state = loaded.map(LoadState.loaded) ?? .failed
+                condition.broadcast()
+            }
+        }
+        return condition.withLock {
+            if case .loaded(let dictionary) = state { return dictionary }
+            return nil
+        }
+    }
+
+    private static func load(from url: URL?) -> HanjaDictionary? {
+        guard let url else {
+            DebugLogger.log("HanjaManager: WARNING - hanja.dat not found in bundle")
+            return nil
+        }
+        do {
+            let dictionary = try HanjaDictionary(contentsOf: url)
+            DebugLogger.log("HanjaManager: Mapped dictionary (\(dictionary.count) keys)")
+            return dictionary
+        } catch {
+            DebugLogger.log("HanjaManager: WARNING - Failed to map hanja.dat: \(error)")
+            return nil
+        }
+    }
+
     /// Load jamo symbol mapping from bundled JSON
     private func loadJamoSymbolsIfNeeded() {
         jamoLock.lock()
         defer { jamoLock.unlock() }
         guard !jamoSymbolsLoaded else { return }
-        
+
         let bundle = Self.resourceBundle
         guard let url = bundle.url(forResource: "jamo_symbols", withExtension: "json") else {
             DebugLogger.log("HanjaManager: jamo_symbols.json not found in bundle")
             jamoSymbolsLoaded = true
             return
         }
-        
+
         do {
             let data = try Data(contentsOf: url)
             let raw = try JSONDecoder().decode([String: [JamoSymbolRaw]].self, from: data)
@@ -76,50 +112,12 @@ public final class HanjaManager: @unchecked Sendable {
         }
         jamoSymbolsLoaded = true
     }
-    
-    /// Simple LRU cache for search results (dictionary doesn't change at runtime)
-    private var searchCache: [String: [HanjaEntry]] = [:]
-    private var cacheOrder: [String] = []
-    private let cacheMaxSize = 32
-    private let cacheLock = NSLock()
-    
-    /// Thread-safe cache lookup/store helper
-    private func cacheGet(_ key: String) -> [HanjaEntry]? {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        guard let cached = searchCache[key] else { return nil }
-        // Move to end (most recently used)
-        if let idx = cacheOrder.firstIndex(of: key) {
-            cacheOrder.remove(at: idx)
-            cacheOrder.append(key)
-        }
-        return cached
-    }
-    
-    private func cachePut(_ key: String, _ results: [HanjaEntry]) {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        // Remove existing entry to prevent duplicates in cacheOrder
-        if let idx = cacheOrder.firstIndex(of: key) {
-            cacheOrder.remove(at: idx)
-        }
-        searchCache[key] = results
-        cacheOrder.append(key)
-        while cacheOrder.count > cacheMaxSize {
-            let evicted = cacheOrder.removeFirst()
-            searchCache.removeValue(forKey: evicted)
-        }
-    }
-    
+
     /// Search for Hanja entries matching the given Hangul key (exact match)
     /// - Parameter key: Hangul text to search for (e.g., "가") or a jamo consonant (e.g., "ㅁ")
-    /// - Returns: Array of Hanja entries, empty if no results
+    /// - Returns: Array of Hanja entries, empty if no results or the dictionary
+    ///   is still loading on another thread
     public func search(key: String) -> [HanjaEntry] {
-        // Check cache first
-        if let cached = cacheGet(key) {
-            return cached
-        }
-        
         // Jamo consonant → search symbol table instead of hanja dictionary
         // Normalize: libhangul preedit uses Choseong Jamo (U+1100~), but our
         // JSON keys use Compatibility Jamo (U+3131~). Convert before lookup.
@@ -131,34 +129,19 @@ public final class HanjaManager: @unchecked Sendable {
         } else {
             normalizedKey = ""
         }
-        
+
         if !normalizedKey.isEmpty {
             loadJamoSymbolsIfNeeded()
-            let results = jamoSymbols[normalizedKey] ?? []
-            cachePut(key, results)
-            return results
+            return jamoLock.withLock { jamoSymbols[normalizedKey] ?? [] }
         }
-        
-        loadIfNeeded()
-        
-        guard let table = table else { return [] }
-        guard let list = table.matchExact(key: key) else { return [] }
-        
-        var results: [HanjaEntry] = []
-        for i in 0..<list.getSize() {
-            if let hanja = list.getNth(i) {
-                results.append(HanjaEntry(
-                    hangul: hanja.getKey(),
-                    hanja: hanja.getValue(),
-                    meaning: hanja.getComment()
-                ))
-            }
+
+        guard let dictionary = dictionary() else {
+            DebugLogger.log("HanjaManager: dictionary not ready, no candidates")
+            return []
         }
-        
-        cachePut(key, results)
-        return results
+        return dictionary.entries(for: key)
     }
-    
+
     /// Resource bundle for loading dictionary data
     private static let resourceBundle: Bundle = {
         if let resourceURL = Bundle.main.resourceURL,

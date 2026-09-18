@@ -142,7 +142,7 @@ PriType의 `ComponentInputModeDict`는 단일 mode `com.pritype.inputmethod.v2`�
 
 ### 한자 사전 검색
 
-`hanja.txt`(약 80,000항목)를 libhangul의 `HanjaTable`에 적재하여 Trie 기반 exact match 검색을 수행한다. `"가"` → `[價, 家, 加, ...]` 형태의 결과를 반환한다. LRU 캐시(최대 32개, NSLock 보호)로 재검색 시 사전 접근을 생략한다.
+`Tools/hanja/hanja.txt`(항목 303,494개, 키 222,709개)를 `PriTypeHanjaCompiler`로 컴파일한 정렬 바이너리 `hanja.dat`를 메모리 매핑해 이진 탐색으로 exact match 검색을 수행한다(`HanjaDictionary`). `"가"` → `[價, 家, 加, ...]` 형태의 결과를 반환한다. 로딩은 매핑과 오프셋 표 검증뿐이라 약 1ms이고, 다른 스레드가 로딩 중이면 검색은 기다리지 않고 빈 결과를 돌려준다.
 
 ### 자모 특수문자 검색
 
@@ -182,7 +182,8 @@ libhangul preedit: ᄆ (U+1106)
 | **RightCommandSuppressor** | `CGEventTap` 기반 시스템 레벨 키 인터셉터. `ConfigurationManager`의 `toggleKeyBinding`/`hanjaKeyBinding`을 읽어 사용자 지정 키를 동적으로 처리한다. Key Recorder 모드를 지원하여 설정 창에서 키 캡처가 가능하다. 전용 스레드에서 동작하며 모든 가변 상태는 재귀 잠금 하나로 보호한다. 이벤트 탭 비활성화 시 재활성화를 시도하며, 60초 내 3회 실패 시 IOKit 백업으로 자동 전환한다. |
 | **IOKitManager** | `IOHIDManager` 기반 하드웨어 레벨 키 모니터. CGEventTap 실패 시 백업 핸들러로 동작한다. HID usage 매핑 테이블을 통해 사용자 지정 키를 동적으로 처리한다. |
 | **HanjaCandidateWindow** | SwiftUI 기반 한자 후보 패널. `NSPanel`을 재사용하며, `screenSaver + 1` 윈도우 레벨로 Electron 앱 위에 표시된다. 1~9 숫자키 선택, 방향키/Tab 페이지 이동을 지원한다. |
-| **HanjaManager** | 한자 사전 로더 + 자모 특수문자 검색. `hanja.txt`를 `HanjaTable`에 적재하고, `jamo_symbols.json`에서 자모 특수문자를 로딩한다. LRU 캐시(32개, NSLock 보호)로 재검색 시 사전 접근을 생략한다. 초성 자모(U+1100~) → 호환 자모(U+3131~) 변환을 포함한다. |
+| **HanjaManager** | 한자 사전 로더 + 자모 특수문자 검색. `hanja.dat`를 매핑한 `HanjaDictionary`로 검색하고, `jamo_symbols.json`에서 자모 특수문자를 로딩한다. 로딩 중 검색은 기다리지 않는다. 초성 자모(U+1100~) → 호환 자모(U+3131~) 변환을 포함한다. |
+| **HanjaDictionary** | 메모리 매핑 한자 사전의 형식 정의, 이진 탐색, 컴파일러(`compile(source:)`). |
 | **ConfigurationManager** | `UserDefaults` 기반 설정 관리. `KeyBinding`(한/영 전환키·한자 입력키), 자동 대문자, 더블스페이스 마침표, 자동 업데이트 확인 옵션을 저장한다. 기존 `ToggleKey` enum에서 `KeyBinding` struct로의 자동 마이그레이션을 지원한다. `ConfigurationProviding` 프로토콜로 테스트 시 목(mock) 주입이 가능하다. |
 | **SettingsWindowController** | SwiftUI `NSHostingController` 기반 설정 창. Liquid Glass 스타일, Key Recorder(키 녹음) UI, 접근성 권한 확인/요청, Caps Lock 입력 소스 전환 안내를 포함한다. |
 | **StatusBarManager** | `NSStatusItem` 기반 메뉴 바 표시기. 현재 모드를 "가" / "A"로 표시하며, 전환 시 0.08초 페이드 애니메이션을 적용한다. |
@@ -206,7 +207,6 @@ libhangul preedit: ᄆ (U+1106)
 C 기반 libhangul을 순수 Swift로 재구현한 한글 조합 엔진. PriType이 사용하는 API:
 
 - **`ThreadSafeHangulInputContext`**: `OSAllocatedUnfairLock`으로 동기화된 입력 컨텍스트. `process()`, `getPreeditString()`, `getCommitString()`, `flush()`, `reset()` 호출.
-- **`HanjaTable`**: Trie 기반 한자 사전. `matchExact(key:)`로 한글 키에 대응하는 한자 목록 검색.
 - **`HangulCharacter`**: 초·중·종성 결합/분리 및 호환 자모(Compatibility Jamo) 변환.
 - **`KeyInput`**: 키보드 입력을 `.character("r")` / `.keyCode(51)` 형태로 표현하는 타입 안전 열거형.
 
@@ -228,9 +228,9 @@ PriType은 메인 스레드(IMKServer·IOKit)와 전용 이벤트 탭 스레드(
    - 이벤트 탭 스레드(CGEventTap)에서 매 키 입력마다 `toggleKeyBinding` 및 `hanjaKeyBinding`을 조회한다.
    - 메인 스레드(설정 창)에서 설정이 변경될 때 발생하는 `UserDefaults` 읽기/쓰기 충돌(Race Condition)을 방지하기 위해, 내부적으로 캐시를 유지하고 `NSLock`을 통해 모든 접근을 직렬화한다.
 
-2. **한자 사전 및 LRU 캐시 (`HanjaManager`)**
-   - 6.4MB(약 80,000항목)의 `hanja.txt` 파일은 앱 실행 시 비동기 백그라운드 스레드에서 로딩되며, 로딩 완료 상태는 thread-safe하게 관리된다.
-   - 반복적인 검색 시 오버헤드를 줄이기 위해 최근 32개의 결과를 저장하는 LRU(Least Recently Used) 캐시를 사용한다. 이 캐시의 읽기/쓰기 및 순서 업데이트 로직은 `NSLock`으로 보호되어 동시 접근을 안전하게 처리한다.
+2. **한자 사전 (`HanjaManager`)**
+   - 매핑된 `hanja.dat`는 읽기 전용이라 검색끼리 잠글 것이 없다. 로딩 상태만 `NSCondition`으로 보호한다.
+   - 앱 실행 시 백그라운드 스레드가 미리 매핑한다. 그 사이 들어온 검색은 기다리지 않고 빈 결과를 돌려준다.
 
 3. **입력 컨텍스트 캐싱 (`PriTypeInputController`)**
    - 포커스 앱 변경 시 발생하는 무거운 IPC(Inter-Process Communication) 호출을 피하기 위해 상태를 캐싱(`cachedContext`)한다.
@@ -264,7 +264,8 @@ PriType-Swift/
 │   │   ├── RightCommandSuppressor.swift # CGEventTap 핸들러
 │   │   ├── IOKitManager.swift           # IOKit 백업 핸들러
 │   │   ├── HanjaCandidateWindow.swift   # 한자 후보창 (SwiftUI)
-│   │   ├── HanjaManager.swift           # 한자/자모 검색 + LRU 캐시
+│   │   ├── HanjaManager.swift           # 한자/자모 검색
+│   │   ├── HanjaDictionary.swift        # 메모리 매핑 한자 사전 형식
 │   │   ├── SettingsWindowController.swift# 설정 창 (SwiftUI)
 │   │   ├── ConfigurationManager.swift   # UserDefaults 설정
 │   │   ├── ClientContextDetector.swift  # 클라이언트 분석기
@@ -282,11 +283,12 @@ PriType-Swift/
 │   │   ├── PriTypeError.swift           # 에러 타입
 │   │   ├── AboutInfo.swift              # 앱 메타데이터
 │   │   └── Resources/
-│   │       ├── hanja.txt                # 한자 사전 (6.4MB, ~80,000항목)
+│   │       ├── hanja.dat                # 컴파일된 한자 사전 (6.9MB, 키 222,709개)
 │   │       ├── jamo_symbols.json        # 자모 특수문자 (14키, 390개)
 │   │       ├── ko.lproj/               # 한국어 문자열
 │   │       └── en.lproj/               # 영어 문자열
 │   ├── PriTypeBenchmark/           # 성능 벤치마크 타깃
+│   ├── PriTypeHanjaCompiler/       # hanja.txt → hanja.dat 컴파일러
 │   └── PriTypeVerify/              # 빌드 검증 타깃
 ├── Tests/
 │   └── PriTypeCoreTests/           # 121개 유닛 테스트

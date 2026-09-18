@@ -71,7 +71,7 @@ separator("1️⃣  한자 사전 로딩 성능")
 let manager = HanjaManager.shared
 
 // Force cold load by accessing search
-measure("한자 사전 최초 로딩 (Cold)") {
+measure("한자 사전 최초 로딩 (mmap)") {
     _ = manager.search(key: "가")
 }
 let afterDictMemory = memoryUsageMB()
@@ -85,15 +85,15 @@ separator("2️⃣  한자 검색 성능")
 let testKeys = ["가", "나", "다", "라", "마", "바", "사", "아", "자", "차",
                 "한", "국", "어", "입", "력", "기", "성", "능", "테", "스"]
 
-// Cold search (first time, no cache)
-measure("한자 검색 Cold (20키)") {
+// First pass touches the dictionary pages for these keys
+measure("한자 검색 첫 조회 (20키)") {
     for key in testKeys {
         _ = manager.search(key: key)
     }
 }
 
-// Warm search (cached)
-measure("한자 검색 Cached (20키)") {
+// Pages already resident
+measure("한자 검색 재조회 (20키)") {
     for key in testKeys {
         _ = manager.search(key: key)
     }
@@ -104,9 +104,9 @@ measure("한자 검색 버스트 (10,000회)", iterations: 10000) {
     _ = manager.search(key: "가")
 }
 
-// Worst case: cache miss every time (32+ unique keys rotate cache)
+// Many distinct keys in rotation
 let manyKeys = (0xAC00...0xAC00+40).compactMap { UnicodeScalar($0) }.map { String($0) }
-measure("캐시 미스 버스트 (40키 순환, 100회)") {
+measure("다양한 키 버스트 (40키 순환, 100회)") {
     for _ in 0..<100 {
         for key in manyKeys {
             _ = manager.search(key: key)

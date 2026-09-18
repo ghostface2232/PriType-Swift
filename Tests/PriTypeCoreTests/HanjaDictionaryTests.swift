@@ -1,0 +1,175 @@
+import Foundation
+import LibHangul
+import Testing
+@testable import PriTypeCore
+
+@Suite("HanjaDictionary")
+struct HanjaDictionaryTests {
+    static let repoRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    static let sourceURL = repoRoot.appendingPathComponent("Tools/hanja/hanja.txt")
+    static let compiledURL = repoRoot.appendingPathComponent("Sources/PriTypeCore/Resources/hanja.dat")
+
+    static let sample = """
+    # Sample notice
+    # second line
+
+    가:可:옳을 가
+    가:家:집 가
+    가나:假那:
+    가나다:假那多:
+    나:那:어찌 나
+    # comment in the middle
+    가:加:더할 가
+    각:各:각각 각
+    """
+
+    @Test("Lookups return every entry for the exact key, in source order")
+    func exactLookup() throws {
+        let dictionary = try HanjaDictionary(data: HanjaDictionary.compile(source: Self.sample))
+        #expect(dictionary.count == 5)
+        #expect(dictionary.entries(for: "가").map(\.hanja) == ["可", "家", "加"])
+        #expect(dictionary.entries(for: "가").map(\.meaning) == ["옳을 가", "집 가", "더할 가"])
+        #expect(dictionary.entries(for: "가나").map(\.hanja) == ["假那"])
+        #expect(dictionary.entries(for: "가나").first?.meaning == "")
+        #expect(dictionary.entries(for: "가나다").first?.hangul == "가나다")
+        #expect(dictionary.entries(for: "각").map(\.hanja) == ["各"])
+        #expect(dictionary.entries(for: "나").map(\.hanja) == ["那"])
+    }
+
+    @Test("Prefixes, extensions and absent keys find nothing")
+    func misses() throws {
+        let dictionary = try HanjaDictionary(data: HanjaDictionary.compile(source: Self.sample))
+        for key in ["", "가나다라", "각가", "다", "a", "ㄱ", "\u{0}"] {
+            #expect(dictionary.entries(for: key).isEmpty, "\(key)")
+        }
+    }
+
+    @Test("Decomposed Hangul finds the precomposed key")
+    func normalizesQuery() throws {
+        let dictionary = try HanjaDictionary(data: HanjaDictionary.compile(source: Self.sample))
+        let decomposed = "가".decomposedStringWithCanonicalMapping
+        #expect(decomposed.unicodeScalars.count == 2)
+        #expect(dictionary.entries(for: decomposed).count == 3)
+    }
+
+    @Test("The leading comment block is kept as the notice")
+    func keepsNotice() throws {
+        let dictionary = try HanjaDictionary(data: HanjaDictionary.compile(source: Self.sample))
+        #expect(dictionary.notice == "Sample notice\nsecond line")
+    }
+
+    @Test("Damaged files are rejected when opened, not when searched")
+    func rejectsDamage() throws {
+        let data = try HanjaDictionary.compile(source: Self.sample)
+        #expect(throws: HanjaDictionary.FormatError.badHeader) { try HanjaDictionary(data: Data()) }
+        #expect(throws: HanjaDictionary.FormatError.badHeader) { try HanjaDictionary(data: data.prefix(40)) }
+        var wrongMagic = data
+        wrongMagic[0] = 0
+        #expect(throws: HanjaDictionary.FormatError.badHeader) { try HanjaDictionary(data: wrongMagic) }
+        // Point the second record past the end of the pool.
+        var badOffset = data
+        let indexOffset = Int(data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 20, as: UInt32.self) })
+        badOffset.replaceSubrange((indexOffset + 4)..<(indexOffset + 8), with: [0xFF, 0xFF, 0xFF, 0x00])
+        #expect(throws: HanjaDictionary.FormatError.badIndex) { try HanjaDictionary(data: badOffset) }
+    }
+
+    @Test("A slice of a larger buffer reads the same")
+    func readsSlices() throws {
+        let data = try HanjaDictionary.compile(source: Self.sample)
+        let padded = Data([1, 2, 3]) + data
+        let dictionary = try HanjaDictionary(data: padded.dropFirst(3))
+        #expect(dictionary.entries(for: "가").count == 3)
+    }
+
+    @Test("Tabs in a field would break the record format, so they fail the build")
+    func rejectsTabs() {
+        #expect(throws: HanjaDictionary.FormatError.badSource(line: 1)) {
+            try HanjaDictionary.compile(source: "가:可\t家:옳을 가")
+        }
+    }
+
+    @Test("The bundled hanja.dat is compiled from the current hanja.txt")
+    func bundledDictionaryIsUpToDate() throws {
+        let source = try String(contentsOf: Self.sourceURL, encoding: .utf8)
+        let compiled = try HanjaDictionary.compile(source: source)
+        let bundled = try Data(contentsOf: Self.compiledURL)
+        #expect(compiled == bundled, "Run `swift run PriTypeHanjaCompiler` and commit hanja.dat")
+    }
+
+    @Test("Answers match libhangul's HanjaTable for the same source")
+    func matchesLibhangul() throws {
+        let table = HanjaTable()
+        #expect(table.load(filename: Self.sourceURL.path))
+        let dictionary = try HanjaDictionary(contentsOf: Self.compiledURL)
+        let source = try String(contentsOf: Self.sourceURL, encoding: .utf8)
+        var keys: [String] = []
+        for (n, line) in source.split(whereSeparator: \.isNewline).enumerated()
+        where n % 211 == 0 && !line.hasPrefix("#") {
+            if let key = line.split(separator: ":").first { keys.append(String(key)) }
+        }
+        keys += ["가", "한", "국", "인", "대한민국", "한국", "ㄱㄴ순"]
+        #expect(keys.count > 1000)
+        for key in keys {
+            let expected = table.matchExact(key: key).map { list in
+                (0..<list.getSize()).compactMap { list.getNth($0) }.map { [$0.getValue(), $0.getComment()] }
+            } ?? []
+            let actual = dictionary.entries(for: key).map { [$0.hanja, $0.meaning] }
+            #expect(actual == expected, "\(key)")
+        }
+    }
+}
+
+@Suite("HanjaManager loading")
+struct HanjaManagerLoadingTests {
+    private final class Gate: @unchecked Sendable {
+        let started = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+    }
+
+    @Test("A search while another thread loads returns at once, then finds entries")
+    func searchDoesNotWaitForLoad() throws {
+        let data = try HanjaDictionary.compile(source: HanjaDictionaryTests.sample)
+        let gate = Gate()
+        let manager = HanjaManager(loader: {
+            gate.started.signal()
+            gate.release.wait()
+            return try? HanjaDictionary(data: data)
+        })
+        let loader = Thread { manager.loadIfNeeded() }
+        loader.start()
+        gate.started.wait()
+
+        let start = Date()
+        #expect(manager.search(key: "가").isEmpty)
+        #expect(Date().timeIntervalSince(start) < 0.5)
+        #expect(!manager.isLoaded)
+
+        gate.release.signal()
+        manager.loadIfNeeded() // waits for the loading thread
+        #expect(manager.isLoaded)
+        #expect(manager.search(key: "가").count == 3)
+    }
+
+    @Test("A failed load is not retried on every key press")
+    func failedLoadIsRemembered() {
+        let attempts = LockedCounter()
+        let manager = HanjaManager(loader: { attempts.increment(); return nil })
+        #expect(manager.search(key: "가").isEmpty)
+        #expect(manager.search(key: "가").isEmpty)
+        #expect(attempts.value == 1)
+    }
+
+    @Test("Jamo keys use the symbol table even without the dictionary")
+    func jamoWithoutDictionary() {
+        let manager = HanjaManager(loader: { nil })
+        #expect(!manager.search(key: "ㅁ").isEmpty)
+    }
+}
+
+final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() { lock.withLock { count += 1 } }
+    var value: Int { lock.withLock { count } }
+}

@@ -18,12 +18,13 @@ struct HanjaManagerTests {
         #expect(results.isEmpty, "Empty search should return empty")
     }
     
-    @Test("Search returns consistent results (caching)")
-    func searchCachingConsistency() {
+    @Test("Repeated searches return the same entries")
+    func searchConsistency() {
+        HanjaManager.shared.loadIfNeeded()
         let first = HanjaManager.shared.search(key: "가")
         let second = HanjaManager.shared.search(key: "가")
-        
-        #expect(first.count == second.count, "Cached results should be identical")
+
+        #expect(first.map(\.hanja) == second.map(\.hanja))
     }
     
     @Test("HanjaEntry struct has expected fields")
@@ -37,6 +38,7 @@ struct HanjaManagerTests {
     
     @Test("Search results have valid hangul field matching key")
     func searchResultsMatchKey() {
+        HanjaManager.shared.loadIfNeeded()
         let results = HanjaManager.shared.search(key: "한")
         for entry in results {
             #expect(entry.hangul == "한", "Hangul should match search key")
@@ -45,6 +47,7 @@ struct HanjaManagerTests {
     
     @Test("Search for common syllable returns results if dict available")
     func searchCommonSyllable() {
+        HanjaManager.shared.loadIfNeeded()
         let results = HanjaManager.shared.search(key: "인")
 
         #expect(results.count > 1, "인 should have multiple candidates")
@@ -54,6 +57,7 @@ struct HanjaManagerTests {
 
     @Test("Search for common syllable requires bundled dictionary")
     func searchCommonSyllableRequiresBundledDictionary() {
+        HanjaManager.shared.loadIfNeeded()
         let results = HanjaManager.shared.search(key: "가")
 
         #expect(results.count > 10, "Bundled hanja dictionary should be loaded in tests")

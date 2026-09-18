@@ -45,12 +45,22 @@ let package = Package(
             ]
         ),
         .executableTarget(
+            name: "PriTypeHanjaCompiler",
+            dependencies: ["PriTypeCore"],
+            linkerSettings: [
+                .unsafeFlags(["-framework", "InputMethodKit"])
+            ]
+        ),
+        .executableTarget(
             name: "PriTypeVerify",
             dependencies: ["PriTypeCore"]
         ),
         .testTarget(
             name: "PriTypeCoreTests",
-            dependencies: ["PriTypeCore"]
+            dependencies: [
+                "PriTypeCore",
+                .product(name: "LibHangul", package: "libhangul-swift")
+            ]
         ),
         .executableTarget(
             name: "PriTypeBenchmark",
