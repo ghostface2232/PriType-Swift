@@ -61,7 +61,6 @@ public struct ClientContext: Sendable {
 // MARK: - ClientCompatibilityPolicy
 
 public enum ClientCompatibilityPolicy {
-    private static let goodNotesBundleId = "com.goodnotesapp.x"
     private static let hermesBundleIds: Set<String> = [
         "com.nousresearch.hermes",
         "com.nousresearch.hermes.setup"
@@ -95,10 +94,6 @@ public enum ClientCompatibilityPolicy {
         "com.apple.Safari",
         "com.apple.SafariTechnologyPreview"
     ]
-
-    public static func needsDirectNewlineAfterReturnCommit(bundleId: String) -> Bool {
-        bundleId == goodNotesBundleId
-    }
 
     /// Some chat-style hosts send the message on Return before their text system has
     /// incorporated the IMK commit. When Hangul is still marked, the submitted text can

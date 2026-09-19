@@ -71,7 +71,7 @@ keyDown ──► PriTypeInputController.handle(event, client)
 - ⌘·⌃·⌥가 눌린 키: 조합을 확정하고 앱으로 넘긴다(단축키).
 - 글자 키 26개는 현재 라틴 배열이 만든 문자가 아니라 키 위치(`QwertyKeyMap`, US QWERTY)로 해석한다. Dvorak·Colemak·AZERTY에서도 같은 자모가 나오고, 윗줄 자모는 Shift로만 고른다(Caps Lock 무시). 그 밖의 키는 배열이 만든 문자를 그대로 쓰며 조합 엔진에 넘기지 않는다. 단, 글자 키에 문장부호를 둔 배열(AZERTY의 M 자리 쉼표, Dvorak의 Q W E 자리 `' , .`, Colemak의 P 자리 `;`)에서는 그 문장부호가 자모에 밀려 칠 키가 없어지므로, 숫자·문장부호 키를 US 위치로 읽는다(`LatinLayoutObserver`, `QwertyKeyMap.punctuation`). 판정은 입력을 보고 한다. 글자 키가 글자가 아닌 문자를 한 번 쳐야 켜지므로, 입력기가 시작된 뒤 그 키(AZERTY라면 ㅡ)를 처음 치기 전까지는 배열의 문자가 그대로 나온다. 각 글자 키는 마지막으로 친 문자로 판정하므로, 배열이 바뀌면 해당 글자 키를 다시 칠 때 따라간다. dead key 뒤처럼 두 글자 이상이 온 입력은 판정에 쓰지 않는다. US 위치로 읽을 때 숫자는 Shift 없이 나오고(AZERTY와 반대), ISO 자판과 위치가 엇갈리는 키 50(`` ` ``/`~`)은 제외한다. 독일어·북유럽처럼 글자 키가 모두 글자인 배열은 ö·ü 같은 문자를 그대로 친다.
 - 특수 키
-  - Return: 조합을 확정하고 키는 앱으로 넘긴다. GoodNotes는 줄바꿈을 직접 넣고, Hermes는 확정만 하고 키를 소비한다(`ClientCompatibilityPolicy`).
+  - Return: 조합을 확정하고 키는 앱으로 넘긴다. Hermes는 확정만 하고 키를 소비한다(`ClientCompatibilityPolicy`).
   - Esc: 조합 중이면 취소하고 소비, 아니면 앱으로 넘긴다.
   - Space: 조합을 확정하고 공백을 넣는다. macOS의 "스페이스를 두 번 눌러 마침표 추가"가 켜져 있으면 한글 뒤의 빠른 두 번째 공백을 ". "로 바꾼다(`TextConvenienceHandler`, 0.45초 이내).
   - 방향키, Tab: 확정하고 앱으로 넘긴다.

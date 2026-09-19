@@ -362,8 +362,11 @@ struct HangulComposerTests {
         #expect(delegate.markedText.isEmpty)
     }
 
-    @Test("Return key uses GoodNotes compatibility newline")
-    func returnKeyGoodNotesCompatibility() {
+    @Test("GoodNotes gets the ordinary Return: commit, then its own key")
+    func returnKeyGoodNotesUsesOrdinaryPath() {
+        // GoodNotes 7 ignores a newline inserted by the input method, so the old
+        // "insert \n and consume Return" workaround needed two presses. Measured
+        // on 7.1.22: the ordinary path gives exactly one line break.
         let (composer, delegate) = makeComposer()
         composer.markKeystroke(bundleId: "com.goodnotesapp.x")
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
@@ -372,9 +375,8 @@ struct HangulComposerTests {
         let returnEvent = TestEventFactory.keyEvent(char: "\r", keyCode: KeyCode.`return`)!
         let handled = composer.handle(returnEvent, delegate: delegate)
 
-        #expect(handled, "GoodNotes compatibility should consume Return after direct newline insertion")
-        #expect(delegate.insertedTexts.contains("가"))
-        #expect(delegate.insertedTexts.filter { $0 == "\n" }.count == 1)
+        #expect(!handled, "GoodNotes must receive the Return key itself")
+        #expect(delegate.insertedTexts == ["가"])
         #expect(delegate.markedText.isEmpty)
     }
 
