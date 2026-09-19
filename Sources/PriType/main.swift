@@ -9,7 +9,6 @@ let kConnectionName = "PriType_InputString_v2"
 
 class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     
-    private var hasLaunchedBefore = false
     private let updateCheckScheduler = NSBackgroundActivityScheduler(identifier: "com.pritype.inputmethod.v2.updatecheck")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -54,9 +53,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         updateCheckScheduler.schedule { completion in
             Self.checkForUpdates { completion(.finished) }
         }
-        
-        // Mark as launched (don't show settings on first boot)
-        hasLaunchedBefore = true
     }
     
     /// One automatic check, if the user allows them (and 24h have passed).
