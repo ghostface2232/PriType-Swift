@@ -27,11 +27,6 @@ public final class UpdateNotifier: NSObject, @unchecked Sendable, UNUserNotifica
     private let categoryIdentifier = "PRITYPE_UPDATE"
     private let actionIdentifier = "DOWNLOAD_ACTION"
     
-    // MARK: - State
-    
-    /// The URL to open when the user clicks the notification
-    private var pendingReleaseURL: URL?
-    
     // MARK: - Initialization
     
     private override init() {
@@ -74,7 +69,6 @@ public final class UpdateNotifier: NSObject, @unchecked Sendable, UNUserNotifica
     /// - Parameter update: The update information to display
     public func notifyUpdateAvailable(_ update: UpdateChecker.UpdateInfo) {
         // Store the URL for when the user interacts with the notification
-        self.pendingReleaseURL = update.releasePageURL
 
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { [weak self] settings in
@@ -103,7 +97,6 @@ public final class UpdateNotifier: NSObject, @unchecked Sendable, UNUserNotifica
     }
 
     private func enqueueUpdateNotification(_ update: UpdateChecker.UpdateInfo) {
-        self.pendingReleaseURL = update.releasePageURL
         
         let content = UNMutableNotificationContent()
         content.title = L10n.update.notificationTitle

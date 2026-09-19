@@ -17,7 +17,7 @@ import ApplicationServices
 /// - **Primary handler**: `RightCommandSuppressor` (CGEventTap)
 /// - **Backup handler**: `IOKitManager` (IOHIDManager)
 ///
-/// The main entry point (`main.swift`) first attempts to start `RightCommandSuppressor`.
+/// `KeyMonitors.start()` first attempts to start `RightCommandSuppressor`.
 /// If that fails, `IOKitManager` takes over as the primary toggle handler.
 /// When CGEventTap succeeds, `IOKitManager` is stopped so only one monitor owns a
 /// physical key press at a time.

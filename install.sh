@@ -19,6 +19,7 @@ mkdir -p "$RESOURCES_DIR"
 
 echo "Copying executable..."
 cp "$BUILD_DIR/PriType" "$MACOS_DIR/PriTypeV2"
+Tools/stamp_sdk_version.sh "$MACOS_DIR/PriTypeV2"
 
 echo "Copying Info.plist..."
 cp Info.plist "$CONTENTS_DIR/"
@@ -27,8 +28,8 @@ cp Info.plist "$CONTENTS_DIR/"
 # Copy Resources directory (localization, etc)
 cp -R Resources/* "$RESOURCES_DIR/" 2>/dev/null || true
 
-# Copy App Icon
-cp "AppIcon.icns" "$RESOURCES_DIR/" 2>/dev/null || echo "No AppIcon.icns found"
+# Compile App Icon (PriType.icon)
+Tools/compile_app_icon.sh "$RESOURCES_DIR"
 
 # Copy input source icons
 cp "icon.tiff" "$RESOURCES_DIR/" 2>/dev/null || echo "No icon.tiff found, skipping."

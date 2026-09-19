@@ -131,12 +131,6 @@ struct ClientContextTests {
     // PriTypeInputController (no per-app policy), so there is no longer a
     // bundle-ID predicate to unit-test here.
 
-    @Test("Client compatibility policy flags GoodNotes for direct-newline Return")
-    func goodNotesNeedsDirectNewlineAfterReturnCommit() {
-        #expect(ClientCompatibilityPolicy.needsDirectNewlineAfterReturnCommit(bundleId: "com.goodnotesapp.x"))
-        #expect(!ClientCompatibilityPolicy.needsDirectNewlineAfterReturnCommit(bundleId: "com.openai.codex"))
-    }
-
     @Test("Client compatibility policy consumes Return after Hangul commit for Hermes")
     func hermesConsumesReturnAfterCompositionCommit() {
         #expect(ClientCompatibilityPolicy.needsReturnConsumedAfterCompositionCommit(bundleId: "com.nousresearch.hermes"))

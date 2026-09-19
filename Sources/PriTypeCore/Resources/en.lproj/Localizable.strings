@@ -1,39 +1,25 @@
 /* PriType Settings UI - English */
 
-/* General */
-"settings.title" = "Settings";
-"settings.footer" = "Designed for macOS";
-
-/* Toggle Key */
-"toggle.title" = "Korean/English Toggle";
-"toggle.rightCmd" = "⌘ Right Command";
-"toggle.ctrlSpace" = "⌃ Control + Space";
-"toggle.description" = "Choose the key to toggle between Korean and English";
-
 /* Key Binding */
-"keyBinding.title" = "Key Settings";
 "keyBinding.toggleKey" = "Toggle Key";
 "keyBinding.hanjaKey" = "Hanja Key";
 "keyBinding.toggleTrigger" = "Switch Timing";
 "keyBinding.toggleTriggerPress" = "On Press";
 "keyBinding.toggleTriggerTap" = "Tap Alone";
-"keyBinding.toggleTriggerPressDescription" = "Switches as soon as the key goes down. The key no longer combines with others: Right ⌘ + C types c instead of copying.";
-"keyBinding.toggleTriggerTapDescription" = "Switches when the key is pressed and released on its own (within 1 second). Used with another key or a click, it stays a modifier, so Right ⌘ + C copies.";
+"keyBinding.toggleTriggerPressDescription" = "Switches the moment the key goes down. The key no longer combines with others, so Right ⌘ + C types c.";
+"keyBinding.toggleTriggerTapDescription" = "Switches when you tap the key on its own. Pressed with another key it stays a modifier, so Right ⌘ + C still copies.";
 "keyBinding.toggleTriggerOnlyModifiers" = "Applies only when the toggle key is a single modifier such as Right ⌘.";
 "keyBinding.hanjaEnabled" = "Hanja Conversion";
-"keyBinding.hanjaEnabledDescription" = "When off, the Hanja dictionary is never loaded and the Hanja key works as its ordinary key.";
+"keyBinding.hanjaEnabledDescription" = "When off, the Hanja dictionary isn’t loaded and the Hanja key works as usual.";
 "keyBinding.disabledByHanjaOff" = "Disabled while Hanja conversion is off";
 "keyBinding.recording" = "Press a key...";
-"keyBinding.change" = "Change";
 "keyBinding.conflict" = "Cannot use the same key";
 "keyBinding.conflictRestored" = "Cannot use the same key. Restored the previous setting.";
-"keyBinding.reset" = "Reset to Default";
-"keyBinding.capsLockSummary" = "When Caps Lock input-source switching is on, PriType's toggle key is disabled.";
 "keyBinding.capsLockStatusTitle" = "Caps Lock input-source switch";
 "keyBinding.capsLockStatusOn" = "On";
 "keyBinding.capsLockStatusOff" = "Off";
-"keyBinding.capsLockOnDescription" = "Caps Lock switches Korean/English through macOS Input Source settings. PriType's toggle key is disabled to avoid duplicate switching.";
-"keyBinding.capsLockOffDescription" = "PriType's toggle key switches Korean/English. Enable Caps Lock in macOS Input Source settings if you prefer that key.";
+"keyBinding.capsLockOnDescription" = "Caps Lock switches input sources through macOS. PriType’s toggle key is turned off so you don’t switch twice.";
+"keyBinding.capsLockOffDescription" = "PriType’s toggle key switches between Korean and English. To use Caps Lock instead, turn it on in macOS Input Sources.";
 "keyBinding.disabledByCapsLock" = "Disabled while Caps Lock input-source switching is on";
 "keyBinding.managedByMacOS" = "macOS Caps Lock";
 "keyBinding.capsLockBlockedTitle" = "Set Caps Lock in macOS";
@@ -41,7 +27,6 @@
 "keyBinding.capsLockOpenSettings" = "Open Input Source Settings";
 
 /* About */
-"about.title" = "About";
 "about.description" = "Korean Input Method for macOS";
 "about.version" = "Version";
 
@@ -61,29 +46,27 @@
 "update.autoCheck" = "Automatically check for updates";
 
 /* System */
-"system.title" = "System Options";
 "system.accessibility" = "Accessibility Permission";
 "system.accessibilityGranted" = "Granted";
 "system.accessibilityRequest" = "Request Permission";
-"system.accessibilitySubtitle" = "Required for detecting shortcut keys such as Right Command and Right Option.";
+"system.accessibilitySubtitle" = "Needed to detect the toggle and Hanja keys, such as Right ⌘ or ⌥.";
 "system.inputMonitoring" = "Input Monitoring";
-"system.inputMonitoringSubtitle" = "Needed by the IOKit fallback that takes over when the Accessibility-based key detection stops. Without it, the toggle and Hanja keys stop working at that point.";
+"system.inputMonitoringSubtitle" = "Needed for the backup path that detects keys when the primary one stops.";
 "system.openSystemSettings" = "Open System Settings";
 "system.removeABC" = "Turn Off ABC Input Source";
-"system.removeABCSubtitle" = "Removes the default ABC input source when PriType alone handles Korean and English. You can add it again in System Settings.";
+"system.removeABCSubtitle" = "Removes ABC from your input sources when PriType handles both languages. You can add it back in System Settings.";
 "system.removeABCButton" = "Turn Off";
 "system.removeABCSuccess" = "Disabled";
 "system.removeABCFailed" = "Failed";
 
 /* Toggle Key App Exclusions */
-"exclusions.title" = "Toggle Key Exclusions";
-"exclusions.subtitle" = "Pass the toggle and hanja keys straight through while these apps are frontmost. Use it for remote desktops and virtual machines that run their own input method.";
+"exclusions.subtitle" = "While these apps are in front, the toggle and Hanja keys pass straight through. Useful for remote desktops and virtual machines.";
 "exclusions.addButton" = "Add App…";
 "exclusions.removeButton" = "Remove";
 "exclusions.empty" = "No excluded apps";
 
 /* System Shortcut Conflicts */
-"shortcut.conflictWarning" = "This combination is also macOS’s “%@”. PriType will take it first — consider reassigning that shortcut in System Settings.";
+"shortcut.conflictWarning" = "This also triggers macOS’s “%@”. PriType gets it first, so consider changing that shortcut in System Settings.";
 "shortcut.previousInputSource" = "Select the previous input source";
 "shortcut.nextInputSource" = "Select the next input source";
 "shortcut.spotlight" = "Spotlight search";
@@ -92,3 +75,23 @@
 "shortcut.screenshot" = "Save picture of screen as a file";
 "shortcut.screenshotRegion" = "Save picture of selected area as a file";
 "shortcut.screenshotUI" = "Screenshot and recording options";
+
+/* Settings panes */
+"pane.switching.title" = "Input Switching";
+"pane.switching.description" = "Choose the key and timing for switching between Korean and English.";
+"pane.hanja.title" = "Hanja";
+"pane.hanja.description" = "Turn on Hanja conversion and choose the key that opens the candidates.";
+"pane.exclusions.title" = "Excluded Apps";
+"pane.system.title" = "Permissions";
+"pane.system.description" = "Manage the permissions PriType needs to detect keys, and the default ABC input source.";
+"pane.update.description" = "Check whether a new version of PriType is available.";
+"pane.experimental.title" = "Experimental";
+"pane.experimental.description" = "Features still being refined. Turn them off if something goes wrong.";
+
+/* Experimental */
+"experimental.directInsertion" = "Windows-Style Direct Input";
+"experimental.directInsertionDescription" = "Types the syllable you’re composing without an underline, the only way to do so since macOS 26. Works in native apps; web apps, Electron apps and terminals keep the standard behavior.";
+
+/* Input menu */
+"menu.settings" = "PriType Settings…";
+"menu.about" = "About PriType";

@@ -122,6 +122,8 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         name: "PriType ${{ steps.version.outputs.VERSION }}"
+        # A suffixed tag (v2.8.0-beta.1) is a beta: flagging it keeps it off
+        # /releases/latest, which the settings window links stable users to.
         prerelease: ${{ steps.version.outputs.PRERELEASE }}
         generate_release_notes: true
         body: |

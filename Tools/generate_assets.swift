@@ -3,10 +3,6 @@ import CoreText
 import Foundation
 
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-let iconset = root.appendingPathComponent("AppIcon.iconset")
-
-try? FileManager.default.removeItem(at: iconset)
-try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 
 func bitmap(width: Int, height: Int, pointSize: CGFloat? = nil, draw: (CGFloat) -> Void) -> NSBitmapImageRep {
     guard let rep = NSBitmapImageRep(
@@ -35,114 +31,11 @@ func bitmap(width: Int, height: Int, pointSize: CGFloat? = nil, draw: (CGFloat) 
     return rep
 }
 
-func writePNG(_ rep: NSBitmapImageRep, to url: URL) throws {
-    guard let data = rep.representation(using: .png, properties: [:]) else {
-        fatalError("Failed to encode PNG")
-    }
-    try data.write(to: url)
-}
-
 func writeTIFF(_ rep: NSBitmapImageRep, to url: URL) throws {
     guard let data = rep.representation(using: .tiff, properties: [:]) else {
         fatalError("Failed to encode TIFF")
     }
     try data.write(to: url)
-}
-
-func roundedPath(_ rect: NSRect, radius: CGFloat) -> NSBezierPath {
-    NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-}
-
-func drawAppIcon(size: CGFloat) {
-    let rect = NSRect(x: 0, y: 0, width: size, height: size)
-    NSColor.clear.setFill()
-    rect.fill()
-
-    let inset = size * 0.078
-    let body = rect.insetBy(dx: inset, dy: inset)
-    let radius = size * 0.205
-
-    NSGraphicsContext.saveGraphicsState()
-    let shadow = NSShadow()
-    shadow.shadowColor = NSColor.black.withAlphaComponent(0.25)
-    shadow.shadowBlurRadius = size * 0.035
-    shadow.shadowOffset = NSSize(width: 0, height: -size * 0.018)
-    shadow.set()
-
-    let bodyPath = roundedPath(body, radius: radius)
-    NSGradient(
-        starting: NSColor(calibratedRed: 0.10, green: 0.30, blue: 0.73, alpha: 1),
-        ending: NSColor(calibratedRed: 0.18, green: 0.70, blue: 0.96, alpha: 1)
-    )?.draw(in: bodyPath, angle: 90)
-    NSGraphicsContext.restoreGraphicsState()
-
-    let highlight = roundedPath(body.insetBy(dx: size * 0.018, dy: size * 0.018), radius: radius * 0.86)
-    NSColor.white.withAlphaComponent(0.12).setStroke()
-    highlight.lineWidth = max(1, size * 0.006)
-    highlight.stroke()
-
-    let keyRect = NSRect(
-        x: size * 0.245,
-        y: size * 0.270,
-        width: size * 0.510,
-        height: size * 0.500
-    )
-    let keyPath = roundedPath(keyRect, radius: size * 0.085)
-    NSGraphicsContext.saveGraphicsState()
-    let keyShadow = NSShadow()
-    keyShadow.shadowColor = NSColor.black.withAlphaComponent(0.20)
-    keyShadow.shadowBlurRadius = size * 0.018
-    keyShadow.shadowOffset = NSSize(width: 0, height: -size * 0.010)
-    keyShadow.set()
-    NSColor.white.withAlphaComponent(0.96).setFill()
-    keyPath.fill()
-    NSGraphicsContext.restoreGraphicsState()
-
-    NSColor(calibratedWhite: 0.94, alpha: 1).setStroke()
-    keyPath.lineWidth = max(1, size * 0.004)
-    keyPath.stroke()
-
-    let paragraph = NSMutableParagraphStyle()
-    paragraph.alignment = .center
-    let pFont = NSFont.systemFont(ofSize: size * 0.355, weight: .semibold)
-    let pAttrs: [NSAttributedString.Key: Any] = [
-        .font: pFont,
-        .foregroundColor: NSColor(calibratedRed: 0.08, green: 0.24, blue: 0.55, alpha: 1),
-        .paragraphStyle: paragraph,
-        .kern: 0
-    ]
-    NSString(string: "P").draw(
-        in: NSRect(x: keyRect.minX, y: keyRect.minY + size * 0.070, width: keyRect.width, height: keyRect.height * 0.80),
-        withAttributes: pAttrs
-    )
-
-    if size >= 128 {
-        let tagRect = NSRect(
-            x: size * 0.570,
-            y: size * 0.220,
-            width: size * 0.205,
-            height: size * 0.170
-        )
-        let tag = roundedPath(tagRect, radius: size * 0.045)
-        NSColor(calibratedRed: 0.06, green: 0.18, blue: 0.42, alpha: 0.94).setFill()
-        tag.fill()
-        NSColor.white.withAlphaComponent(0.18).setStroke()
-        tag.lineWidth = max(1, size * 0.003)
-        tag.stroke()
-
-        let hFont = NSFont(name: "AppleSDGothicNeo-Bold", size: size * 0.090)
-            ?? NSFont.systemFont(ofSize: size * 0.090, weight: .bold)
-        let hAttrs: [NSAttributedString.Key: Any] = [
-            .font: hFont,
-            .foregroundColor: NSColor.white,
-            .paragraphStyle: paragraph,
-            .kern: 0
-        ]
-        NSString(string: "한").draw(
-            in: NSRect(x: tagRect.minX, y: tagRect.minY + size * 0.035, width: tagRect.width, height: tagRect.height * 0.62),
-            withAttributes: hAttrs
-        )
-    }
 }
 
 func centeredTextOrigin(text: String, attributes: [NSAttributedString.Key: Any], canvasSize: CGFloat) -> NSPoint {
@@ -261,24 +154,6 @@ func writeTIFF(_ image: NSImage, to url: URL) throws {
     try data.write(to: url)
 }
 
-let iconFiles: [(String, Int)] = [
-    ("icon_16x16.png", 16),
-    ("icon_16x16@2x.png", 32),
-    ("icon_32x32.png", 32),
-    ("icon_32x32@2x.png", 64),
-    ("icon_128x128.png", 128),
-    ("icon_128x128@2x.png", 256),
-    ("icon_256x256.png", 256),
-    ("icon_256x256@2x.png", 512),
-    ("icon_512x512.png", 512),
-    ("icon_512x512@2x.png", 1024)
-]
-
-for (name, size) in iconFiles {
-    let rep = bitmap(width: size, height: size) { drawAppIcon(size: $0) }
-    try writePNG(rep, to: iconset.appendingPathComponent(name))
-}
-
 try writeTIFF(
     drawInputGlyph("한", fontName: "AppleSDGothicNeo-Bold", fontSize: 15.0, yOffset: -1.15),
     to: root.appendingPathComponent("input-ko.tiff")
@@ -291,14 +166,4 @@ try writeTIFF(
     drawInputGlyph("한", fontName: "AppleSDGothicNeo-Bold", fontSize: 15.0, yOffset: -1.15),
     to: root.appendingPathComponent("icon.tiff")
 )
-let process = Process()
-process.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
-process.arguments = ["-c", "icns", iconset.path, "-o", root.appendingPathComponent("AppIcon.icns").path]
-try process.run()
-process.waitUntilExit()
-guard process.terminationStatus == 0 else {
-    fatalError("iconutil failed with status \(process.terminationStatus)")
-}
-
-try? FileManager.default.removeItem(at: iconset)
-print("Generated AppIcon.icns and input source TIFF assets.")
+print("Generated input source TIFF assets.")

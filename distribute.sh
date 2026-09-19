@@ -5,22 +5,28 @@ set -e
 APP_NAME="PriTypeV2"
 APP_BUNDLE="${APP_NAME}.app"
 ZIP_NAME="${APP_NAME}.zip"
-SIGNING_IDENTITY="Developer ID Application: Chanwoo Park (M4U438VG59)"
-TEAM_ID="M4U438VG59" # Extracted from cert
+# The environment's identity, else the first Developer ID Application in the
+# keychain. The team ID is the part in parentheses.
+SIGNING_IDENTITY="${SIGNING_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application:/ {print $2; exit}')}"
+if [ -z "$SIGNING_IDENTITY" ]; then
+    echo "Error: a Developer ID Application certificate is required (or set SIGNING_IDENTITY)." >&2
+    exit 1
+fi
+TEAM_ID=$(echo "$SIGNING_IDENTITY" | sed -n 's/.*(\([A-Z0-9]*\))$/\1/p')
 
 # Credentials (Set these securely in env, or script will prompt)
 # KEYCHAIN_PROFILE="PriTypeNotary" 
 
 echo "==== 1. Clean & Build ===="
-./install.sh # This builds and copies to ./Resources/PriTypeV2.app locally first? No, install.sh installs to ~/Library...
-# Let's extract build logic or just use swift build
-swift build -c release -Xswiftc -DNDEBUG
+rm -rf build_dist
+swift build -c release
 mkdir -p build_dist/Contents/MacOS
 mkdir -p build_dist/Contents/Resources
 cp .build/release/PriType build_dist/Contents/MacOS/PriTypeV2
+Tools/stamp_sdk_version.sh build_dist/Contents/MacOS/PriTypeV2
 cp Info.plist build_dist/Contents/
 cp -R Resources/* build_dist/Contents/Resources/ || true
-cp "AppIcon.icns" build_dist/Contents/Resources/ 2>/dev/null || true
+Tools/compile_app_icon.sh build_dist/Contents/Resources
 cp "icon.tiff" build_dist/Contents/Resources/ 2>/dev/null || true
 cp "input-ko.tiff" build_dist/Contents/Resources/ 2>/dev/null || true
 cp "input-en.tiff" build_dist/Contents/Resources/ 2>/dev/null || true

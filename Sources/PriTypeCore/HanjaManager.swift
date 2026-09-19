@@ -17,11 +17,17 @@ public final class HanjaManager: @unchecked Sendable {
         case failed
     }
 
-    /// Guards `state`; waited on only by `loadIfNeeded`, never by a search.
+    /// Guards `state`, `wanted` and `unloads`; waited on only by `loadIfNeeded`,
+    /// never by a search.
     private let condition = NSCondition()
     private var state = LoadState.unloaded
-    /// Set by `unload()` while a load is running: its result is thrown away.
-    private var discardLoadInProgress = false
+    /// Whether Hanja conversion is on, as last said by `preload()` / `unload()`.
+    /// Recorded on the caller's thread, so a background load that finishes, or
+    /// starts, late still obeys the newest of them.
+    private var wanted = true
+    /// Bumped by every `unload()`. A load that saw one happen, and finishes
+    /// while Hanja is off, throws its result away.
+    private var unloads: UInt64 = 0
     private let loader: @Sendable () -> HanjaDictionary?
 
     /// Jamo → special symbol mapping (Windows-style)
@@ -44,8 +50,20 @@ public final class HanjaManager: @unchecked Sendable {
         condition.withLock { if case .loaded = state { return true } else { return false } }
     }
 
-    /// Map the dictionary, or wait for the thread that is mapping it. For the
-    /// launch-time preload; key presses go through `search`, which never waits.
+    /// Map the dictionary in the background, for launch and for turning Hanja
+    /// conversion on. Pairs with `unload()`: call both from one thread (main),
+    /// and on-off-on keeps a load already running, on-off leaves nothing mapped,
+    /// however late the background work runs.
+    public func preload() {
+        condition.withLock { wanted = true }
+        DispatchQueue.global(qos: .utility).async {
+            _ = self.dictionary(onlyIfWanted: true)
+        }
+    }
+
+    /// Map the dictionary, or wait for the thread that is mapping it. Blocks;
+    /// for tests and tools. The app preloads with `preload()`, and key presses
+    /// go through `search`, which never waits.
     public func loadIfNeeded() {
         guard dictionary() == nil else { return }
         condition.withLock {
@@ -58,10 +76,11 @@ public final class HanjaManager: @unchecked Sendable {
     /// quick on-then-off does not leave the dictionary mapped.
     public func unload() {
         condition.withLock {
+            wanted = false
+            unloads &+= 1
             switch state {
             case .loaded, .failed: state = .unloaded
-            case .loading: discardLoadInProgress = true
-            case .unloaded: break
+            case .loading, .unloaded: break
             }
         }
         jamoLock.withLock {
@@ -72,18 +91,20 @@ public final class HanjaManager: @unchecked Sendable {
     }
 
     /// The mapped dictionary. Loads it on this thread when nobody has; returns nil
-    /// without waiting when another thread is loading it.
-    private func dictionary() -> HanjaDictionary? {
-        let claimed: Bool = condition.withLock {
-            guard case .unloaded = state else { return false }
+    /// without waiting when another thread is loading it. `onlyIfWanted` is the
+    /// preload: it does not start a load once Hanja has been turned off, checked
+    /// in the same critical section as the claim so an `unload()` cannot slip in
+    /// between.
+    private func dictionary(onlyIfWanted: Bool = false) -> HanjaDictionary? {
+        let claim: UInt64? = condition.withLock {
+            guard case .unloaded = state, wanted || !onlyIfWanted else { return nil }
             state = .loading
-            return true
+            return unloads
         }
-        if claimed {
+        if let unloadsAtClaim = claim {
             let loaded = loader()
             condition.withLock {
-                if discardLoadInProgress {
-                    discardLoadInProgress = false
+                if !wanted && unloads != unloadsAtClaim {
                     state = .unloaded
                 } else {
                     state = loaded.map(LoadState.loaded) ?? .failed

@@ -42,7 +42,7 @@ PriTypeV2.app
 2. `IMKServer`를 만든다.
 3. 저장된 키 바인딩을 이관·보정한다(`ConfigurationManager.migrateKeyBindingsIfNeeded`).
 4. 앞에 있는 앱을 추적해 전환 제외 앱을 판정할 준비를 한다(`ToggleExclusionPolicy.start`).
-5. 키 모니터를 시작한다(`setupIOKit`).
+5. 키 모니터를 시작한다(`KeyMonitors.start`, 설정 창의 권한 버튼도 같은 함수를 부른다).
    - 손쉬운 사용 권한이 없으면 시스템 요청 창을 띄우고, 허용될 때까지 1초마다 확인한 뒤 다시 시작한다.
    - `RightCommandSuppressor`(CGEventTap)를 시작한다. 실패하거나 나중에 탭이 반복해서 꺼지면 `IOKitManager`로 넘긴다. IOKit 경로는 입력 모니터링 권한을 확인하고, 없으면 요청한 뒤 허용될 때까지 2초마다 확인한다.
 6. 한자 변환이 켜져 있으면 백그라운드에서 한자 사전을 매핑한다.
@@ -71,7 +71,7 @@ keyDown ──► PriTypeInputController.handle(event, client)
 - ⌘·⌃·⌥가 눌린 키: 조합을 확정하고 앱으로 넘긴다(단축키).
 - 글자 키 26개는 현재 라틴 배열이 만든 문자가 아니라 키 위치(`QwertyKeyMap`, US QWERTY)로 해석한다. Dvorak·Colemak·AZERTY에서도 같은 자모가 나오고, 윗줄 자모는 Shift로만 고른다(Caps Lock 무시). 그 밖의 키는 배열이 만든 문자를 그대로 쓰며 조합 엔진에 넘기지 않는다. 단, 글자 키에 문장부호를 둔 배열(AZERTY의 M 자리 쉼표, Dvorak의 Q W E 자리 `' , .`, Colemak의 P 자리 `;`)에서는 그 문장부호가 자모에 밀려 칠 키가 없어지므로, 숫자·문장부호 키를 US 위치로 읽는다(`LatinLayoutObserver`, `QwertyKeyMap.punctuation`). 판정은 입력을 보고 한다. 글자 키가 글자가 아닌 문자를 한 번 쳐야 켜지므로, 입력기가 시작된 뒤 그 키(AZERTY라면 ㅡ)를 처음 치기 전까지는 배열의 문자가 그대로 나온다. 각 글자 키는 마지막으로 친 문자로 판정하므로, 배열이 바뀌면 해당 글자 키를 다시 칠 때 따라간다. dead key 뒤처럼 두 글자 이상이 온 입력은 판정에 쓰지 않는다. US 위치로 읽을 때 숫자는 Shift 없이 나오고(AZERTY와 반대), ISO 자판과 위치가 엇갈리는 키 50(`` ` ``/`~`)은 제외한다. 독일어·북유럽처럼 글자 키가 모두 글자인 배열은 ö·ü 같은 문자를 그대로 친다.
 - 특수 키
-  - Return: 조합을 확정하고 키는 앱으로 넘긴다. GoodNotes는 줄바꿈을 직접 넣고, Hermes는 확정만 하고 키를 소비한다(`ClientCompatibilityPolicy`).
+  - Return: 조합을 확정하고 키는 앱으로 넘긴다. Hermes는 확정만 하고 키를 소비한다(`ClientCompatibilityPolicy`).
   - Esc: 조합 중이면 취소하고 소비, 아니면 앱으로 넘긴다.
   - Space: 조합을 확정하고 공백을 넣는다. macOS의 "스페이스를 두 번 눌러 마침표 추가"가 켜져 있으면 한글 뒤의 빠른 두 번째 공백을 ". "로 바꾼다(`TextConvenienceHandler`, 0.45초 이내).
   - 방향키, Tab: 확정하고 앱으로 넘긴다.
@@ -177,7 +177,7 @@ Caps Lock, 입력 메뉴, 그리고 4단계 통보에 대한 응답이 모두 �
   - Esc: 닫기
   - ←, →: 닫고 앱으로 넘긴다
   - 그 밖의 키: 닫고 평소처럼 입력한다
-- 창이 떠 있는 동안에는 이벤트 탭이 후보창 키를 직접 가로챈다(`isAcceptingKeys`, `route`). Terminal처럼 조합 중인 글자가 없으면 Esc·방향키·Return을 입력기에 넘기지 않는 앱이 있기 때문이다. 숫자는 키 위치로 인식한다.
+- 창이 떠 있는 동안에는 이벤트 탭이 후보창 키를 직접 가로챈다(`shownPageCandidates`, `route`). Terminal처럼 조합 중인 글자가 없으면 Esc·방향키·Return을 입력기에 넘기지 않는 앱이 있기 때문이다. 숫자는 키 위치로 인식하며, 현재 쪽에 후보가 없는 숫자는 창을 닫고 앱으로 넘긴다.
 - 닫히는 경우: 선택, Esc, 한자키 다시 누르기, 한/영 전환, 포커스가 다른 창이나 앱으로 이동, 후보창 밖 클릭, 한자 변환 끄기.
 - 포커스 이동은 두 곳에서 닫는다. 주인 컨트롤러의 `deactivateServer`, 그리고 다른 컨트롤러가 공유 조합기를 넘겨받는 `claimActiveController`다. IMK는 새 입력창을 먼저 활성화하고 이전 입력창을 나중에 비활성화하기도 하는데, 그때 이전 컨트롤러는 이미 주인이 아니어서 창을 닫지 않는다.
 - 후보창 밖 클릭은 창이 떠 있는 동안만 거는 전역 마우스 모니터로 감지한다. 조합 중인 글자가 없으면 IMK는 클릭을 입력기에 알리지 않으므로, 이것이 없으면 클릭으로 옮긴 커서 앞 글자를 다음 숫자키가 바꿀 수 있다. 후보창 자체의 클릭은 PriType 앱으로 오므로 이 모니터에 잡히지 않는다. 클릭으로 닫으면 입력 버퍼도 비운다(`onClickOutside`). 커서가 옮겨졌을 수 있어 버퍼가 더는 커서 앞 글자가 아니기 때문이다.
@@ -211,7 +211,6 @@ Caps Lock, 입력 메뉴, 그리고 4단계 통보에 대한 응답이 모두 �
 - `selectPriTypeMode`: 전환 결과를 macOS 입력 소스 표시에 반영한다(위 전환 처리 4단계).
 - `enabledRomanKeyboardLayoutID`: 영문 모드에서 앱에 지정할 로마자 자판을 찾는다.
 - `disableABCKeyboardLayout`: 설정 창의 "ABC 입력 소스 끄기". HIToolbox 설정을 고치고 `TextInputMenuAgent`를 재시작한다. 이 프로세스의 TIS 캐시는 갱신되지 않으므로, 결과는 자기 자신을 `--abc-layout-status`로 새로 실행해 확인한다(`ABCLayoutStatusProbe`, 최대 약 3초 재시도 `ABCRemovalVerification`).
-- `cleanupStaleInputSources`: 오래된 PriType 항목과 중복을 HIToolbox 설정에서 지우는 유지보수 도구다. 세 키의 정리본을 모두 계획한 뒤 함께 쓰고, 되읽기 검증에 실패하면 함께 되돌린다. 시작할 때 자동으로 실행하지 않는다.
 
 ## 설정 창 (`SettingsWindowController`)
 
@@ -245,9 +244,10 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 |---|---|
 | `RightCommandSuppressor.lock` (재귀) | 탭의 모든 상태와 콜백. 콜백 전체 동안 잡는다. 콜백이 `stop()`을 부를 수 있어 재귀 잠금이다 |
 | `ConfigurationManager.keyBindingLock` | 탭이 키마다 읽는 값의 캐시: 전환키·한자키 바인딩, 전환 시점, 한자 켜짐 |
+| `PolledPreference.lock` | 다른 프로세스가 쓰는 설정의 캐시: Caps Lock 입력 소스 전환, 더블스페이스 마침표, 직접 입력 실험. 1초에 한 번까지만 다시 읽는다 |
 | `InputModeCoordinator.pendingActions` | 탭 스레드가 기록한 전환·한자 동작 대기열 |
 | `HanjaManager.condition` | 사전 로딩 상태. 미리 매핑만 기다리고 검색은 기다리지 않는다. 매핑된 사전 자체는 읽기 전용이다 |
-| `HanjaCandidateWindow.acceptingKeysState` | 탭이 읽는 후보창 표시 여부 |
+| `HanjaCandidateWindow.pageCandidatesState` | 탭이 읽는, 현재 쪽의 후보 수(0이면 창이 닫힘) |
 | `ToggleExclusionPolicy.lock` | 앞에 있는 앱과 제외 목록 |
 | libhangul `ThreadSafeHangulInputContext` | 조합 엔진 내부 상태 |
 
@@ -264,7 +264,6 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `PriTypeIMKHarness` | 라이브러리 | 실제 `PriTypeInputController`를 가짜 입력창(`FakeTextClient`)에 연결해 키를 흘려 넣는 통합 테스트 도구. 한자 후보창은 `FakeCandidatePresenter`가 대신해 후보를 기록하고 선택·클릭을 흉내 낸다. `Dubeolsik`은 한글 문장을 두벌식 키로 바꾼다 |
 | `PriTypeHanjaCompiler` | 실행 파일 | `hanja.txt` → `hanja.dat` 컴파일 |
 | `PriTypeBenchmark` | 실행 파일 | 한자 사전·검색, 자모 검색, 동시성, 좌표 검증, 타이핑 경로 지연 측정([BENCHMARK.md](BENCHMARK.md)) |
-| `PriTypeVerify` | 실행 파일 | CI에서 돌리는 조합 동작 점검 |
 | `PriTypeCoreTests` | 테스트 | 유닛·통합 테스트 |
 
 ### `PriTypeCore` 파일
@@ -287,6 +286,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `IOKitManager` | IOHIDManager 대체 키 모니터, 손쉬운 사용·입력 모니터링 권한 확인 |
 | `HIDShortcutState` | IOKit 경로의 단축키 판정(HID usage 대응표, 장치별 눌린 키, 30초 만료, 한자키 0.5초 디바운스) |
 | `ToggleTrigger` | 전환 시점 설정과 `ModifierTapDetector` |
+| `KeyMonitors` | 키 모니터 시작의 유일한 경로: 콜백 연결, 탭, IOKit 대체 경로, 권한 대기 |
 | `KeyMonitorLifecycle` | 탭 실패 추적(`EventTapFailureTracker`), 좌우 수정키 상태(`ModifierKeyState`) |
 | `ToggleExclusionPolicy` | 전환키 제외 앱 판정 |
 | `KeyRecordingState`, `KeyRecordingSessions` | 설정 창 키 녹음 상태, 한 번에 한 행만 녹음 |
@@ -294,15 +294,14 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `HanjaDictionary` | 매핑 한자 사전의 형식, 이진 탐색, 컴파일러 |
 | `HanjaCandidateWindow` | 한자 후보창, 키 처리와 이벤트 탭 라우팅, 배치 |
 | `CursorRectResolver` | 후보창 좌표 전략과 유효성 검증 |
-| `InputSourceManager` | TIS 조회, PriType 모드 선택, ABC 끄기, 유지보수 정리 |
+| `InputSourceManager` | TIS 조회, PriType 모드 선택, ABC 끄기 |
 | `ABCLayoutStatusProbe`, `ABCRemovalVerification` | ABC 끄기 결과를 새 프로세스로 확인 |
-| `ConfigurationManager` | 사용자 설정(`UserDefaults`), 키 바인딩 이관, macOS 더블스페이스 설정 읽기. `ConfigurationProviding`으로 테스트에서 대체 가능 |
+| `ConfigurationManager` | 사용자 설정(`UserDefaults`), 키 바인딩 이관, macOS 설정 읽기(`PolledPreference`). `ConfigurationProviding`으로 테스트에서 대체 가능 |
 | `SettingsWindowController` | 설정 창 |
 | `UpdateChecker`, `UpdateNotifier`, `ReleaseChannel` | 업데이트 확인, 알림, 정식·베타 채널 판정 |
 | `AboutInfo` | 버전 정보, 정보 창 |
 | `L10n` | 한국어·영어 문자열 |
 | `PriTypeConfig` | 상수: 자판 ID `"2"`(두벌식), Finder 바탕화면 판정 50pt, 설정 창 크기, 더블스페이스 0.45초, 디버그 로그 경로 |
-| `PriTypeError` | 키 모니터 관련 오류와 복구 안내 |
 | `DebugLogger` | 디버그 빌드: `~/Library/Logs/PriType/pritype_debug.log`(5MB에서 교체). 민감한 내용은 가린다. 컨트롤러마다 처음 200개 키 입력의 키 코드를 기록하므로, 실기기 테스트 뒤에는 로그를 지운다. 릴리스 빌드: 빈 함수 |
 
 ## 테스트
@@ -311,11 +310,10 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 swift test
 ```
 
-Swift Testing 기반, 377개 테스트와 57개 Suite(2026-09-19 기준). Command Line Tools에는 Testing 모듈이 없으므로 Xcode 툴체인이 필요하다.
+Swift Testing 기반, 377개 테스트와 56개 Suite(2026-09-20 기준). Command Line Tools에는 Testing 모듈이 없으므로 Xcode 툴체인이 필요하다.
 
-- 유닛 테스트: 조합, 키 위치, 전달 정책, 직접 삽입, 키 모니터(탭 이벤트 순서, IOKit 판정, 탭 스레드, 순서 대기열, 에코 필터), 한자 사전·검색·후보창 배치, 설정 이관, 입력 소스 정리, 업데이트 버전 비교, 등록 계약.
+- 유닛 테스트: 조합, 키 위치, 전달 정책, 직접 삽입, 키 모니터(탭 이벤트 순서, IOKit 판정, 탭 스레드, 순서 대기열, 에코 필터), 한자 사전·검색·후보창 배치, 설정 이관, ABC 끄기, 업데이트 버전 비교, 등록 계약.
 - 통합 테스트(`IMKIntegrationTests`): `PriTypeIMKHarness`로 실제 컨트롤러를 돌린다. 확정 순서, 백스페이스, 중복 키, 한/영 전환(전환키, 대기열, Caps Lock, 재확인), 포커스 전환, 긴 문단 왕복 입력, 한자(단어 변환, 짧은 끝말 교체, 커서가 옮겨진 뒤의 선택 취소, 클릭으로 닫은 뒤의 버퍼, 다른 앱의 글자, 늦은 비활성화)를 검증한다. 하니스는 macOS에 모드를 통보하는 부분을 기록만 하고 한자 후보창은 패널을 열지 않으므로, 테스트가 실제 입력 소스를 바꾸거나 창을 띄우지 않는다. 이벤트 탭의 후보창 키 라우팅과 클릭 감시는 실제 이벤트가 필요해 다루지 않는다.
-- `swift run PriTypeVerify`: 조합 동작 점검(CI에서 실행).
 - `swift run -c release PriTypeBenchmark`: 성능 측정.
 
 ## 빌드와 배포
@@ -328,7 +326,7 @@ Swift Testing 기반, 377개 테스트와 57개 Suite(2026-09-19 기준). Comman
 | `distribute.sh` | 서명한 앱을 zip으로 묶고 선택적으로 공증 |
 | `Packaging/scripts/` | pkg의 `preinstall`(이전 버전 제거), `postinstall`(입력 관련 프로세스 재시작, 새 설치면 입력 소스 설정 열기) |
 
-CI(`.github/workflows/ci.yml`)는 push와 PR마다 빌드, `swift test`, `PriTypeVerify`, SwiftLint(`--strict`)를 돌린다. `release.yml`은 `v*` 태그에서 태그와 Info.plist 버전·채널이 맞는지 확인하고, GitHub의 `xcode-27` VM(Xcode 27, macOS 27 SDK)에서 테스트를 돌린 뒤 `build_release.sh`로 pkg를 만들어 GitHub 릴리스에 올린다. `-`가 붙은 태그는 pre-release로 올라가 업데이트 확인에서 빠진다.
+CI(`.github/workflows/ci.yml`)는 push와 PR마다 빌드, `swift test`, SwiftLint(`--strict`)를 돌린다. `release.yml`은 `v*` 태그에서 태그와 Info.plist 버전·채널이 맞는지 확인하고, GitHub의 `xcode-27` VM(Xcode 27, macOS 27 SDK)에서 테스트를 돌린 뒤 `build_release.sh`로 pkg를 만들어 GitHub 릴리스에 올린다. `-`가 붙은 태그는 pre-release로 올라가 업데이트 확인에서 빠진다.
 
 ## 디렉터리 구조
 
@@ -343,8 +341,7 @@ PriType-Swift/
 │   │       ├── ko.lproj/, en.lproj/
 │   ├── PriTypeIMKHarness/       # IMK 통합 테스트 도구
 │   ├── PriTypeHanjaCompiler/    # 한자 사전 컴파일러
-│   ├── PriTypeBenchmark/
-│   └── PriTypeVerify/
+│   └── PriTypeBenchmark/
 ├── Tests/PriTypeCoreTests/
 ├── Tools/
 │   ├── hanja/hanja.txt          # 한자 사전 원본 (libhangul, BSD)

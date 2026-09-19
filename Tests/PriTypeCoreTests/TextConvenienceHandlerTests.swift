@@ -16,8 +16,8 @@ struct TextConvenienceHandlerTests {
         delegate.fullText = "Hello "
         var buffer = "Hello "
         
-        _ = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate, checkHangul: false)
-        let result = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate, checkHangul: false)
+        _ = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate)
+        let result = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate)
         
         #expect(result == .convertedToPeriod)
         #expect(delegate.fullText.hasSuffix(". "))
@@ -30,7 +30,7 @@ struct TextConvenienceHandlerTests {
         delegate.fullText = "Hello"
         var buffer = "Hello"
         
-        let result = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate, checkHangul: false)
+        let result = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate)
         
         #expect(result == .normalSpace)
     }
@@ -41,40 +41,26 @@ struct TextConvenienceHandlerTests {
         let delegate = MockComposerDelegate()
         delegate.fullText = "Hello "
         var buffer = "Hello "
-        _ = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate, checkHangul: false)
+        _ = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate)
         
         handler.resetSpaceState()
         
-        let result = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate, checkHangul: false)
+        let result = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate)
         #expect(result == .normalSpace)
     }
     
-    // MARK: - Hangul Detection Tests
-    
-    @Test("Hangul syllable detection")
-    func isHangulSyllable() {
-        let handler = TextConvenienceHandler()
-        #expect(handler.isHangul("한"))
-        #expect(handler.isHangul("글"))
-        #expect(handler.isHangul("가"))
+    @Test("Double space after Hangul converts to period")
+    func doubleSpaceAfterHangul() {
+        for text in ["한 ", "ㅎ "] {
+            let handler = TextConvenienceHandler(isDoubleSpacePeriodEnabled: { true })
+            let delegate = MockComposerDelegate()
+            delegate.fullText = text
+            var buffer = text
+            _ = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate)
+            #expect(handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate) == .convertedToPeriod)
+        }
     }
-    
-    @Test("Hangul jamo detection")
-    func isHangulJamo() {
-        let handler = TextConvenienceHandler()
-        #expect(handler.isHangul("ㄱ"))
-        #expect(handler.isHangul("ㅏ"))
-        #expect(handler.isHangul("ㅎ"))
-    }
-    
-    @Test("Non-Hangul detection")
-    func isNotHangul() {
-        let handler = TextConvenienceHandler()
-        #expect(!handler.isHangul("A"))
-        #expect(!handler.isHangul("1"))
-        #expect(!handler.isHangul("!"))
-    }
-    
+
     // English mode performs no composition and is a pure pass-through, so it no
     // longer routes through TextConvenienceHandler. The behaviour is covered by
     // `HangulComposerTests.englishModePurePassthrough`.
