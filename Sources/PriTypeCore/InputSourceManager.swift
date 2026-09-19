@@ -8,12 +8,6 @@ import Carbon
 /// Custom PriType language toggles must not call `TISSelectInputSource`.
 /// Runtime mode switching is coordinated by `InputModeCoordinator` and
 /// `PriTypeInputController`; this type stays off the typing hot path.
-///
-/// ## Usage
-/// ```swift
-/// let sources = InputSourceManager.shared.getEnabledKeyboardInputSources()
-/// let isABCEnabled = InputSourceManager.shared.isABCEnabled()
-/// ```
 public final class InputSourceManager: @unchecked Sendable {
     
     // MARK: - Singleton
@@ -26,7 +20,7 @@ public final class InputSourceManager: @unchecked Sendable {
     // MARK: - Constants
     
     /// Keyboard Layout ID for ABC (252)
-    public static let abcKeyboardLayoutID = 252
+    static let abcKeyboardLayoutID = 252
 
     private static let priTypeBundleID = "com.pritype.inputmethod.v2"
     private static let priTypeKoreanInputMode = "com.pritype.inputmethod.v2"
@@ -79,13 +73,7 @@ public final class InputSourceManager: @unchecked Sendable {
     }
 
     private func priTypeModeSource(english: Bool) -> TISInputSource? {
-        let filter: [String: Any] = [
-            kTISPropertyInputSourceCategory as String: kTISCategoryKeyboardInputSource as String,
-            kTISPropertyInputSourceIsEnabled as String: true
-        ]
-        guard let sources = TISCreateInputSourceList(filter as CFDictionary, false)?
-            .takeRetainedValue() as? [TISInputSource] else { return nil }
-        return sources.first { source in
+        enabledKeyboardSources()?.first { source in
             guard let id = stringProperty(source, kTISPropertyInputSourceID),
                   id.hasPrefix(Self.priTypeBundleID),
                   stringProperty(source, kTISPropertyInputSourceType) == kTISTypeKeyboardInputMode as String,
@@ -106,47 +94,32 @@ public final class InputSourceManager: @unchecked Sendable {
     }
 
     // MARK: - TIS API Methods
-    
-    /// Get a list of all enabled keyboard input sources using TIS API
-    public func getEnabledKeyboardInputSources() -> [(id: String, name: String)] {
-        var result: [(id: String, name: String)] = []
-        
+
+    /// The enabled keyboard input sources (layouts and input modes), or nil when
+    /// TIS cannot list them.
+    private func enabledKeyboardSources() -> [TISInputSource]? {
         let filter: [String: Any] = [
             kTISPropertyInputSourceCategory as String: kTISCategoryKeyboardInputSource as String,
             kTISPropertyInputSourceIsEnabled as String: true
         ]
-        
-        guard let sourceList = TISCreateInputSourceList(filter as CFDictionary, false)?.takeRetainedValue() as? [TISInputSource] else {
-            return result
-        }
-        
-        for source in sourceList {
-            if let idPtr = TISGetInputSourceProperty(source, kTISPropertyInputSourceID),
-               let namePtr = TISGetInputSourceProperty(source, kTISPropertyLocalizedName) {
-                let id = Unmanaged<CFString>.fromOpaque(idPtr).takeUnretainedValue() as String
-                let name = Unmanaged<CFString>.fromOpaque(namePtr).takeUnretainedValue() as String
-                result.append((id: id, name: name))
-            }
-        }
-        
-        return result
+        return TISCreateInputSourceList(filter as CFDictionary, false)?.takeRetainedValue() as? [TISInputSource]
     }
-    
+
+    /// IDs of the enabled keyboard input sources. Nil when TIS cannot list them
+    /// or leaves one without an ID: such a list cannot prove anything absent.
+    public func enabledKeyboardInputSourceIDs() -> [String]? {
+        guard let sources = enabledKeyboardSources() else { return nil }
+        var ids: [String] = []
+        for source in sources {
+            guard let id = stringProperty(source, kTISPropertyInputSourceID) else { return nil }
+            ids.append(id)
+        }
+        return ids
+    }
+
     /// Never resurrect a disabled ABC/US layout merely to override a client.
     static func enabledRomanKeyboardLayoutID(in enabledIDs: [String]) -> String? {
         ["com.apple.keylayout.ABC", "com.apple.keylayout.US"].first { enabledIDs.contains($0) }
-    }
-
-    /// Check if ABC is enabled via TIS API
-    public func isABCEnabled() -> Bool {
-        let sources = getEnabledKeyboardInputSources()
-        return sources.contains { $0.name == "ABC" || $0.id.contains("ABC") }
-    }
-    
-    /// Check if US is enabled via TIS API  
-    public func isUSEnabled() -> Bool {
-        let sources = getEnabledKeyboardInputSources()
-        return sources.contains { $0.id.contains("US") || $0.name == "U.S." }
     }
 
     // MARK: - Disable the default English (ABC) layout
@@ -251,21 +224,7 @@ public final class InputSourceManager: @unchecked Sendable {
     ///   input method it keeps answering "enabled" after a successful removal.
     ///   Confirm from a fresh process instead: `ABCLayoutStatusProbe`.
     public func isABCDisabledAccordingToTIS() -> Bool {
-        let filter: [String: Any] = [
-            kTISPropertyInputSourceCategory as String: kTISCategoryKeyboardInputSource as String,
-            kTISPropertyInputSourceIsEnabled as String: true
-        ]
-        guard let sources = TISCreateInputSourceList(filter as CFDictionary, false)?.takeRetainedValue() as? [TISInputSource] else {
-            return false // A failed query cannot prove absence.
-        }
-        var ids: [String] = []
-        for source in sources {
-            guard let pointer = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else {
-                return false
-            }
-            ids.append(Unmanaged<CFString>.fromOpaque(pointer).takeUnretainedValue() as String)
-        }
-        return Self.isABCDisabled(in: ids)
+        Self.isABCDisabled(in: enabledKeyboardInputSourceIDs())
     }
 
     static func isABCDisabled(in enabledIDs: [String]?) -> Bool {
