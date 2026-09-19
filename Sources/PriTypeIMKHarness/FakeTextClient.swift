@@ -55,6 +55,12 @@ public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
 
     public func clearLog() { calls.removeAll() }
 
+    /// Move the caret to `location` without telling the input method, as a
+    /// click in the text does when nothing is marked.
+    public func placeCaret(at location: Int) {
+        selection = NSRange(location: max(0, min(storage.length, location)), length: 0)
+    }
+
     private func log(_ call: Call) {
         calls.append(call)
         onCall?(call)

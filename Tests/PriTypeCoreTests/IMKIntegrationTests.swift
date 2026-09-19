@@ -265,4 +265,20 @@ struct IMKIntegrationTests {
         harness.type(Dubeolsik.keys(for: "가"))
         #expect(field.client.text == "대한민國가")
     }
+
+    @Test("A one-syllable candidate chosen after the caret moved leaves the text alone")
+    func hanjaAfterCaretMoved() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "요"))
+        harness.press(.space)
+        harness.type(Dubeolsik.keys(for: "한"))
+        harness.pressHanjaKey()
+        #expect(harness.candidates.entries.first?.hanja == "韓")
+        // A click after 요: IMK tells the input method nothing, nothing is marked.
+        field.client.placeCaret(at: 1)
+        harness.candidates.choose(1)
+        #expect(field.client.text == "요 한", "요 is not the 한 the candidate was looked up from")
+        #expect(!harness.candidates.isVisible)
+    }
 }

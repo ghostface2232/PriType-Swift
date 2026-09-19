@@ -766,15 +766,16 @@ public class HangulComposer: @unchecked Sendable {
         return true
     }
     
-    /// Whether a candidate may replace the text before the caret. A word spans
-    /// several syllables, so a stale buffer (the caret moved by a click the IME
-    /// never saw) would replace the wrong text. When the host reports that text
-    /// it must match. A single syllable, or a host that cannot report its text
-    /// (nil, or an empty string from hosts that answer with nothing), keeps the
-    /// old behavior of replacing blindly: Chromium hosts can report garbage, and
-    /// one syllable was never checked.
+    /// Whether a candidate may replace the text before the caret. The caret can
+    /// move without the IME hearing of it (a click, when nothing is marked), and
+    /// then the text before it is not what was looked up — for one syllable as
+    /// much as for a word. So when the host reports that text it must match.
+    /// Checking one syllable also refuses decomposed (NFD) text, where the
+    /// replaced UTF-16 unit would be a lone jamo of the syllable. A host that
+    /// cannot report its text (nil, or an empty string from hosts that answer
+    /// with nothing) is still replaced blindly: there is nothing to check.
     static func canReplace(_ current: String?, with entry: HanjaEntry) -> Bool {
-        guard let current, !current.isEmpty, entry.hangul.count > 1 else { return true }
+        guard let current, !current.isEmpty else { return true }
         return current.precomposedStringWithCanonicalMapping == entry.hangul.precomposedStringWithCanonicalMapping
     }
 

@@ -52,6 +52,9 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
     public static var isAcceptingKeys: Bool { acceptingKeysState.withLock { $0 } }
     static func setAcceptingKeys(_ value: Bool) { acceptingKeysState.withLock { $0 = value } }
 
+    /// Watches for clicks outside the panel while it is up (`watchClicks`).
+    private var clickMonitor: Any?
+
     private init() {}
     
     /// Show the candidate window with the given entries
@@ -136,7 +139,8 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         positionWindow(near: cursorRect)
         panel.orderFrontRegardless()
         Self.setAcceptingKeys(true)
-        
+        watchClicks()
+
         DebugLogger.log("Hanja: Window shown at \(panel.frame), level=\(panel.level.rawValue)")
     }
     
@@ -147,9 +151,35 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         }
     }
 
+    /// Close the candidates on a click anywhere but the panel. A click moves the
+    /// caret without telling the input method: the lookup committed the
+    /// syllable, and with nothing marked IMK sends no commit. Left open, the
+    /// candidates would take the next digit and replace the text before the new
+    /// caret. A global monitor sees only other apps' events, so clicks on the
+    /// panel's own candidates never reach it.
+    @MainActor
+    private func watchClicks() {
+        guard clickMonitor == nil else { return }
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] _ in
+            DebugLogger.log("Hanja: click outside the candidates")
+            self?.dismiss()
+        }
+    }
+
+    @MainActor
+    private func stopWatchingClicks() {
+        if let clickMonitor {
+            NSEvent.removeMonitor(clickMonitor)
+            self.clickMonitor = nil
+        }
+    }
+
     @MainActor
     private func dismissOnMain() {
         Self.setAcceptingKeys(false)
+        stopWatchingClicks()
         window?.orderOut(nil)
         candidates = []
         let dismissCallback = onDismiss
@@ -288,6 +318,7 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
     @MainActor
     private func dismissWithoutCallback() {
         Self.setAcceptingKeys(false)
+        stopWatchingClicks()
         window?.orderOut(nil)
         candidates = []
         onSelect = nil
