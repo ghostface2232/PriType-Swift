@@ -69,7 +69,7 @@ keyDown ──► PriTypeInputController.handle(event, client)
 - 영문 모드: 조합 중인 글자가 있으면 확정하고 `false`를 돌려준다. 키 처리는 앱이 한다.
 - 한자 후보창이 떠 있으면 키를 후보창에 먼저 넘긴다.
 - ⌘·⌃·⌥가 눌린 키: 조합을 확정하고 앱으로 넘긴다(단축키).
-- 글자 키 26개는 현재 라틴 배열이 만든 문자가 아니라 키 위치(`QwertyKeyMap`, US QWERTY)로 해석한다. Dvorak·Colemak·AZERTY에서도 같은 자모가 나오고, 윗줄 자모는 Shift로만 고른다(Caps Lock 무시). 그 밖의 키는 배열이 만든 문자를 그대로 쓰며 조합 엔진에 넘기지 않는다.
+- 글자 키 26개는 현재 라틴 배열이 만든 문자가 아니라 키 위치(`QwertyKeyMap`, US QWERTY)로 해석한다. Dvorak·Colemak·AZERTY에서도 같은 자모가 나오고, 윗줄 자모는 Shift로만 고른다(Caps Lock 무시). 그 밖의 키는 배열이 만든 문자를 그대로 쓰며 조합 엔진에 넘기지 않는다. 단, 글자 키에 문장부호를 둔 배열(AZERTY의 M 자리 쉼표, Dvorak의 Q W E 자리 `' , .`, Colemak의 P 자리 `;`)에서는 그 문장부호가 자모에 밀려 칠 키가 없어지므로, 숫자·문장부호 키를 US 위치로 읽는다(`LatinLayoutObserver`, `QwertyKeyMap.punctuation`). 이 판정은 글자 키가 마지막으로 친 문자로 하므로 배열이 바뀌면 따라간다. 독일어·북유럽처럼 글자 키가 모두 글자인 배열은 ö·ü 같은 문자를 그대로 친다.
 - 특수 키
   - Return: 조합을 확정하고 키는 앱으로 넘긴다. GoodNotes는 줄바꿈을 직접 넣고, Hermes는 확정만 하고 키를 소비한다(`ClientCompatibilityPolicy`).
   - Esc: 조합 중이면 취소하고 소비, 아니면 앱으로 넘긴다.
@@ -281,7 +281,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `HangulComposerTypes` | `HangulComposerDelegate` 프로토콜, `InputMode` |
 | `CompositionHelpers` | libhangul 출력(UCSChar 배열)을 NFC 문자열로 변환 |
 | `TextConvenienceHandler` | 한글 조합 중 더블스페이스 마침표 |
-| `KeyCode` | 키 코드 상수, `QwertyKeyMap`(글자 키 위치 → QWERTY 글자) |
+| `KeyCode` | 키 코드 상수, `QwertyKeyMap`(글자 키 위치 → QWERTY 글자, 숫자·문장부호 키 → US 문자), `LatinLayoutObserver`(글자 키에 문장부호를 둔 배열 감지) |
 | `InputModeCoordinator` | 전환·한자 동작의 키 순서 대기열, `SystemModeEchoFilter`, `DeferredInputMode` |
 | `RightCommandSuppressor` | CGEventTap 키 모니터, `EventTapThread` |
 | `IOKitManager` | IOHIDManager 대체 키 모니터, 손쉬운 사용·입력 모니터링 권한 확인 |

@@ -139,4 +139,60 @@ public enum QwertyKeyMap {
     public static func character(for keyCode: UInt16, shifted: Bool) -> String? {
         letters[keyCode].map { shifted ? $0.uppercased() : String($0) }
     }
+
+    static func isLetterKey(_ keyCode: UInt16) -> Bool {
+        letters[keyCode] != nil
+    }
+
+    /// US digits and punctuation of the main typing block, unshifted and
+    /// shifted. Key 50 is left out: ISO keyboards swap it with key 10, so its
+    /// position is not the US grave key.
+    private static let punctuationKeys: [UInt16: (String, String)] = [
+        18: ("1", "!"), 19: ("2", "@"), 20: ("3", "#"), 21: ("4", "$"), 23: ("5", "%"),
+        22: ("6", "^"), 26: ("7", "&"), 28: ("8", "*"), 25: ("9", "("), 29: ("0", ")"),
+        27: ("-", "_"), 24: ("=", "+"), 33: ("[", "{"), 30: ("]", "}"), 42: ("\\", "|"),
+        41: (";", ":"), 39: ("'", "\""), 43: (",", "<"), 47: (".", ">"), 44: ("/", "?")
+    ]
+
+    /// The US character at a digit or punctuation key of the main block, or
+    /// `nil` for any other key.
+    public static func punctuation(for keyCode: UInt16, shifted: Bool) -> String? {
+        punctuationKeys[keyCode].map { shifted ? $0.1 : $0.0 }
+    }
+}
+
+// MARK: - LatinLayoutObserver
+
+/// Notices a Latin layout that puts punctuation on letter keys.
+///
+/// 두벌식 takes all 26 letter keys for jamo. A QWERTY-lettered layout (US,
+/// German, the Nordic ones) keeps its punctuation elsewhere, so every other
+/// key can type what the layout says, national letters included. AZERTY puts
+/// the comma on M, Dvorak ' , . on Q W E, Colemak ; on P: in Korean mode those
+/// keys type jamo, and that punctuation is left without a key. One letter key
+/// typing something other than a letter shows the layout is of that kind; the
+/// composer then reads the digit and punctuation keys by their US position,
+/// which gives back a complete set.
+///
+/// Each key is judged by what it typed last, so the verdict follows a change
+/// of layout, such as a client later overridden to ABC.
+struct LatinLayoutObserver {
+    private var lettersTypingOtherwise: Set<UInt16> = []
+
+    /// Whether the layout moved punctuation onto the letter keys.
+    var displacesPunctuation: Bool { !lettersTypingOtherwise.isEmpty }
+
+    /// Note what a keystroke typed. `characters` is what the layout produced
+    /// (Shift or Caps Lock at most). Only a single character counts: a dead
+    /// key types nothing yet, and a letter after an unused dead accent arrives
+    /// with it ("^r" on German), which says nothing about the letter key.
+    mutating func observe(keyCode: UInt16, characters: String?) {
+        guard QwertyKeyMap.isLetterKey(keyCode), let characters, characters.count == 1,
+              let character = characters.first else { return }
+        if character.isLetter {
+            lettersTypingOtherwise.remove(keyCode)
+        } else {
+            lettersTypingOtherwise.insert(keyCode)
+        }
+    }
 }

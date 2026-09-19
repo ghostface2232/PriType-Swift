@@ -90,6 +90,9 @@ public class HangulComposer: @unchecked Sendable {
     /// Owns all state for text convenience features
     private let textConvenience: TextConvenienceHandler
 
+    /// Whether the user's Latin layout moved punctuation onto the letter keys.
+    private var latinLayout = LatinLayoutObserver()
+
     /// Shows Hanja candidates. The IMK harness replaces it with a recorder.
     public var candidatePresenter: any HanjaCandidatePresenting = HanjaCandidateWindow.shared
 
@@ -400,9 +403,16 @@ public class HangulComposer: @unchecked Sendable {
         
         // Letter keys compose from their position, not the active Latin layout: the
         // Hangul layout is defined on QWERTY positions, and only Shift (never Caps
-        // Lock) picks the upper row. Every other key keeps what the layout typed.
-        let positional = QwertyKeyMap.character(for: keyCode, shifted: event.modifierFlags.contains(.shift))
-        let composes = positional != nil
+        // Lock) picks the upper row. Every other key keeps what the layout typed,
+        // unless the layout put punctuation on the letter keys: then digits and
+        // punctuation come from their US positions (`LatinLayoutObserver`).
+        let shifted = event.modifierFlags.contains(.shift)
+        latinLayout.observe(keyCode: keyCode, characters: event.characters)
+        let letter = QwertyKeyMap.character(for: keyCode, shifted: shifted)
+        let composes = letter != nil
+        let positional = letter ?? (latinLayout.displacesPunctuation
+            ? QwertyKeyMap.punctuation(for: keyCode, shifted: shifted)
+            : nil)
         guard let inputCharacters = positional ?? event.characters, !inputCharacters.isEmpty else {
             return false
         }
