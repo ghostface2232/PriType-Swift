@@ -74,6 +74,19 @@ public class HangulComposer: @unchecked Sendable {
     // MARK: - libhangul Context
     // 두벌식 표준 is the only supported layout, so the context is created once.
     private let context = ThreadSafeHangulInputContext(keyboard: PriTypeConfig.defaultKeyboardId)
+
+    /// Replays keystrokes to find which of them make up the live syllable.
+    private let replayContext = ThreadSafeHangulInputContext(keyboard: PriTypeConfig.defaultKeyboardId)
+
+    /// The keystrokes that typed the live syllable, oldest first. Backspace
+    /// drops the last one and replays the rest, so it undoes a keystroke rather
+    /// than a jamo: ㅐ typed with one key goes whole, ㅗ+ㅏ steps back to ㅗ.
+    /// libhangul's own backspace splits every compound jamo it can (ㅐ → ㅏ,
+    /// ㅆ → ㅅ) however it was typed.
+    private var syllableKeys: [Character] = []
+
+    /// A 두벌식 syllable takes at most five keys (괅 = ㄱ ㅗ ㅏ ㄹ ㄱ).
+    private static let maxSyllableKeys = 5
     
     /// Text convenience handler (double-space period)
     /// Owns all state for text convenience features
@@ -104,6 +117,11 @@ public class HangulComposer: @unchecked Sendable {
                 configuration.doubleSpacePeriodEnabled
             }
         )
+        // 모아치기 off: a consonant after a lone vowel starts the next syllable
+        // (ㅏ + ㄴ → ㅏ나), as in the standard 두벌식, instead of joining it (나).
+        for engine in [context, replayContext] {
+            engine.setOption(.autoReorder, value: false)
+        }
         DebugLogger.log("HangulComposer init")
     }
 
@@ -220,7 +238,7 @@ public class HangulComposer: @unchecked Sendable {
         if keyCode == KeyCode.backspace {
             if !context.isEmpty() {
                 let before = context.getPreeditString()
-                _ = context.backspace()
+                removeLastKeystroke()
                 if context.isEmpty() {
                     // The last jamo is going. Commit it and let the host delete it
                     // with its own deleteBackward, instead of cancelling the marked
@@ -260,8 +278,13 @@ public class HangulComposer: @unchecked Sendable {
             return false
         }
         
+        if composes && !context.isEmpty() && breaksOffFromSyllable(Character(char)) {
+            commitComposition(delegate: delegate)
+        }
+
         // Primary attempt
         if composes && context.process(Character(char)) {
+            recordKeystroke(Character(char))
             updateComposition(delegate: delegate)
             return true
         }
@@ -276,6 +299,7 @@ public class HangulComposer: @unchecked Sendable {
         // Retry with clean context
         if composes && context.process(Character(char)) {
             DebugLogger.log("Retry success")
+            recordKeystroke(Character(char))
             updateComposition(delegate: delegate)
             return true
         }
@@ -292,6 +316,70 @@ public class HangulComposer: @unchecked Sendable {
         return false
     }
     
+    /// Remembers a keystroke the engine took, keeping only the ones behind the
+    /// live syllable: the longest recent run that types it again from scratch.
+    /// Keys from before a commit, reset or syllable split never survive this,
+    /// so no other path has to clear `syllableKeys`.
+    private func recordKeystroke(_ key: Character) {
+        syllableKeys.append(key)
+        let preedit = context.getPreeditString()
+        guard !preedit.isEmpty else {
+            syllableKeys = []
+            return
+        }
+        for count in stride(from: min(syllableKeys.count, Self.maxSyllableKeys), through: 1, by: -1) {
+            let run = syllableKeys.suffix(count)
+            if replay(run, into: replayContext) == preedit {
+                syllableKeys = Array(run)
+                return
+            }
+        }
+        syllableKeys = []
+    }
+
+    /// Whether `key` must start a new syllable although libhangul would join it
+    /// to the live one. Its tables hold combinations the standard 두벌식 does not
+    /// have: ㅏ ㅑ ㅓ ㅕ + ㅣ (아 + ㅣ → 애) and a doubled final ㄱ or ㅅ (각 + ㄱ → 갂,
+    /// 갓 + ㅅ → 갔). There, ㅐ ㅒ ㅔ ㅖ ㄲ ㅆ come only from their own keys.
+    private func breaksOffFromSyllable(_ key: Character) -> Bool {
+        guard let last = syllableKeys.last else { return false }
+        switch (last, key) {
+        case ("k", "l"), ("i", "l"), ("j", "l"), ("u", "l"),
+             ("k", "L"), ("i", "L"), ("j", "L"), ("u", "L"):
+            return true
+        case ("r", "r"), ("t", "t"):
+            // A consonant after the vowel is the final one.
+            return syllableKeys.count >= 3
+        default:
+            return false
+        }
+    }
+
+    /// Undoes the last keystroke of the live syllable.
+    private func removeLastKeystroke() {
+        let preedit = context.getPreeditString()
+        guard !syllableKeys.isEmpty, replay(syllableKeys[...], into: replayContext) == preedit else {
+            // Out of step with the engine; fall back to its jamo-wise backspace.
+            syllableKeys = []
+            _ = context.backspace()
+            return
+        }
+        syllableKeys.removeLast()
+        context.reset()
+        _ = replay(syllableKeys[...], into: context)
+    }
+
+    /// Types `keys` into a reset `engine` and returns the preedit, or `nil` if
+    /// the keys do not make a single syllable.
+    private func replay(_ keys: ArraySlice<Character>, into engine: ThreadSafeHangulInputContext) -> [UCSChar]? {
+        engine.reset()
+        for key in keys where !engine.process(key) {
+            return nil
+        }
+        guard engine.getCommitString().isEmpty else { return nil }
+        return engine.getPreeditString()
+    }
+
     /// Handle a keyboard event
     ///
     /// This is the main entry point for processing keyboard input. The method
