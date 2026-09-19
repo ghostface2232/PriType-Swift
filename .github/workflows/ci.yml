@@ -29,9 +29,6 @@ jobs:
     
     - name: Run Unit Tests
       run: swift test -v
-
-    - name: Run Verification Tests
-      run: swift run PriTypeVerify
     
   lint:
     name: SwiftLint

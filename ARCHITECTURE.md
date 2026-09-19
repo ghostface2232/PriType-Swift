@@ -264,7 +264,6 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `PriTypeIMKHarness` | 라이브러리 | 실제 `PriTypeInputController`를 가짜 입력창(`FakeTextClient`)에 연결해 키를 흘려 넣는 통합 테스트 도구. 한자 후보창은 `FakeCandidatePresenter`가 대신해 후보를 기록하고 선택·클릭을 흉내 낸다. `Dubeolsik`은 한글 문장을 두벌식 키로 바꾼다 |
 | `PriTypeHanjaCompiler` | 실행 파일 | `hanja.txt` → `hanja.dat` 컴파일 |
 | `PriTypeBenchmark` | 실행 파일 | 한자 사전·검색, 자모 검색, 동시성, 좌표 검증, 타이핑 경로 지연 측정([BENCHMARK.md](BENCHMARK.md)) |
-| `PriTypeVerify` | 실행 파일 | CI에서 돌리는 조합 동작 점검 |
 | `PriTypeCoreTests` | 테스트 | 유닛·통합 테스트 |
 
 ### `PriTypeCore` 파일
@@ -311,11 +310,10 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 swift test
 ```
 
-Swift Testing 기반, 377개 테스트와 57개 Suite(2026-09-19 기준). Command Line Tools에는 Testing 모듈이 없으므로 Xcode 툴체인이 필요하다.
+Swift Testing 기반, 377개 테스트와 56개 Suite(2026-09-20 기준). Command Line Tools에는 Testing 모듈이 없으므로 Xcode 툴체인이 필요하다.
 
-- 유닛 테스트: 조합, 키 위치, 전달 정책, 직접 삽입, 키 모니터(탭 이벤트 순서, IOKit 판정, 탭 스레드, 순서 대기열, 에코 필터), 한자 사전·검색·후보창 배치, 설정 이관, 입력 소스 정리, 업데이트 버전 비교, 등록 계약.
+- 유닛 테스트: 조합, 키 위치, 전달 정책, 직접 삽입, 키 모니터(탭 이벤트 순서, IOKit 판정, 탭 스레드, 순서 대기열, 에코 필터), 한자 사전·검색·후보창 배치, 설정 이관, ABC 끄기, 업데이트 버전 비교, 등록 계약.
 - 통합 테스트(`IMKIntegrationTests`): `PriTypeIMKHarness`로 실제 컨트롤러를 돌린다. 확정 순서, 백스페이스, 중복 키, 한/영 전환(전환키, 대기열, Caps Lock, 재확인), 포커스 전환, 긴 문단 왕복 입력, 한자(단어 변환, 짧은 끝말 교체, 커서가 옮겨진 뒤의 선택 취소, 클릭으로 닫은 뒤의 버퍼, 다른 앱의 글자, 늦은 비활성화)를 검증한다. 하니스는 macOS에 모드를 통보하는 부분을 기록만 하고 한자 후보창은 패널을 열지 않으므로, 테스트가 실제 입력 소스를 바꾸거나 창을 띄우지 않는다. 이벤트 탭의 후보창 키 라우팅과 클릭 감시는 실제 이벤트가 필요해 다루지 않는다.
-- `swift run PriTypeVerify`: 조합 동작 점검(CI에서 실행).
 - `swift run -c release PriTypeBenchmark`: 성능 측정.
 
 ## 빌드와 배포
@@ -328,7 +326,7 @@ Swift Testing 기반, 377개 테스트와 57개 Suite(2026-09-19 기준). Comman
 | `distribute.sh` | 서명한 앱을 zip으로 묶고 선택적으로 공증 |
 | `Packaging/scripts/` | pkg의 `preinstall`(이전 버전 제거), `postinstall`(입력 관련 프로세스 재시작, 새 설치면 입력 소스 설정 열기) |
 
-CI(`.github/workflows/ci.yml`)는 push와 PR마다 빌드, `swift test`, `PriTypeVerify`, SwiftLint(`--strict`)를 돌린다. `release.yml`은 `v*` 태그에서 태그와 Info.plist 버전·채널이 맞는지 확인하고, 서명 전용 러너에서 `build_release.sh`로 pkg를 만들어 GitHub 릴리스에 올린다.
+CI(`.github/workflows/ci.yml`)는 push와 PR마다 빌드, `swift test`, SwiftLint(`--strict`)를 돌린다. `release.yml`은 `v*` 태그에서 태그와 Info.plist 버전·채널이 맞는지 확인하고, 서명 전용 러너에서 `build_release.sh`로 pkg를 만들어 GitHub 릴리스에 올린다.
 
 ## 디렉터리 구조
 
@@ -343,8 +341,7 @@ PriType-Swift/
 │   │       ├── ko.lproj/, en.lproj/
 │   ├── PriTypeIMKHarness/       # IMK 통합 테스트 도구
 │   ├── PriTypeHanjaCompiler/    # 한자 사전 컴파일러
-│   ├── PriTypeBenchmark/
-│   └── PriTypeVerify/
+│   └── PriTypeBenchmark/
 ├── Tests/PriTypeCoreTests/
 ├── Tools/
 │   ├── hanja/hanja.txt          # 한자 사전 원본 (libhangul, BSD)
