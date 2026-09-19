@@ -453,29 +453,9 @@ func verify() {
         exit(1)
     }
     
-    // Test 16: Edge Case - forceCommit Clears localTextBuffer
-    print("\nTest 16: forceCommit clears localTextBuffer")
-    composer.localTextBuffer = "C"
-    
-    if composer.localTextBuffer == "C" {
-         print("Setup PASS: localTextBuffer has 'C'")
-    } else {
-         print("FAIL: localTextBuffer is '\(composer.localTextBuffer)' expected 'C'")
-         exit(1)
-    }
-    
     // Switch back to Korean mode for cleanup
     if composer.inputMode == .english {
         composer.setInputMode(.korean)
-    }
-    
-    composer.forceCommit(delegate: delegate)
-    
-    if composer.localTextBuffer == "" {
-        print("PASS: localTextBuffer cleared on forceCommit")
-    } else {
-        print("FAIL: localTextBuffer was NOT cleared on forceCommit. It is '\(composer.localTextBuffer)'")
-        exit(1)
     }
 
     // Test 17: Edge Case - System Shortcuts Clear localTextBuffer
@@ -503,7 +483,7 @@ func verify() {
 
 func commit(delegate: MockDelegate, composer: HangulComposer) {
     // Force reset of engine state
-    composer.reset(delegate: delegate)
+    composer.discardCompositionForPassThrough()
     delegate.insertedText = ""
     delegate.markedText = ""
     delegate.fullText = ""

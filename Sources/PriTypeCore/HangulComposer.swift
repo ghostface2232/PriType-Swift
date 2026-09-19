@@ -49,24 +49,13 @@ public class HangulComposer: @unchecked Sendable {
     
     // MARK: - Private Properties
     
-    /// Track last delegate for external toggle calls
-    private weak var lastDelegate: (any HangulComposerDelegate)?
-    
-    /// Strong reference to the most recent adapter for Hanja lookup.
-    /// Unlike lastDelegate (weak) and PriTypeInputController.currentAdapter,
-    /// this survives IMK controller deallocation which happens frequently
-    /// in Electron apps (Chrome, VS Code).
-    /// Released with a 2-second delay when replaced, to allow async Hanja callbacks to finish.
-    private var lastStrongDelegate: (any HangulComposerDelegate)?
-    
-    /// Pending release of previous strong delegate (delayed to allow async callbacks)
-    private var pendingDelegateRelease: DispatchWorkItem?
-    
-    /// Whether Hanja candidate mode is currently active
+    /// The adapter of the last key handled. Held strongly: IMK deallocates
+    /// controllers often (Electron apps), and a mode switch or Hanja lookup that
+    /// arrives between two keys still needs somewhere to deliver text.
+    private var lastDelegate: (any HangulComposerDelegate)?
+
+    /// Whether this composer opened the Hanja candidate window
     private var hanjaMode = false
-    
-    /// The Hangul key currently being looked up for Hanja conversion
-    private var hanjaKey: String = ""
     
     /// Local cache of recently typed text to support double-space detection and Hanja lookup
     public var localTextBuffer: String = ""
@@ -320,26 +309,8 @@ public class HangulComposer: @unchecked Sendable {
     ///   - delegate: The delegate to receive composition callbacks
     /// - Returns: `true` if the event was consumed, `false` if it should be passed to the system
     public func handle(_ event: NSEvent, delegate: HangulComposerDelegate) -> Bool {
-        // Track delegate for external toggle calls
-        self.lastDelegate = delegate
-        
-        // Delayed release of previous strong delegate to prevent indefinite retention
-        // while keeping it alive long enough for async Hanja callbacks (2s window).
-        // HOW IT WORKS: `oldDelegate` is captured strongly by the DispatchWorkItem closure.
-        // This keeps the old adapter alive for 2 seconds even after `lastStrongDelegate`
-        // is replaced. When the work item executes (or is cancelled), the captured
-        // reference is released, allowing the old adapter to be deallocated.
-        if lastStrongDelegate !== (delegate as AnyObject) {
-            pendingDelegateRelease?.cancel()
-            let oldDelegate = lastStrongDelegate  // Strong capture keeps it alive for 2s
-            let releaseWork = DispatchWorkItem {
-                _ = oldDelegate  // prevent compiler from optimizing away the capture
-            }
-            pendingDelegateRelease = releaseWork
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: releaseWork)
-            self.lastStrongDelegate = delegate
-        }
-        
+        lastDelegate = delegate
+
         // Only handle key down events for actual typing
         if event.type != .keyDown {
             return false
@@ -375,7 +346,6 @@ public class HangulComposer: @unchecked Sendable {
             let consumed = candidatePresenter.handleKey(event)
             if !candidatePresenter.isVisible {
                 hanjaMode = false
-                hanjaKey = ""
             }
             if consumed {
                 return true
@@ -519,31 +489,10 @@ public class HangulComposer: @unchecked Sendable {
         // Do NOT clear localTextBuffer on cancel, as previously committed text is still valid context
     }
     
-    /// Force commit any in-progress composition
-    ///
-    /// Called when the input method is about to be deactivated or when
-    /// text needs to be finalized immediately (e.g., before window switch).
-    ///
-    /// - Parameter delegate: The delegate to receive the committed text
-    public func forceCommit(delegate: HangulComposerDelegate) {
-        commitComposition(delegate: delegate)
-        // Preserve the last Hangul character for Hanja lookup.
-        // Electron apps (Chrome, VS Code) trigger frequent deactivateServer calls
-        // which call forceCommit. Clearing the entire buffer makes Hanja lookup impossible.
-        if let lastChar = localTextBuffer.last, lastChar.isHangulChar {
-            localTextBuffer = String(lastChar)
-        } else {
-            localTextBuffer = ""
-        }
-    }
-
     /// Flush any in-progress composition and return its committed NFC string ("" if none).
     ///
-    /// Unlike `forceCommit`, this does NOT insert via a delegate — the caller inserts the
-    /// returned text itself. `deactivateServer` uses this to commit straight to the
-    /// deactivating client with an explicit `replacementRange` over the marked text, which
-    /// reliably clears a stranded preedit during a focus transition (some hosts, e.g.
-    /// KakaoTalk, do not honor insertText's automatic marked-text replacement at that moment).
+    /// Nothing is sent to a client: the caller (`InputSession.finalize`) delivers
+    /// the text itself, or — in direct insertion — knows it is already there.
     public func flushCommitString() -> String {
         guard !context.isEmpty() else { return "" }
         let flushed = context.flush()
@@ -554,19 +503,6 @@ public class HangulComposer: @unchecked Sendable {
             localTextBuffer = ""
         }
         return committed
-    }
-    
-    /// Reset the composition state
-    ///
-    /// Clears any in-progress composition without committing it.
-    /// Use this when composition should be discarded (e.g., after Escape key).
-    ///
-    /// - Parameter delegate: The delegate to receive the cleared marked text
-    public func reset(delegate: HangulComposerDelegate) {
-        context.reset()
-        delegate.setMarkedText("")
-        delegate.insertText("") 
-        localTextBuffer = ""
     }
     
     /// Clear the local text buffer without affecting composition state.
@@ -621,7 +557,6 @@ public class HangulComposer: @unchecked Sendable {
         guard hanjaMode else { return }
         candidatePresenter.dismiss()
         hanjaMode = false
-        hanjaKey = ""
         DebugLogger.log("Hanja: dismissed by \(reason)")
     }
     
@@ -636,14 +571,12 @@ public class HangulComposer: @unchecked Sendable {
         if candidatePresenter.isVisible {
             candidatePresenter.dismiss()
             hanjaMode = false
-            hanjaKey = ""
             DebugLogger.log("Hanja: Toggled off")
             return
         }
         
-        // Use the active controller's current adapter, fallback to strong delegate on composer
+        // Use the active controller's current adapter, fallback to the last key's
         let activeDelegate = PriTypeInputController.sharedController?.currentAdapter
-            ?? lastStrongDelegate
             ?? lastDelegate
         guard let delegate = activeDelegate else {
             DebugLogger.log("Hanja: No delegate available")
@@ -704,7 +637,6 @@ public class HangulComposer: @unchecked Sendable {
         DebugLogger.log("Hanja: Found \(entries.count) entries for '\(searchKey)'")
         
         hanjaMode = true
-        hanjaKey = searchKey
         
         // IMPORTANT: Capture cursor position BEFORE commit.
         // Chromium/Electron apps update cursor position asynchronously after commit,
@@ -742,7 +674,6 @@ public class HangulComposer: @unchecked Sendable {
                           ObjectIdentifier(client as AnyObject) == originalID else {
                         DebugLogger.log("Hanja: Client changed since show — aborting selection")
                         self.hanjaMode = false
-                        self.hanjaKey = ""
                         return
                     }
                     
@@ -757,7 +688,6 @@ public class HangulComposer: @unchecked Sendable {
                         guard selRange.location >= replacementLength else {
                             DebugLogger.log("Hanja: the caret is before where the word could end — aborting selection")
                             self.hanjaMode = false
-                            self.hanjaKey = ""
                             return
                         }
                         let replaceRange = NSRange(location: selRange.location - replacementLength, length: replacementLength)
@@ -765,7 +695,6 @@ public class HangulComposer: @unchecked Sendable {
                         guard Self.canReplace(current, with: entry) else {
                             DebugLogger.log("Hanja: text before the caret changed since show — aborting selection")
                             self.hanjaMode = false
-                            self.hanjaKey = ""
                             return
                         }
                         client.insertText(entry.hanja, replacementRange: replaceRange)
@@ -783,12 +712,10 @@ public class HangulComposer: @unchecked Sendable {
                     ? String(self.localTextBuffer.dropLast(entry.hangul.count)) + entry.hanja
                     : entry.hanja
                 self.hanjaMode = false
-                self.hanjaKey = ""
                 DebugLogger.log("Hanja: Selected '\(entry.hanja)' (\(entry.meaning))")
             },
             onDismiss: { [weak self] in
                 self?.hanjaMode = false
-                self?.hanjaKey = ""
                 DebugLogger.log("Hanja: Dismissed")
             },
             onClickOutside: { [weak self] in
