@@ -681,7 +681,7 @@ public class HangulComposer: @unchecked Sendable {
         // so firstRect() returns garbage values if called after commitComposition().
         // While preedit is active, the cursor is at the marked text position → valid
         // coordinates. The strategy chain lives in CursorRectResolver.
-        let cursorRect = CursorRectResolver.resolve(client: PriTypeInputController.sharedController?.client())
+        let cursorRect = CursorRectResolver.resolve(client: PriTypeInputController.sharedController?.currentClient)
 
         // Commit preedit AFTER capturing cursor position
         if hadPreedit {
@@ -692,7 +692,7 @@ public class HangulComposer: @unchecked Sendable {
         // Use ObjectIdentifier instead of weak reference: if the weak ref is deallocated,
         // validation would be skipped and hanja could be inserted into a wrong client.
         let snapshotClientID: ObjectIdentifier? = {
-            if let client = PriTypeInputController.sharedController?.client() as? IMKTextInput {
+            if let client = PriTypeInputController.sharedController?.currentClient {
                 return ObjectIdentifier(client as AnyObject)
             }
             return nil
@@ -705,8 +705,7 @@ public class HangulComposer: @unchecked Sendable {
                 guard let self = self else { return }
                 
                 // Validate: Ensure the client hasn't changed since the candidate window was shown
-                if let controller = PriTypeInputController.sharedController,
-                   let client = controller.client() {
+                if let client = PriTypeInputController.sharedController?.currentClient {
                     
                     // Safety check: if the client object changed (focus switched), dismiss silently
                     guard let originalID = snapshotClientID,

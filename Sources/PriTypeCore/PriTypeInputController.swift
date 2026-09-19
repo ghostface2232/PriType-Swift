@@ -110,6 +110,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// Session-derived views for collaborators (Hanja lookup in `HangulComposer`).
     public var currentAdapter: (any HangulComposerDelegate)? { session?.adapter }
     public var cachedContext: ClientContext? { session?.context }
+    /// The client this controller is typing into: the `sender` IMK passed with
+    /// the session's keys. The Hanja lookup reads and replaces text through it,
+    /// the same client every other edit goes to.
+    public var currentClient: IMKTextInput? { session?.client }
 
     #if DEBUG
     private var debugHandleLogCount = 0
