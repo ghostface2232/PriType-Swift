@@ -323,12 +323,12 @@ Swift Testing 기반, 377개 테스트와 57개 Suite(2026-09-19 기준). Comman
 | 스크립트 | 하는 일 |
 |---|---|
 | `install.sh` | 릴리스 빌드, 앱 번들 조립, 서명(지정한 인증서 → Apple Development → 자체 서명 `PriTypeDev` → ad-hoc), `~/Library/Input Methods`에 설치 |
-| `build_release.sh` | 릴리스 빌드, Developer ID 서명, `/Library/Input Methods`에 설치하는 pkg 생성, 공증과 스테이플. 결과는 `PriTypeV2_Release.pkg` |
+| `build_release.sh` | 릴리스 빌드, 서명(`APP_SIGN_IDENTITY`, 기본 ad-hoc), `/Library/Input Methods`에 설치하는 pkg 생성. Developer ID 인증서와 `KEYCHAIN_PROFILE`을 주면 pkg 서명과 공증까지 한다. 결과는 `PriTypeV2_Release.pkg` |
 | `build_debug.sh` | 같은 흐름의 디버그 빌드 pkg |
 | `distribute.sh` | 서명한 앱을 zip으로 묶고 선택적으로 공증 |
 | `Packaging/scripts/` | pkg의 `preinstall`(이전 버전 제거), `postinstall`(입력 관련 프로세스 재시작, 새 설치면 입력 소스 설정 열기) |
 
-CI(`.github/workflows/ci.yml`)는 push와 PR마다 빌드, `swift test`, `PriTypeVerify`, SwiftLint(`--strict`)를 돌린다. `release.yml`은 `v*` 태그에서 태그와 Info.plist 버전·채널이 맞는지 확인하고, 서명 전용 러너에서 `build_release.sh`로 pkg를 만들어 GitHub 릴리스에 올린다.
+CI(`.github/workflows/ci.yml`)는 push와 PR마다 빌드, `swift test`, `PriTypeVerify`, SwiftLint(`--strict`)를 돌린다. `release.yml`은 `v*` 태그에서 태그와 Info.plist 버전·채널이 맞는지 확인하고, GitHub의 `xcode-27` VM(Xcode 27, macOS 27 SDK)에서 테스트를 돌린 뒤 `build_release.sh`로 pkg를 만들어 GitHub 릴리스에 올린다. `-`가 붙은 태그는 pre-release로 올라가 업데이트 확인에서 빠진다.
 
 ## 디렉터리 구조
 

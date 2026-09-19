@@ -1,22 +1,30 @@
 # Release runner security
 
-PriType의 pull request와 서명 릴리즈는 서로 다른 신뢰 경계에서 실행한다.
+PriType의 CI와 릴리스는 모두 GitHub-hosted macOS VM에서 실행한다. job마다 새 VM이 뜨고 끝나면 버려지므로, 이전 job이 남긴 파일이나 키체인이 다음 job에 남지 않는다.
 
-- `.github/workflows/ci.yml`은 GitHub-hosted `macos-15` VM과 그 image에 설치된 Xcode 26.3만 사용한다. PR이 수정한 테스트·검증 코드는 영속 호스트에서 실행되지 않는다.
-- `.github/workflows/release.yml`은 `self-hosted`, `macOS`, `pritype-signing` label을 모두 가진 전용 runner에서만 실행된다. 일치하는 runner가 없으면 release job은 대기하며 일반 self-hosted runner로 fallback하지 않는다.
+- `.github/workflows/ci.yml`은 push와 PR마다 `macos-15` VM에서 빌드, 테스트, SwiftLint를 돌린다. 시크릿을 쓰지 않는다.
+- `.github/workflows/release.yml`은 `v*` 태그 push에서만 `xcode-27` VM(Xcode 27, macOS 27 SDK)으로 실행한다. 앱이 어떤 AppKit 디자인과 동작을 받는지는 빌드한 SDK 버전이 정하므로, 로컬 빌드와 같은 SDK를 쓴다. GitHub가 이 이미지를 아직 베타로 표시하므로 macOS 27 정식 라벨이 생기면 옮긴다. 포크에서 온 PR은 이 workflow를 실행할 수 없고 저장소 시크릿도 받지 못한다.
 
-## 전용 signing runner 설정
+## 서명
 
-1. PR·일반 개발 작업에 사용하지 않는 별도 macOS runner 또는 매 릴리즈마다 초기화할 수 있는 VM을 준비한다.
-2. GitHub의 `Settings > Actions > Runners`에서 해당 runner에만 `pritype-signing` custom label을 부여한다.
-3. 조직 runner라면 전용 runner group을 만들고 이 저장소와 release workflow만 접근하도록 제한한다.
-4. 다른 workflow에서 bare `runs-on: self-hosted`를 사용하지 않는다. 그런 job도 label이 더 많은 signing runner에 배정될 수 있다.
-5. 릴리즈 후 임시 keychain, P12, notary credential이 제거됐는지 확인하고 runner image를 정기적으로 재생성한다.
+Apple 개발자 계정이 없으므로 기본은 ad-hoc 서명이고, PKG는 서명·공증하지 않는다.
 
-GitHub는 public repository의 fork pull request가 self-hosted runner에서 위험한 코드를 실행할 수 있고, self-hosted runner는 매 job마다 깨끗한 VM이라는 보장이 없다고 설명한다. 자세한 운영 기준은 [Secure use reference](https://docs.github.com/en/actions/reference/security/secure-use)와 [self-hosted runner label 문서](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/use-in-a-workflow)를 따른다.
+ad-hoc 서명의 designated requirement는 바이너리 해시(`cdhash`)라서 빌드마다 바뀐다. macOS는 손쉬운 사용·입력 모니터링 허용을 이 요구 조건에 묶으므로, 업데이트할 때마다 사용자가 권한을 다시 허용해야 한다. 시스템 설정에는 켜진 것처럼 보이는데 동작하지 않는 경우가 많아, 사용자는 항목을 지우고 다시 추가해야 한다.
+
+고정 인증서로 서명하면 요구 조건이 `certificate leaf = H"…"`가 되어 업데이트 뒤에도 권한이 유지된다. 자체 서명 인증서면 충분하다. 저장소 `Settings > Secrets and variables > Actions`에 다음을 넣으면 release job이 임시 키체인에 가져와 서명한다.
+
+| 시크릿 | 내용 |
+|---|---|
+| `RELEASE_SIGNING_P12` | 인증서와 개인 키를 내보낸 `.p12`의 base64 (`base64 -i cert.p12 \| pbcopy`) |
+| `RELEASE_SIGNING_P12_PASSWORD` | `.p12` 비밀번호 |
+| `RELEASE_SIGNING_IDENTITY` | 인증서 이름 (예: `PriTypeDev`) |
+
+인증서를 바꾸면 요구 조건이 바뀌어 그 업데이트에서 한 번 권한을 다시 받아야 한다. 인증서는 한 번 정하면 유지한다.
 
 ## 변경 후 확인
 
-- PR의 `Build and Test`, `SwiftLint` job runner가 GitHub-hosted `macos-15`로 표시되는지 확인한다.
-- release job이 `pritype-signing` label 없는 runner에서는 시작되지 않는지 확인한다.
-- signing runner의 작업 목록에 pull request event가 한 번도 나타나지 않는지 확인한다.
+- 태그를 붙이기 전에 Actions 탭에서 Release workflow를 수동 실행(`Run workflow`)하면 빌드와 패키징만 하고 릴리스는 만들지 않는다. PKG는 7일간 workflow artifact로 남는다.
+
+- release job이 GitHub-hosted `xcode-27`로 표시되는지 확인한다.
+- job 로그의 `designated =>` 줄이 의도한 서명(ad-hoc이면 `cdhash`, 인증서면 `certificate leaf`)인지 확인한다.
+- 시크릿을 넣었다면 Cleanup 단계가 임시 키체인을 지웠는지 확인한다.
