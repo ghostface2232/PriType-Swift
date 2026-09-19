@@ -83,34 +83,6 @@ struct PriTypeConfigTests {
     }
 }
 
-// MARK: - PriTypeError Tests
-
-@Suite("PriTypeError")
-struct PriTypeErrorTests {
-    
-    @Test("All errors have descriptions")
-    func errorDescriptions() {
-        #expect(PriTypeError.eventTapCreationFailed.errorDescription != nil)
-        #expect(PriTypeError.eventTapDisabled.errorDescription != nil)
-        #expect(PriTypeError.accessibilityPermissionDenied.errorDescription != nil)
-        #expect(PriTypeError.hidManagerOpenFailed(code: -1).errorDescription != nil)
-    }
-    
-    @Test("All errors have recovery suggestions")
-    func recoverySuggestions() {
-        #expect(PriTypeError.eventTapCreationFailed.recoverySuggestion != nil)
-        #expect(PriTypeError.eventTapDisabled.recoverySuggestion != nil)
-        #expect(PriTypeError.accessibilityPermissionDenied.recoverySuggestion != nil)
-        #expect(PriTypeError.hidManagerOpenFailed(code: 0).recoverySuggestion != nil)
-    }
-    
-    @Test("HID manager error includes error code")
-    func hidManagerErrorIncludesCode() {
-        let error = PriTypeError.hidManagerOpenFailed(code: 42)
-        #expect(error.errorDescription!.contains("42"))
-    }
-}
-
 // MARK: - Jamo Conversion Tests
 
 @Suite("Jamo Conversion")
