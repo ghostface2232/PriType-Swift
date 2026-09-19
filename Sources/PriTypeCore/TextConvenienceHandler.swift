@@ -47,9 +47,8 @@ public final class TextConvenienceHandler: @unchecked Sendable {
     /// - Parameters:
     ///   - buffer: The local text buffer to query and modify
     ///   - delegate: The delegate to modify text
-    ///   - checkHangul: If true, also checks for Hangul characters before space
     /// - Returns: Result indicating whether period conversion occurred
-    public func handleDoubleSpacePeriod(buffer: inout String, delegate: HangulComposerDelegate, checkHangul: Bool = false) -> DoubleSpaceResult {
+    public func handleDoubleSpacePeriod(buffer: inout String, delegate: HangulComposerDelegate) -> DoubleSpaceResult {
         let now = ProcessInfo.processInfo.systemUptime
         let isDoubleTap = (now - lastSpaceTime) < PriTypeConfig.doubleSpaceThreshold
         lastSpaceTime = now
@@ -60,8 +59,8 @@ public final class TextConvenienceHandler: @unchecked Sendable {
             if buffer.hasSuffix(" ") {
                 let preSpaceChar = buffer.dropLast().last
                 if let lastChar = preSpaceChar {
-                    let isValidChar = lastChar.isLetter || lastChar.isNumber || (checkHangul && isHangul(lastChar))
-                    if isValidChar {
+                    // Hangul syllables and jamo are letters (Unicode Lo).
+                    if lastChar.isLetter || lastChar.isNumber {
                         // Valid double-space condition - replace space with period
                         delegate.replaceTextBeforeCursor(length: 1, with: ". ")
                         buffer.removeLast()
@@ -82,19 +81,5 @@ public final class TextConvenienceHandler: @unchecked Sendable {
     /// Reset the space state (call when non-space character is typed)
     public func resetSpaceState() {
         lastWasSpace = false
-    }
-
-    // MARK: - Helpers
-    
-    /// Checks if a character is a Hangul syllable or Jamo
-    public func isHangul(_ char: Character) -> Bool {
-        guard let scalar = char.unicodeScalars.first else { return false }
-        let val = scalar.value
-        // Hangul Syllables: AC00-D7A3
-        // Hangul Compatibility Jamo: 3130-318F
-        // Hangul Jamo: 1100-11FF
-        return (val >= 0xAC00 && val <= 0xD7A3) ||
-               (val >= 0x3130 && val <= 0x318F) ||
-               (val >= 0x1100 && val <= 0x11FF)
     }
 }

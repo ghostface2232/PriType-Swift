@@ -554,17 +554,12 @@ func verifyTextConvenienceHandler() {
     let handler = TextConvenienceHandler()
     let delegate = MockDelegate()
     
-    // Test 1: isHangul for syllables
-    assert(handler.isHangul("한") == true, "FAIL: 한 should be Hangul")
-    assert(handler.isHangul("A") == false, "FAIL: A should not be Hangul")
-    print("PASS: isHangul works correctly")
-    
-    // Test 2: Double-space period (basic check)
+    // Double-space period (basic check)
     handler.resetSpaceState()
     var buffer = "Hello "
-    _ = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate, checkHangul: false)
+    _ = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate)
     // First space recorded
-    let result = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate, checkHangul: false)
+    let result = handler.handleDoubleSpacePeriod(buffer: &buffer, delegate: delegate)
     // Second space should convert to period
     if result == .convertedToPeriod {
         print("PASS: Double-space converts to period")

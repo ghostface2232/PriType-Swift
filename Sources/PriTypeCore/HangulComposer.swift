@@ -194,7 +194,7 @@ public class HangulComposer: @unchecked Sendable {
                 return false
             }
             commitComposition(delegate: delegate)
-            let result = textConvenience.handleDoubleSpacePeriod(buffer: &localTextBuffer, delegate: delegate, checkHangul: true)
+            let result = textConvenience.handleDoubleSpacePeriod(buffer: &localTextBuffer, delegate: delegate)
             if result == .convertedToPeriod {
                 DebugLogger.log("Double-space -> period (Korean mode)")
                 return true
