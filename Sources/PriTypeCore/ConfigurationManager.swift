@@ -355,7 +355,11 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     // a preferences lookup (~0.2–0.5µs, and a lock inside cfprefs).
     private let capsLockSwitch = PolledPreference(read: ConfigurationManager.readCapsLockSwitch)
     private let doubleSpacePeriod = PolledPreference {
-        UserDefaults.standard.object(forKey: "NSAutomaticPeriodSubstitutionEnabled") as? Bool ?? true
+        // Absent means on (the macOS default). bool(forKey:) also accepts a
+        // value stored as a "YES"/"NO" string.
+        let defaults = UserDefaults.standard
+        let key = "NSAutomaticPeriodSubstitutionEnabled"
+        return defaults.object(forKey: key) == nil || defaults.bool(forKey: key)
     }
     private let directInsertion = PolledPreference {
         UserDefaults.standard.bool(forKey: Keys.experimentalDirectInsertion)
