@@ -19,8 +19,10 @@ public final class TextConvenienceHandler: @unchecked Sendable {
     /// Track if last character was a space (for double-space detection)
     private var lastWasSpace: Bool = false
     
-    /// Timestamp of the last space key press (for double-space timing check)
-    private var lastSpaceTime: CFAbsoluteTime = 0
+    /// Uptime of the last space key press (for double-space timing check).
+    /// Uptime, not wall-clock time: a clock correction between two spaces must
+    /// not make them look 0.45s apart, or together.
+    private var lastSpaceTime: TimeInterval = -.infinity
     
     public init(
         isDoubleSpacePeriodEnabled: @escaping @Sendable () -> Bool = {
@@ -48,7 +50,7 @@ public final class TextConvenienceHandler: @unchecked Sendable {
     ///   - checkHangul: If true, also checks for Hangul characters before space
     /// - Returns: Result indicating whether period conversion occurred
     public func handleDoubleSpacePeriod(buffer: inout String, delegate: HangulComposerDelegate, checkHangul: Bool = false) -> DoubleSpaceResult {
-        let now = CFAbsoluteTimeGetCurrent()
+        let now = ProcessInfo.processInfo.systemUptime
         let isDoubleTap = (now - lastSpaceTime) < PriTypeConfig.doubleSpaceThreshold
         lastSpaceTime = now
         
