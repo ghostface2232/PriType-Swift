@@ -88,7 +88,7 @@ swift build
 ./build_release.sh
 
 # 고정 인증서로 서명 (손쉬운 사용·입력 모니터링 권한이 업데이트 뒤에도 유지됨)
-APP_SIGN_IDENTITY=PriTypeDev ./build_release.sh
+APP_SIGN_IDENTITY="PriType Release" ./build_release.sh
 ```
 
 ## 문제 해결

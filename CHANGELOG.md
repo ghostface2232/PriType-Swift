@@ -7,11 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.8.0] - 미출시 (Stable 예정)
+## [2.8.0] - 2026-09-20 (Stable)
 
 ### 배포
 - 이 버전부터 [ghostface2232/PriType-Swift](https://github.com/ghostface2232/PriType-Swift) 포크에서 배포합니다. 업데이트 확인과 설정의 "최신 릴리스" 링크가 포크의 GitHub Releases를 봅니다. 원본 저장소의 릴리스는 더 이상 알리지 않습니다.
-- 릴리스 PKG를 GitHub의 macOS VM(Xcode 27)에서 빌드합니다. Apple 개발자 계정 없이 배포하므로 앱은 ad-hoc으로 서명하고 PKG는 서명·공증하지 않습니다. 처음 설치할 때 `시스템 설정 > 개인정보 보호 및 보안`에서 한 번 허용해야 합니다. 저장소 시크릿에 고정 인증서(자체 서명도 가능)를 넣으면 그 인증서로 서명해, 업데이트 뒤에도 손쉬운 사용·입력 모니터링 권한이 유지됩니다. 서명 전용 self-hosted 러너는 더 쓰지 않습니다.
+- 릴리스 PKG를 GitHub의 macOS VM(Xcode 27)에서 빌드합니다. Apple 개발자 계정 없이 배포하므로 PKG는 서명·공증하지 않으며, 처음 설치할 때 `시스템 설정 > 개인정보 보호 및 보안`에서 한 번 허용해야 합니다. 앱은 릴리스 전용 자체 서명 인증서 `PriType Release`로 서명해, 업데이트 뒤에도 손쉬운 사용·입력 모니터링 권한이 유지됩니다. 이전 버전에서 올라올 때는 서명이 바뀌므로 권한을 한 번 다시 허용해야 합니다. 서명 전용 self-hosted 러너는 더 쓰지 않습니다.
 - `build_release.sh`는 키체인에서 Developer ID를 찾지 않고 `APP_SIGN_IDENTITY`·`PKG_SIGN_IDENTITY`·`KEYCHAIN_PROFILE`로 서명과 공증을 정합니다. 셋 다 주면 이전처럼 Developer ID 서명과 공증을 합니다.
 - 버전을 `2.8.0`, 빌드를 `51`로 올렸습니다. 원본 v2.7.4(빌드 50, 커밋 `45b68fb`) 이후의 변경입니다.
 

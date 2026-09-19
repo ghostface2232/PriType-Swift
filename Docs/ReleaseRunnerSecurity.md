@@ -11,13 +11,13 @@ Apple 개발자 계정이 없으므로 기본은 ad-hoc 서명이고, PKG는 서
 
 ad-hoc 서명의 designated requirement는 바이너리 해시(`cdhash`)라서 빌드마다 바뀐다. macOS는 손쉬운 사용·입력 모니터링 허용을 이 요구 조건에 묶으므로, 업데이트할 때마다 사용자가 권한을 다시 허용해야 한다. 시스템 설정에는 켜진 것처럼 보이는데 동작하지 않는 경우가 많아, 사용자는 항목을 지우고 다시 추가해야 한다.
 
-고정 인증서로 서명하면 요구 조건이 `certificate leaf = H"…"`가 되어 업데이트 뒤에도 권한이 유지된다. 자체 서명 인증서면 충분하다. 저장소 `Settings > Secrets and variables > Actions`에 다음을 넣으면 release job이 임시 키체인에 가져와 서명한다.
+고정 인증서로 서명하면 요구 조건이 인증서 해시(자체 서명이면 `certificate root = H"…"`)가 되어, 같은 인증서를 쓰는 동안 업데이트 뒤에도 권한이 유지된다. 자체 서명 인증서면 충분하다. 릴리스는 전용 자체 서명 인증서 `PriType Release`로 서명한다. 인증서와 비밀번호는 저장소 밖에 보관한다. 저장소 `Settings > Secrets and variables > Actions`에 다음을 넣으면 release job이 임시 키체인에 가져와 서명한다.
 
 | 시크릿 | 내용 |
 |---|---|
 | `RELEASE_SIGNING_P12` | 인증서와 개인 키를 내보낸 `.p12`의 base64 (`base64 -i cert.p12 \| pbcopy`) |
 | `RELEASE_SIGNING_P12_PASSWORD` | `.p12` 비밀번호 |
-| `RELEASE_SIGNING_IDENTITY` | 인증서 이름 (예: `PriTypeDev`) |
+| `RELEASE_SIGNING_IDENTITY` | 인증서 이름 (`PriType Release`) |
 
 인증서를 바꾸면 요구 조건이 바뀌어 그 업데이트에서 한 번 권한을 다시 받아야 한다. 인증서는 한 번 정하면 유지한다.
 
@@ -26,5 +26,5 @@ ad-hoc 서명의 designated requirement는 바이너리 해시(`cdhash`)라서 �
 - 태그를 붙이기 전에 Actions 탭에서 Release workflow를 수동 실행(`Run workflow`)하면 빌드와 패키징만 하고 릴리스는 만들지 않는다. PKG는 7일간 workflow artifact로 남는다.
 
 - release job이 GitHub-hosted `xcode-27`로 표시되는지 확인한다.
-- job 로그의 `designated =>` 줄이 의도한 서명(ad-hoc이면 `cdhash`, 인증서면 `certificate leaf`)인지 확인한다.
+- job 로그의 `designated =>` 줄이 의도한 서명(ad-hoc이면 `cdhash`, 인증서면 `certificate root`)인지 확인한다.
 - 시크릿을 넣었다면 Cleanup 단계가 임시 키체인을 지웠는지 확인한다.
