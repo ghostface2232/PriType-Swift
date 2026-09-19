@@ -72,7 +72,10 @@ jobs:
         security import $RUNNER_TEMP/dev_installer.p12 -P "$P12_PASSWORD" \
           -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
         
-        security list-keychain -d user -s "$KEYCHAIN_PATH"
+        # The runner is persistent: remember the user's search list so Cleanup
+        # can put it back instead of leaving only a deleted keychain in it.
+        security list-keychains -d user > "$RUNNER_TEMP/keychain-search-list"
+        security list-keychains -d user -s "$KEYCHAIN_PATH"
         
         # Allow codesign to access the keychain
         security set-key-partition-list -S apple-tool:,apple:,codesign: \
@@ -96,11 +99,19 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         name: "PriType ${{ steps.version.outputs.VERSION }}"
+        # A suffixed tag (v2.8.0-beta.1) is a beta: flagging it keeps it off
+        # /releases/latest, which the settings window links stable users to.
+        prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
         generate_release_notes: true
         files: PriTypeV2_Release.pkg
     
     - name: Cleanup
       if: always()
       run: |
+        if [ -s "$RUNNER_TEMP/keychain-search-list" ]; then
+          # One quoted path per line; xargs unquotes them.
+          xargs security list-keychains -d user -s < "$RUNNER_TEMP/keychain-search-list" || true
+          rm -f "$RUNNER_TEMP/keychain-search-list"
+        fi
         security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
         rm -f $RUNNER_TEMP/dev_app.p12 $RUNNER_TEMP/dev_installer.p12

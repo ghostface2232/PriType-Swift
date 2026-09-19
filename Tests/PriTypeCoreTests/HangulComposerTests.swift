@@ -279,6 +279,29 @@ struct HangulComposerTests {
         #expect(delegate.markedText.isEmpty, "Marked text must be cleared after commit")
     }
 
+    @Test("Moving the caret or running a shortcut empties the Hanja buffer, in either mode")
+    func caretMovesAndShortcutsClearBuffer() {
+        // The buffer stands for the text before the caret. After any of these the
+        // caret may be elsewhere (or the text changed), so a Hanja lookup must not
+        // convert what was typed before them.
+        let keys: [(String, NSEvent)] = [
+            ("←", TestEventFactory.keyEvent(char: "\u{F702}", keyCode: KeyCode.leftArrow)!),
+            ("Tab", TestEventFactory.keyEvent(char: "\t", keyCode: KeyCode.tab)!),
+            ("Return", TestEventFactory.keyEvent(char: "\r", keyCode: KeyCode.`return`)!),
+            ("Home (Fn+←)", TestEventFactory.keyEvent(char: "\u{F729}", keyCode: 115)!),
+            ("⌘V", TestEventFactory.keyEvent(char: "v", keyCode: 9, modifiers: [.command])!)
+        ]
+        for mode in [InputMode.korean, .english] {
+            for (name, event) in keys {
+                let (composer, delegate) = makeComposer()
+                composer.setInputMode(mode)
+                composer.localTextBuffer = "한국"
+                _ = composer.handle(event, delegate: delegate)
+                #expect(composer.localTextBuffer.isEmpty, "\(name) in \(mode) mode left '\(composer.localTextBuffer)'")
+            }
+        }
+    }
+
     @Test("setInputMode clears the local text buffer")
     func setInputModeClearsLocalBuffer() {
         let (composer, _) = makeComposer()
@@ -339,8 +362,11 @@ struct HangulComposerTests {
         #expect(delegate.markedText.isEmpty)
     }
 
-    @Test("Return key uses GoodNotes compatibility newline")
-    func returnKeyGoodNotesCompatibility() {
+    @Test("GoodNotes gets the ordinary Return: commit, then its own key")
+    func returnKeyGoodNotesUsesOrdinaryPath() {
+        // GoodNotes 7 ignores a newline inserted by the input method, so the old
+        // "insert \n and consume Return" workaround needed two presses. Measured
+        // on 7.1.22: the ordinary path gives exactly one line break.
         let (composer, delegate) = makeComposer()
         composer.markKeystroke(bundleId: "com.goodnotesapp.x")
         _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
@@ -349,9 +375,8 @@ struct HangulComposerTests {
         let returnEvent = TestEventFactory.keyEvent(char: "\r", keyCode: KeyCode.`return`)!
         let handled = composer.handle(returnEvent, delegate: delegate)
 
-        #expect(handled, "GoodNotes compatibility should consume Return after direct newline insertion")
-        #expect(delegate.insertedTexts.contains("가"))
-        #expect(delegate.insertedTexts.filter { $0 == "\n" }.count == 1)
+        #expect(!handled, "GoodNotes must receive the Return key itself")
+        #expect(delegate.insertedTexts == ["가"])
         #expect(delegate.markedText.isEmpty)
     }
 

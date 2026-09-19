@@ -348,12 +348,22 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     // MARK: - Private Properties
     
     private let defaults = UserDefaults.standard
-    private let systemTextFeatureLock = NSLock()
-    private var lastSystemTextRefresh: TimeInterval = 0
-    private var cachedDoubleSpacePeriodEnabled: Bool = ConfigurationManager.readSystemTextFeature(
-        key: SystemTextInputKeys.automaticPeriodSubstitution,
-        defaultValue: true
-    )
+
+    // Values other processes write (System Settings, `defaults write`). The event
+    // tap reads the Caps Lock switch on every keystroke on the system, and the
+    // keystroke path reads the direct-insertion flag; each read would otherwise be
+    // a preferences lookup (~0.2–0.5µs, and a lock inside cfprefs).
+    private let capsLockSwitch = PolledPreference(read: ConfigurationManager.readCapsLockSwitch)
+    private let doubleSpacePeriod = PolledPreference {
+        // Absent means on (the macOS default). bool(forKey:) also accepts a
+        // value stored as a "YES"/"NO" string.
+        let defaults = UserDefaults.standard
+        let key = "NSAutomaticPeriodSubstitutionEnabled"
+        return defaults.object(forKey: key) == nil || defaults.bool(forKey: key)
+    }
+    private let directInsertion = PolledPreference {
+        UserDefaults.standard.bool(forKey: Keys.experimentalDirectInsertion)
+    }
     
     private init() {
         defaults.removeObject(forKey: "com.pritype.autoCapitalize")
@@ -372,10 +382,6 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         static let autoUpdateCheck = "com.pritype.autoUpdateCheck"
         static let experimentalDirectInsertion = "com.pritype.experimentalDirectInsertion"
         static let toggleExcludedBundleIDs = "com.pritype.toggleExcludedBundleIDs"
-    }
-
-    private enum SystemTextInputKeys {
-        static let automaticPeriodSubstitution = "NSAutomaticPeriodSubstitutionEnabled"
     }
 
     // MARK: - Toggle Key (Legacy)
@@ -644,47 +650,21 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     ///
     /// When this is enabled, PriType should not also run its own language
     /// toggle key. The system input-source switch becomes the single owner.
-    public var capsLockInputSourceSwitchEnabled: Bool {
-        if let value = CFPreferencesCopyValue(
+    public var capsLockInputSourceSwitchEnabled: Bool { capsLockSwitch.value }
+
+    private static func readCapsLockSwitch() -> Bool {
+        let value = CFPreferencesCopyValue(
             "TISRomanSwitchState" as CFString,
             kCFPreferencesAnyApplication,
             kCFPreferencesCurrentUser,
             kCFPreferencesAnyHost
-        ) {
-            if let number = value as? NSNumber {
-                return number.intValue != 0
-            }
-            if let bool = value as? Bool {
-                return bool
-            }
-        }
-
-        return UserDefaults.standard.object(forKey: "TISRomanSwitchState") != nil
-            && UserDefaults.standard.integer(forKey: "TISRomanSwitchState") != 0
-    }
-    
-    // MARK: - Text Input Features
-    
-    private func refreshSystemTextFeaturesIfNeeded() {
-        systemTextFeatureLock.withLock {
-            let now = ProcessInfo.processInfo.systemUptime
-            guard now - lastSystemTextRefresh >= 2 else { return }
-            lastSystemTextRefresh = now
-            cachedDoubleSpacePeriodEnabled = Self.readSystemTextFeature(key: SystemTextInputKeys.automaticPeriodSubstitution, defaultValue: true)
-        }
+        )
+        return (value as? NSNumber)?.boolValue
+            ?? (UserDefaults.standard.integer(forKey: "TISRomanSwitchState") != 0)
     }
 
     /// Mirrors macOS "Add period with double-space" for PriType Korean input.
-    public var doubleSpacePeriodEnabled: Bool {
-        refreshSystemTextFeaturesIfNeeded()
-        return systemTextFeatureLock.withLock { cachedDoubleSpacePeriodEnabled }
-    }
-
-    private static func readSystemTextFeature(key: String, defaultValue: Bool) -> Bool {
-        return UserDefaults.standard.object(forKey: key) == nil
-            ? defaultValue
-            : UserDefaults.standard.bool(forKey: key)
-    }
+    public var doubleSpacePeriodEnabled: Bool { doubleSpacePeriod.value }
 
     /// Experimental Windows-style direct insertion (Phase 3). Default OFF.
     /// When ON, the in-progress syllable is delivered as REAL text instead of marked
@@ -693,8 +673,11 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     /// vehicle — see Docs/KoreanWindowsInputFeasibility.md. Enable via Settings or:
     ///   defaults write com.pritype.inputmethod.v2 com.pritype.experimentalDirectInsertion -bool YES
     public var experimentalDirectInsertion: Bool {
-        get { defaults.bool(forKey: Keys.experimentalDirectInsertion) }
-        set { defaults.set(newValue, forKey: Keys.experimentalDirectInsertion) }
+        get { directInsertion.value }
+        set {
+            defaults.set(newValue, forKey: Keys.experimentalDirectInsertion)
+            directInsertion.invalidate()
+        }
     }
 
     // MARK: - Update Settings
@@ -722,5 +705,41 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
         set {
             defaults.set(newValue, forKey: Keys.autoUpdateCheck)
         }
+    }
+}
+
+// MARK: - PolledPreference
+
+/// A preference owned by another process, re-read at most once per `interval`.
+///
+/// There is no reliable change notification for these keys, and a second of
+/// staleness after flipping a switch in System Settings is invisible, while a
+/// preferences lookup on every keystroke is not free.
+final class PolledPreference: @unchecked Sendable {
+    private let lock = NSLock()
+    private let read: @Sendable () -> Bool
+    private let interval: TimeInterval
+    private var cached = false
+    private var readAt = -TimeInterval.infinity
+
+    init(interval: TimeInterval = 1, read: @escaping @Sendable () -> Bool) {
+        self.interval = interval
+        self.read = read
+    }
+
+    var value: Bool {
+        lock.withLock {
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - readAt >= interval {
+                cached = read()
+                readAt = now
+            }
+            return cached
+        }
+    }
+
+    /// Re-read on the next access (after this process wrote the value itself).
+    func invalidate() {
+        lock.withLock { readAt = -.infinity }
     }
 }

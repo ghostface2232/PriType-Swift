@@ -23,6 +23,19 @@ struct ABCRemovalVerificationTests {
         #expect(waits == 30)
     }
 
+    @Test("Slow probes stop at the deadline instead of running all fifteen retries")
+    func deadlineBoundsSlowProbes() async throws {
+        var checks = 0
+        let confirmed = try await ABCRemovalVerification.confirm(
+            result: .removed,
+            isDisabled: { checks += 1; return false },
+            wait: {},
+            deadline: .now
+        )
+        #expect(!confirmed)
+        #expect(checks == 1)
+    }
+
     @Test("A retry succeeds only after the live state catches up")
     func delayedRetrySuccess() async throws {
         var samples = [false, false, true]

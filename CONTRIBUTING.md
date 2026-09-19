@@ -18,7 +18,7 @@ swift build
 
 ### Running Tests
 ```bash
-swift run PriTypeVerify
+swift test
 ```
 
 ## Code Style
@@ -36,7 +36,7 @@ swift run PriTypeVerify
 ## Pull Request Process
 
 1. **Fork** the repository and create your branch from `main`
-2. **Test** your changes with `swift run PriTypeVerify`
+2. **Test** your changes with `swift test`
 3. **Update** documentation if you're changing public APIs
 4. **Update** CHANGELOG.md under `[Unreleased]` section
 5. **Submit** your PR with a clear description

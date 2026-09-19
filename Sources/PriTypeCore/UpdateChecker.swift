@@ -32,10 +32,6 @@ public final class UpdateChecker: @unchecked Sendable {
         public let version: String
         /// URL to the GitHub Releases page
         public let releasePageURL: URL
-        /// Release notes / changelog body
-        public let releaseNotes: String?
-        /// Direct download URL for the PKG asset (if available)
-        public let downloadURL: URL?
     }
     
     /// Result of an update check
@@ -52,33 +48,19 @@ public final class UpdateChecker: @unchecked Sendable {
     
     // MARK: - GitHub API Response Models
     
-    struct GitHubRelease: Codable, Sendable {
+    struct GitHubRelease: Decodable, Sendable {
         let tagName: String
         let htmlUrl: String
         let name: String?
-        let body: String?
         let draft: Bool
         let prerelease: Bool
-        let assets: [GitHubAsset]
-        
+
         enum CodingKeys: String, CodingKey {
             case tagName = "tag_name"
             case htmlUrl = "html_url"
             case name
-            case body
             case draft
             case prerelease
-            case assets
-        }
-    }
-    
-    struct GitHubAsset: Codable, Sendable {
-        let name: String
-        let browserDownloadUrl: String
-        
-        enum CodingKeys: String, CodingKey {
-            case name
-            case browserDownloadUrl = "browser_download_url"
         }
     }
     
@@ -166,15 +148,10 @@ public final class UpdateChecker: @unchecked Sendable {
             // Record successful check time
             ConfigurationManager.shared.lastUpdateCheck = Date()
             
-            if Self.isNewer(latestVersion, than: currentVersion) {
-                // Find PKG asset download URL
-                let pkgAsset = release.assets.first { $0.name.hasSuffix(".pkg") }
-                
+            if Self.offersUpdate(latest: latestVersion, current: currentVersion, channel: AboutInfo.releaseChannel) {
                 let updateInfo = UpdateInfo(
                     version: latestVersion,
-                    releasePageURL: URL(string: release.htmlUrl) ?? url,
-                    releaseNotes: release.body,
-                    downloadURL: pkgAsset.flatMap { URL(string: $0.browserDownloadUrl) }
+                    releasePageURL: URL(string: release.htmlUrl) ?? url
                 )
                 
                 DebugLogger.log("UpdateChecker: Update available! \(latestVersion)")
@@ -230,6 +207,17 @@ public final class UpdateChecker: @unchecked Sendable {
             .max { lhs, rhs in
                 isNewer(normalizeVersion(rhs.tagName), than: normalizeVersion(lhs.tagName))
             }
+    }
+
+    /// Whether the latest stable release should be offered to this build.
+    ///
+    /// A beta carries its release's final version number: `v2.8.0-beta.1` ships
+    /// with CFBundleShortVersionString 2.8.0 (release.yml enforces it). So a
+    /// stable release of the same number is the build that beta led up to, and
+    /// is newer even though the numbers compare equal.
+    static func offersUpdate(latest: String, current: String, channel: ReleaseChannel) -> Bool {
+        if isNewer(latest, than: current) { return true }
+        return channel == .beta && !isNewer(current, than: latest)
     }
 
     /// Check if `latest` is strictly newer than `current`.

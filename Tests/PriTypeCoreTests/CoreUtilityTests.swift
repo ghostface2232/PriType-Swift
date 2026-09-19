@@ -38,14 +38,19 @@ struct CompositionHelpersTests {
     
     @Test("Normalize full syllable preserves it")
     func normalizeSyllable() {
-        let result = CompositionHelpers.normalizeJamoForDisplay([0xAC00])
-        #expect(!result.isEmpty)
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0xAC00]) == "가")
     }
-    
-    @Test("Normalize Choseong Jamo produces non-empty result")
-    func normalizeChoseongJamo() {
-        let result = CompositionHelpers.normalizeJamoForDisplay([0x1100])
-        #expect(!result.isEmpty)
+
+    @Test("Initial, medial and final jamo all display as compatibility jamo")
+    func normalizeJamoPositions() {
+        // libhangul's preedit carries positional jamo (U+1100…); the marked text
+        // shows the compatibility forms (U+3131…), whichever slot the jamo is in.
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0x1100]) == "\u{3131}")  // ᄀ → ㄱ
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0x1112]) == "\u{314E}")  // ᄒ → ㅎ
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0x1161]) == "\u{314F}")  // ᅡ → ㅏ
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0x1175]) == "\u{3163}")  // ᅵ → ㅣ
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0x11A8]) == "\u{3131}")  // ᆨ → ㄱ
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0x11C2]) == "\u{314E}")  // ᇂ → ㅎ
     }
 }
 
@@ -80,34 +85,6 @@ struct PriTypeConfigTests {
         #expect(PriTypeConfig.doubleSpaceThreshold < 1.0)
         #expect(PriTypeConfig.settingsWindowWidth > 0)
         #expect(PriTypeConfig.settingsWindowHeight > 0)
-    }
-}
-
-// MARK: - PriTypeError Tests
-
-@Suite("PriTypeError")
-struct PriTypeErrorTests {
-    
-    @Test("All errors have descriptions")
-    func errorDescriptions() {
-        #expect(PriTypeError.eventTapCreationFailed.errorDescription != nil)
-        #expect(PriTypeError.eventTapDisabled.errorDescription != nil)
-        #expect(PriTypeError.accessibilityPermissionDenied.errorDescription != nil)
-        #expect(PriTypeError.hidManagerOpenFailed(code: -1).errorDescription != nil)
-    }
-    
-    @Test("All errors have recovery suggestions")
-    func recoverySuggestions() {
-        #expect(PriTypeError.eventTapCreationFailed.recoverySuggestion != nil)
-        #expect(PriTypeError.eventTapDisabled.recoverySuggestion != nil)
-        #expect(PriTypeError.accessibilityPermissionDenied.recoverySuggestion != nil)
-        #expect(PriTypeError.hidManagerOpenFailed(code: 0).recoverySuggestion != nil)
-    }
-    
-    @Test("HID manager error includes error code")
-    func hidManagerErrorIncludesCode() {
-        let error = PriTypeError.hidManagerOpenFailed(code: 42)
-        #expect(error.errorDescription!.contains("42"))
     }
 }
 

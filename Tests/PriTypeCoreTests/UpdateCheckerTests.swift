@@ -7,6 +7,14 @@ import Foundation
 @Suite("UpdateChecker")
 struct UpdateCheckerTests {
     
+    @Test("A beta is offered the stable release of its own version, a stable build is not")
+    func betaIsOfferedItsStableRelease() {
+        #expect(UpdateChecker.offersUpdate(latest: "2.8.0", current: "2.8.0", channel: .beta))
+        #expect(!UpdateChecker.offersUpdate(latest: "2.8.0", current: "2.8.0", channel: .stable))
+        #expect(!UpdateChecker.offersUpdate(latest: "2.7.4", current: "2.8.0", channel: .beta))
+        #expect(UpdateChecker.offersUpdate(latest: "2.8.1", current: "2.8.0", channel: .stable))
+    }
+
     @Test("Version comparison: newer version detected")
     func newerVersionDetected() {
         #expect(UpdateChecker.isNewer("2.5.0", than: "2.4.2"))
@@ -116,8 +124,8 @@ struct UpdateCheckerTests {
         // component-wise comparison, so the first of the tie must win.
         func release(_ tag: String) -> UpdateChecker.GitHubRelease {
             UpdateChecker.GitHubRelease(
-                tagName: tag, htmlUrl: "https://example.invalid", name: tag, body: "",
-                draft: false, prerelease: false, assets: []
+                tagName: tag, htmlUrl: "https://example.invalid", name: tag,
+                draft: false, prerelease: false
             )
         }
         let newestFirst = [release("v2.7.0"), release("v2.7"), release("v2.6.5")]
@@ -203,10 +211,8 @@ struct UpdateCheckerTests {
             tagName: tagName,
             htmlUrl: "https://github.com/Meapri/PriType-Swift/releases/tag/\(tagName)",
             name: name,
-            body: nil,
             draft: draft,
-            prerelease: prerelease,
-            assets: []
+            prerelease: prerelease
         )
     }
 }

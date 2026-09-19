@@ -6,8 +6,8 @@ import Foundation
 ///
 /// ## Usage
 /// ```swift
-/// Text(L10n.settings.title)
-/// Text(L10n.toggle.rightCommand)
+/// Text(L10n.keyBinding.toggleKey)
+/// NSMenuItem(title: L10n.menu.settings, action: nil, keyEquivalent: "")
 /// ```
 public enum L10n {
     
@@ -33,27 +33,10 @@ public enum L10n {
     private static func localized(_ key: String) -> String {
         NSLocalizedString(key, bundle: bundle, comment: "")
     }
-    
-    // MARK: - Settings
-    
-    public enum settings {
-        public static var title: String { localized("settings.title") }
-        public static var footer: String { localized("settings.footer") }
-    }
-    
-    // MARK: - Toggle Key
-    
-    public enum toggle {
-        public static var title: String { localized("toggle.title") }
-        public static var rightCommand: String { localized("toggle.rightCmd") }
-        public static var controlSpace: String { localized("toggle.ctrlSpace") }
-        public static var description: String { localized("toggle.description") }
-    }
-    
+
     // MARK: - Key Binding
     
     public enum keyBinding {
-        public static var title: String { localized("keyBinding.title") }
         public static var toggleKey: String { localized("keyBinding.toggleKey") }
         public static var hanjaKey: String { localized("keyBinding.hanjaKey") }
         public static var toggleTrigger: String { localized("keyBinding.toggleTrigger") }
@@ -66,11 +49,8 @@ public enum L10n {
         public static var hanjaEnabledDescription: String { localized("keyBinding.hanjaEnabledDescription") }
         public static var disabledByHanjaOff: String { localized("keyBinding.disabledByHanjaOff") }
         public static var recording: String { localized("keyBinding.recording") }
-        public static var change: String { localized("keyBinding.change") }
         public static var conflict: String { localized("keyBinding.conflict") }
         public static var conflictRestored: String { localized("keyBinding.conflictRestored") }
-        public static var reset: String { localized("keyBinding.reset") }
-        public static var capsLockSummary: String { localized("keyBinding.capsLockSummary") }
         public static var capsLockStatusTitle: String { localized("keyBinding.capsLockStatusTitle") }
         public static var capsLockStatusOn: String { localized("keyBinding.capsLockStatusOn") }
         public static var capsLockStatusOff: String { localized("keyBinding.capsLockStatusOff") }
@@ -86,11 +66,18 @@ public enum L10n {
     // MARK: - About
     
     public enum about {
-        public static var title: String { localized("about.title") }
         public static var description: String { localized("about.description") }
         public static var version: String { localized("about.version") }
     }
     
+    // MARK: - Input Menu
+
+    /// Items PriType adds to the system input menu.
+    public enum menu {
+        public static var settings: String { localized("menu.settings") }
+        public static var about: String { localized("menu.about") }
+    }
+
     // MARK: - App
     
     public enum app {
@@ -116,7 +103,6 @@ public enum L10n {
     // MARK: - System
     
     public enum system {
-        public static var title: String { localized("system.title") }
         public static var accessibility: String { localized("system.accessibility") }
         public static var accessibilityGranted: String { localized("system.accessibilityGranted") }
         public static var accessibilityRequest: String { localized("system.accessibilityRequest") }
@@ -145,7 +131,6 @@ public enum L10n {
     // MARK: - Toggle Key App Exclusions
 
     public enum exclusions {
-        public static var title: String { localized("exclusions.title") }
         public static var subtitle: String { localized("exclusions.subtitle") }
         public static var addButton: String { localized("exclusions.addButton") }
         public static var removeButton: String { localized("exclusions.removeButton") }
