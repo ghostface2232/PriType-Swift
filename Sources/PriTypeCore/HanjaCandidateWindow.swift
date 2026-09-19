@@ -2,11 +2,28 @@ import Cocoa
 import SwiftUI
 import os
 
+/// Where `HangulComposer` shows Hanja candidates. The app uses
+/// `HanjaCandidateWindow`; the IMK harness substitutes one that records the
+/// candidates, so tests drive a selection without opening a panel.
+public protocol HanjaCandidatePresenting: AnyObject {
+    var isVisible: Bool { get }
+    func show(
+        entries: [HanjaEntry],
+        cursorRect: NSRect,
+        onSelect: @escaping @Sendable (HanjaEntry) -> Void,
+        onDismiss: @escaping @Sendable () -> Void
+    )
+    func dismiss()
+    /// A key the input method received while the candidates are up.
+    /// Returns whether the candidates consumed it.
+    func handleKey(_ event: NSEvent) -> Bool
+}
+
 /// Custom floating candidate window for Hanja selection
 ///
 /// Displays a list of Hanja candidates near the text cursor position.
 /// Supports keyboard navigation (1-9, arrow keys, page up/down).
-public final class HanjaCandidateWindow: @unchecked Sendable {
+public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Sendable {
     
     public static let shared = HanjaCandidateWindow()
     

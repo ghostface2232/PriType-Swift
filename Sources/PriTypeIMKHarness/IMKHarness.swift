@@ -64,13 +64,22 @@ public final class IMKHarness {
     /// repeated key (backspace, Escape, "ss") was dropped as a re-delivery.
     public var keyInterval: TimeInterval = 0.08
 
+    /// Stands in for the Hanja candidate window while the harness runs.
+    public let candidates = FakeCandidatePresenter()
+
     public init() {
         clock = ProcessInfo.processInfo.systemUptime
         PriTypeInputController.systemModeReporter = { [weak self] mode in
             self?.reportedModes.append(mode)
         }
         InputModeCoordinator.shared.applyPendingKeyActions()
-        PriTypeInputController.sharedComposer.setInputMode(.korean)
+        let composer = PriTypeInputController.sharedComposer
+        composer.setInputMode(.korean)
+        // The composer is shared: start from no remembered text, and let a
+        // Hanja lookup see the focused field's app as the one in front.
+        composer.clearLocalBuffer()
+        composer.candidatePresenter = candidates
+        composer.frontmostBundleID = { [weak self] in self?.focused?.client.bundleID }
     }
 
     /// A new field, not yet focused.
@@ -192,11 +201,23 @@ public final class IMKHarness {
         field.controller.commitComposition(field.client)
     }
 
+    /// The Hanja key, pressed now, handled on main as the key monitor hands it
+    /// over. The app maps the dictionary at launch; the harness does it here.
+    public func pressHanjaKey() {
+        HanjaManager.shared.loadIfNeeded()
+        InputModeCoordinator.shared.requestHanjaLookup(eventTime: clock)
+        clock += keyInterval
+    }
+
     /// Run everything the key monitor queued, and leave the shared engine idle.
     public func finish() {
         InputModeCoordinator.shared.applyPendingKeyActions()
         blur()
-        PriTypeInputController.sharedComposer.setInputMode(.korean)
+        let composer = PriTypeInputController.sharedComposer
+        composer.dismissHanjaCandidates(reason: "harness finished")
+        composer.setInputMode(.korean)
+        composer.candidatePresenter = HanjaCandidateWindow.shared
+        composer.frontmostBundleID = HangulComposer.systemFrontmostBundleID
     }
 
     // MARK: US layout

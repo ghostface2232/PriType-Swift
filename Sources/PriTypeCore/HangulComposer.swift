@@ -89,7 +89,18 @@ public class HangulComposer: @unchecked Sendable {
     /// Text convenience handler (double-space period)
     /// Owns all state for text convenience features
     private let textConvenience: TextConvenienceHandler
-    
+
+    /// Shows Hanja candidates. The IMK harness replaces it with a recorder.
+    public var candidatePresenter: any HanjaCandidatePresenting = HanjaCandidateWindow.shared
+
+    /// The app in front, which a Hanja lookup checks the input buffer against.
+    /// The IMK harness replaces it with its focused field's app.
+    public var frontmostBundleID: () -> String? = HangulComposer.systemFrontmostBundleID
+
+    public static func systemFrontmostBundleID() -> String? {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    }
+
     // MARK: - Initialization
     
     /// Creates a new HangulComposer with default settings
@@ -358,8 +369,8 @@ public class HangulComposer: @unchecked Sendable {
         
         // If Hanja candidate window is visible, forward keys to it
         if hanjaMode {
-            let consumed = HanjaCandidateWindow.shared.handleKey(event)
-            if !HanjaCandidateWindow.shared.isVisible {
+            let consumed = candidatePresenter.handleKey(event)
+            if !candidatePresenter.isVisible {
                 hanjaMode = false
                 hanjaKey = ""
             }
@@ -589,7 +600,7 @@ public class HangulComposer: @unchecked Sendable {
     /// keys routed to this client can reach it.
     public func dismissHanjaCandidates(reason: String) {
         guard hanjaMode else { return }
-        HanjaCandidateWindow.shared.dismiss()
+        candidatePresenter.dismiss()
         hanjaMode = false
         hanjaKey = ""
         DebugLogger.log("Hanja: dismissed by \(reason)")
@@ -603,8 +614,8 @@ public class HangulComposer: @unchecked Sendable {
         // A lookup queued just before the setting was turned off.
         guard ConfigurationManager.shared.hanjaEnabled else { return }
         // Toggle behavior: if already showing, dismiss
-        if HanjaCandidateWindow.shared.isVisible {
-            HanjaCandidateWindow.shared.dismiss()
+        if candidatePresenter.isVisible {
+            candidatePresenter.dismiss()
             hanjaMode = false
             hanjaKey = ""
             DebugLogger.log("Hanja: Toggled off")
@@ -640,7 +651,7 @@ public class HangulComposer: @unchecked Sendable {
         // The buffer counts only if it was filled in the app that has focus now.
         // Use NSWorkspace as the primary source of truth for frontmost app, because
         // cachedContext might be stale if the user clicked a non-text area in a new app.
-        let currentBundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let currentBundleId = frontmostBundleID()
             ?? PriTypeInputController.sharedController?.cachedContext?.bundleId ?? ""
         let buffer = isBufferFromApp(currentBundleId) ? localTextBuffer : ""
 
@@ -698,7 +709,7 @@ public class HangulComposer: @unchecked Sendable {
             return nil
         }()
         
-        HanjaCandidateWindow.shared.show(
+        candidatePresenter.show(
             entries: entries,
             cursorRect: cursorRect,
             onSelect: { [weak self, lookupIsBufferTail] entry in

@@ -237,4 +237,32 @@ struct IMKIntegrationTests {
         harness.type("gk")
         #expect(second.client.text == "gk")
     }
+
+    // MARK: Hanja
+
+    @Test("The Hanja key offers the word before the caret, and a digit converts it")
+    func hanjaWord() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "대한민국"))
+        harness.pressHanjaKey()
+        #expect(field.client.markedText == nil, "the syllable is committed for the lookup")
+        #expect(harness.candidates.entries.first?.hanja == "大韓民國")
+        harness.type("1")
+        #expect(field.client.text == "大韓民國")
+        #expect(!harness.candidates.isVisible)
+    }
+
+    @Test("A shorter ending replaces only its own syllables")
+    func hanjaShorterEnding() throws {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "대한민국"))
+        harness.pressHanjaKey()
+        let number = try #require(harness.candidates.entries.firstIndex { $0.hanja == "國" }) + 1
+        harness.candidates.choose(number)
+        #expect(field.client.text == "대한민國")
+        harness.type(Dubeolsik.keys(for: "가"))
+        #expect(field.client.text == "대한민國가")
+    }
 }
