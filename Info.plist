@@ -9,9 +9,9 @@
 	<key>CFBundleExecutable</key>
 	<string>PriTypeV2</string>
 	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
+	<string>PriType</string>
 	<key>CFBundleIconName</key>
-	<string>AppIcon</string>
+	<string>PriType</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.pritype.inputmethod.v2</string>
 	<key>CFBundleInfoDictionaryVersion</key>
