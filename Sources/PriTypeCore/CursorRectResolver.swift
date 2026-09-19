@@ -11,7 +11,7 @@ import InputMethodKit
 /// inspired):
 ///
 /// 1. `firstRect(forCharacterRange:)` on the marked (else selected) range
-/// 2. `attributes(forCharacterIndex: pos-1)` — Chromium allows committed chars
+/// 2. `attributes(forCharacterIndex:)` at index 0, then at pos-1 — Chromium answers index 0 with the caret
 /// 3. cached last-known-good position (zero-cost, window stays where it last was)
 /// 4. Accessibility API (`AXSelectedTextRange` → `AXBoundsForRange`)
 /// 5. mouse location (last resort)
@@ -55,18 +55,25 @@ public enum CursorRectResolver {
                 } else {
                     DebugLogger.log("Hanja: firstRect returned invalid rect for range \(targetRange): \(rect)")
 
-                    // Strategy 2: attributes(forCharacterIndex: pos-1)
-                    // Like fcitx5, query the previously committed character (one IPC call only).
-                    // Chromium blocks queries for the active preedit character but allows committed ones.
-                    var lineRect = NSRect.zero
-                    let queryIndex = targetRange.location > 0 ? targetRange.location - 1 : 0
-                    _ = client.attributes(forCharacterIndex: queryIndex, lineHeightRectangle: &lineRect)
-
-                    if isValidCursorRect(lineRect) {
-                        cursorRect = lineRect
-                        resolved = true
-                        DebugLogger.log("Hanja: cursor from attributes(idx \(queryIndex)): \(lineRect)")
-                    } else {
+                    // Strategy 2: attributes(forCharacterIndex:), index 0 first, as
+                    // Squirrel, macSKK and fcitx5 ask. Measured in Google Docs (Chrome,
+                    // macOS 27): every firstRect query came back as garbage, while
+                    // index 0 answered with the caret itself, following it as each
+                    // syllable was typed. A document index past 0 answered with one
+                    // fixed spot near the window's corner — valid-looking, so it was
+                    // taken, and the candidates opened there from the second line on.
+                    // The previous character's document index stays as the fallback.
+                    var queryIndexes = [0]
+                    if targetRange.location > 1 { queryIndexes.append(targetRange.location - 1) }
+                    for queryIndex in queryIndexes {
+                        var lineRect = NSRect.zero
+                        _ = client.attributes(forCharacterIndex: queryIndex, lineHeightRectangle: &lineRect)
+                        if isValidCursorRect(lineRect) {
+                            cursorRect = lineRect
+                            resolved = true
+                            DebugLogger.log("Hanja: cursor from attributes(idx \(queryIndex)): \(lineRect)")
+                            break
+                        }
                         DebugLogger.log("Hanja: attributes(idx \(queryIndex)) also invalid: \(lineRect)")
                     }
                 }

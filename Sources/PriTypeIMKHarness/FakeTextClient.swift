@@ -131,9 +131,14 @@ public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
     }
 
     public func attributes(forCharacterIndex index: Int, lineHeightRectangle lineRect: UnsafeMutablePointer<NSRect>!) -> [AnyHashable: Any]! {
-        lineRect?.pointee = caretRect
+        lineRect?.pointee = lineRectForIndex?(index) ?? caretRect
         return [:]
     }
+
+    /// What `attributes(forCharacterIndex:lineHeightRectangle:)` reports per
+    /// index, for a test imitating a host that answers by index; `nil` reports
+    /// `caretRect` for every index.
+    public var lineRectForIndex: ((Int) -> NSRect)?
 
     public func firstRect(forCharacterRange aRange: NSRange, actualRange: NSRangePointer!) -> NSRect {
         actualRange?.pointee = aRange

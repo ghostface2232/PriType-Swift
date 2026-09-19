@@ -41,6 +41,39 @@ struct CursorRectResolverTests {
                 "with nothing else, the mouse beats another client's caret")
     }
 
+    // MARK: attributes(forCharacterIndex:)
+
+    /// A field whose firstRect fails and whose caret sits after "요한한한 ".
+    private func chromeLikeField() -> FakeTextClient {
+        let field = FakeTextClient(bundleID: "com.google.Chrome")
+        field.insertText("요한한한 ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.caretRect = unreported
+        return field
+    }
+
+    @Test("A host whose firstRect fails is asked for index 0 before its document index")
+    func attributesIndexZeroFirst() {
+        CursorRectResolver.lastKnownCursorRect = nil
+        defer { CursorRectResolver.lastKnownCursorRect = nil }
+        // Google Docs, measured: index 0 is the caret; any later index is one
+        // fixed spot near the window's corner.
+        let docs = chromeLikeField()
+        let caret = NSRect(x: 400, y: 400, width: 1, height: 21)
+        let windowCorner = NSRect(x: 200, y: 300, width: 1, height: 19)
+        docs.lineRectForIndex = { $0 == 0 ? caret : windowCorner }
+        #expect(CursorRectResolver.resolve(client: docs, accessibility: { nil }) == caret)
+    }
+
+    @Test("A host that answers only by document index still gets the previous character")
+    func attributesDocumentIndexFallback() {
+        CursorRectResolver.lastKnownCursorRect = nil
+        defer { CursorRectResolver.lastKnownCursorRect = nil }
+        let field = chromeLikeField()
+        let previousCharacter = NSRect(x: 420, y: 400, width: 1, height: 18)
+        field.lineRectForIndex = { $0 == 4 ? previousCharacter : .zero }
+        #expect(CursorRectResolver.resolve(client: field, accessibility: { nil }) == previousCharacter)
+    }
+
     // MARK: Accessibility coordinates
     //
     // The layout reported with the bug: a MacBook's built-in display is primary

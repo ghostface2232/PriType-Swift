@@ -187,7 +187,7 @@ Caps Lock, 입력 메뉴, 그리고 4단계 통보에 대한 응답이 모두 �
 한자키를 누르면 조합을 확정하기 전에 커서 위치를 구한다. Chromium 계열은 확정 직후 좌표를 비동기로 갱신하기 때문이다.
 
 1. `firstRect(forCharacterRange:)`: 조합 영역, 없으면 선택 영역.
-2. 1이 무효이면 `attributes(forCharacterIndex:lineHeightRectangle:)`.
+2. 1이 무효이면 `attributes(forCharacterIndex:lineHeightRectangle:)`. 인덱스 0을 먼저 묻고(Squirrel·macSKK·fcitx5와 같음), 무효이면 커서 앞 글자의 문서 인덱스를 묻는다. Google Docs에서 측정해 보니 `firstRect`는 모든 범위에서 쓰레기값이었고, 인덱스 0은 커서를 돌려주었으며, 1 이상의 인덱스는 창 모서리 근처의 고정된 자리를 돌려주었다.
 3. 같은 클라이언트(입력창)의 직전 한자 검색에서 얻은 좌표. 다른 클라이언트의 좌표는 쓰지 않는다. 그 입력창은 다른 창이나 다른 모니터에 있을 수 있다.
 4. 손쉬운 사용 API: 포커스된 요소의 `AXSelectedTextRange`와 `AXBoundsForRange`, 안 되면 요소의 위치와 크기. 손쉬운 사용 좌표(주 화면 왼쪽 위 기준, y 아래로)는 주 화면(메뉴 막대가 있는 화면)의 높이로 뒤집는다. Chromium이 y만 주는 응답 `(0, y, 0, 0)`은 요소의 x로 보충하며, 주 화면 위나 왼쪽 모니터의 음수 y도 받는다.
 5. 마우스 위치.
