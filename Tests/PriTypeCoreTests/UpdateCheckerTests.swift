@@ -124,8 +124,8 @@ struct UpdateCheckerTests {
         // component-wise comparison, so the first of the tie must win.
         func release(_ tag: String) -> UpdateChecker.GitHubRelease {
             UpdateChecker.GitHubRelease(
-                tagName: tag, htmlUrl: "https://example.invalid", name: tag, body: "",
-                draft: false, prerelease: false, assets: []
+                tagName: tag, htmlUrl: "https://example.invalid", name: tag,
+                draft: false, prerelease: false
             )
         }
         let newestFirst = [release("v2.7.0"), release("v2.7"), release("v2.6.5")]
@@ -211,10 +211,8 @@ struct UpdateCheckerTests {
             tagName: tagName,
             htmlUrl: "https://github.com/Meapri/PriType-Swift/releases/tag/\(tagName)",
             name: name,
-            body: nil,
             draft: draft,
-            prerelease: prerelease,
-            assets: []
+            prerelease: prerelease
         )
     }
 }
