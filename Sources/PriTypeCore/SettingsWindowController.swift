@@ -208,9 +208,7 @@ struct SettingsView: View {
         .onChange(of: hanjaEnabled) { _, isOn in
             ConfigurationManager.shared.hanjaEnabled = isOn
             if isOn {
-                DispatchQueue.global(qos: .utility).async {
-                    HanjaManager.shared.loadIfNeeded()
-                }
+                HanjaManager.shared.preload()
             } else {
                 PriTypeInputController.sharedComposer.dismissHanjaCandidates(reason: "Hanja turned off")
                 HanjaManager.shared.unload()

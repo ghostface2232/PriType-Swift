@@ -222,11 +222,35 @@ struct HanjaManagerLoadingTests {
         Thread { manager.loadIfNeeded(); finished.signal() }.start()
         gate.started.wait()
         manager.unload()
-        // Released while this thread waits inside the second loadIfNeeded.
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { gate.release.signal() }
-        manager.loadIfNeeded()
+        manager.preload()
+        gate.release.signal()
         finished.wait()
         #expect(manager.isLoaded)
+        #expect(attempts.value == 1)
+    }
+
+    @Test("Off, on, off again while the dictionary loads leaves it unmapped")
+    func offOnOffDuringLoad() throws {
+        let data = try HanjaDictionary.compile(source: HanjaDictionaryTests.sample)
+        let gate = Gate()
+        let attempts = LockedCounter()
+        let manager = HanjaManager(loader: {
+            attempts.increment()
+            gate.started.signal()
+            gate.release.wait()
+            return try? HanjaDictionary(data: data)
+        })
+        let finished = DispatchSemaphore(value: 0)
+        Thread { manager.loadIfNeeded(); finished.signal() }.start()
+        gate.started.wait()
+        manager.unload()
+        manager.preload()
+        manager.unload()
+        gate.release.signal()
+        finished.wait()
+        // The preload's background block may run after this; it must not load.
+        Thread.sleep(forTimeInterval: 0.05)
+        #expect(!manager.isLoaded)
         #expect(attempts.value == 1)
     }
 
