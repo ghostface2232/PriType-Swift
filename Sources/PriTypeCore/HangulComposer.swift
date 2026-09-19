@@ -750,7 +750,16 @@ public class HangulComposer: @unchecked Sendable {
                     // may be a whole word ending at the caret.
                     let replacementLength = entry.hangul.utf16.count
                     let selRange = client.selectedRange()
-                    if selRange.location != NSNotFound && selRange.location < 10000000 && selRange.location >= replacementLength {
+                    if selRange.location != NSNotFound && selRange.location < 10000000 {
+                        // A caret closer to the start than the word is long
+                        // has left the word behind: inserting there instead
+                        // would put the Hanja in the middle of other text.
+                        guard selRange.location >= replacementLength else {
+                            DebugLogger.log("Hanja: the caret is before where the word could end — aborting selection")
+                            self.hanjaMode = false
+                            self.hanjaKey = ""
+                            return
+                        }
                         let replaceRange = NSRange(location: selRange.location - replacementLength, length: replacementLength)
                         let current = client.attributedSubstring(from: replaceRange)?.string
                         guard Self.canReplace(current, with: entry) else {
@@ -761,7 +770,9 @@ public class HangulComposer: @unchecked Sendable {
                         }
                         client.insertText(entry.hanja, replacementRange: replaceRange)
                     } else {
-                        // Fallback: just insert
+                        // The host reports no usable caret (NSNotFound, or
+                        // Chromium's garbage), so nothing can be checked or
+                        // replaced: insert at the caret, as always.
                         client.insertText(entry.hanja, replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
                     }
                 }

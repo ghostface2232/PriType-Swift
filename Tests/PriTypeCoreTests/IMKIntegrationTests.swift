@@ -282,6 +282,26 @@ struct IMKIntegrationTests {
         #expect(!harness.candidates.isVisible)
     }
 
+    @Test("A candidate chosen with the caret before where its word could end inserts nothing")
+    func hanjaCaretBeforeWord() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "요"))
+        harness.press(.space)
+        harness.type(Dubeolsik.keys(for: "한"))
+        harness.pressHanjaKey()
+        field.client.placeCaret(at: 0)
+        harness.candidates.choose(1)
+        #expect(field.client.text == "요 한")
+
+        harness.type(Dubeolsik.keys(for: "대한민국"))   // now at the start: 대한민국요 한
+        harness.pressHanjaKey()
+        #expect(harness.candidates.entries.first?.hanja == "大韓民國")
+        field.client.placeCaret(at: 2)
+        harness.candidates.choose(1)
+        #expect(field.client.text == "대한민국요 한", "not 대한大韓民國민국요 한")
+    }
+
     @Test("A lookup in another app never joins the last syllable typed in the previous one")
     func hanjaIgnoresPreviousApp() throws {
         let (harness, first) = start()
