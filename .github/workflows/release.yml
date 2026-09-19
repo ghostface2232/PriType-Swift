@@ -31,7 +31,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v5
+      uses: actions/checkout@v7
 
     - name: Extract version from tag
       if: github.event_name == 'push'
@@ -112,7 +112,7 @@ jobs:
 
     - name: Keep package from manual run
       if: github.event_name == 'workflow_dispatch'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: PriTypeV2_Release
         path: PriTypeV2_Release.pkg
@@ -120,7 +120,7 @@ jobs:
 
     - name: Create GitHub Release
       if: github.event_name == 'push'
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         name: "PriType ${{ steps.version.outputs.VERSION }}"
         # A suffixed tag (v2.8.0-beta.1) is a beta: flagging it keeps it off
