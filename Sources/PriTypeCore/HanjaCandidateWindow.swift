@@ -206,10 +206,18 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         Self.setShownPageCandidates(0)
         stopWatchingClicks()
         window?.orderOut(nil)
-        if #available(macOS 26.0, *), let glass = contentContainer as? NSGlassEffectView {
-            glass.contentView = nil
-        } else {
-            contentContainer?.subviews.forEach { $0.removeFromSuperview() }
+        // Later, not now: a click on a candidate gets here from inside that
+        // candidate's button action, and the hosting view must outlive the
+        // event it is handling. Skipped if a new lookup has shown the panel.
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.window?.isVisible != true else { return }
+                if #available(macOS 26.0, *), let glass = self.contentContainer as? NSGlassEffectView {
+                    glass.contentView = nil
+                } else {
+                    self.contentContainer?.subviews.forEach { $0.removeFromSuperview() }
+                }
+            }
         }
         candidates = []
         currentPage = 0
