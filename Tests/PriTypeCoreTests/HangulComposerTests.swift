@@ -525,8 +525,107 @@ struct HangulComposerTests {
         )
     }
 
+    @Test("Backspace removes a one-key vowel whole: 애 → ㅇ, not 아", arguments: [
+        ("o", UInt16(31), NSEvent.ModifierFlags(), "애"),
+        ("O", UInt16(31), NSEvent.ModifierFlags.shift, "얘"),
+        ("p", UInt16(35), NSEvent.ModifierFlags(), "에"),
+        ("P", UInt16(35), NSEvent.ModifierFlags.shift, "예"),
+    ])
+    func backspaceRemovesOneKeyVowelWhole(char: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags, syllable: String) {
+        let (composer, delegate) = makeComposer()
+        _ = composer.handle(TestEventFactory.keyEvent(char: "d", keyCode: 2)!, delegate: delegate)
+        _ = composer.handle(TestEventFactory.keyEvent(char: char, keyCode: keyCode, modifiers: modifiers)!, delegate: delegate)
+        #expect(delegate.markedText == syllable)
+
+        _ = composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate)
+        #expect(delegate.markedText == "ㅇ", "got '\(delegate.markedText)'")
+    }
+
+    @Test("Backspace removes a lone one-key vowel whole: ㅐ → nothing")
+    func backspaceRemovesLoneOneKeyVowel() {
+        let (composer, delegate) = makeComposer()
+        _ = composer.handle(TestEventFactory.keyEvent(char: "o", keyCode: 31)!, delegate: delegate)
+        #expect(delegate.markedText == "ㅐ")
+
+        let consumed = composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate)
+        #expect(!consumed, "the host deletes the last jamo itself")
+        #expect(delegate.insertedTexts.last == "ㅐ")
+        #expect(!composer.hasActiveComposition)
+    }
+
+    @Test("Backspace removes a one-key double final whole: 갔 → 가, not 갓")
+    func backspaceRemovesOneKeyDoubleFinal() {
+        let (composer, delegate) = makeComposer()
+        _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
+        _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
+        _ = composer.handle(TestEventFactory.keyEvent(char: "T", keyCode: 17, modifiers: .shift)!, delegate: delegate)
+        #expect(delegate.markedText == "갔")
+
+        _ = composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate)
+        #expect(delegate.markedText == "가", "got '\(delegate.markedText)'")
+    }
+
+    @Test("Backspace after a syllable split undoes the keys of the new syllable: 닭+ㅏ → 달가 → 달ㄱ")
+    func backspaceAfterSyllableSplit() {
+        let (composer, delegate) = makeComposer()
+        for (char, keyCode) in [("e", UInt16(14)), ("k", 40), ("f", 3), ("r", 15), ("k", 40)] {
+            _ = composer.handle(TestEventFactory.keyEvent(char: char, keyCode: keyCode)!, delegate: delegate)
+        }
+        #expect(delegate.insertedTexts.last == "달")
+        #expect(delegate.markedText == "가")
+
+        _ = composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: delegate)
+        #expect(delegate.markedText == "ㄱ", "got '\(delegate.markedText)'")
+    }
+
+    @Test("A consonant after a lone vowel starts a new syllable: ㅏ + ㄴ → ㅏ나, not 나")
+    func consonantAfterLoneVowelStartsNewSyllable() {
+        let (composer, delegate) = makeComposer()
+        _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
+        #expect(delegate.markedText == "ㅏ")
+        _ = composer.handle(TestEventFactory.keyEvent(char: "s", keyCode: 1)!, delegate: delegate)
+        #expect(delegate.insertedTexts.last == "ㅏ")
+        #expect(delegate.markedText == "ㄴ")
+        _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
+        #expect(delegate.markedText == "나")
+    }
+
+    @Test("Combinations the standard 두벌식 lacks start a new syllable", arguments: [
+        ("dkl", "아", "ㅣ"), ("dil", "야", "ㅣ"), ("djl", "어", "ㅣ"), ("dul", "여", "ㅣ"),
+        // Shift types the same ㅏ ㅑ ㅓ ㅕ ㅣ, so it must not let the pair join.
+        ("dKL", "아", "ㅣ"), ("dIl", "야", "ㅣ"), ("dJl", "어", "ㅣ"), ("dUL", "여", "ㅣ"),
+        ("rkrr", "각", "ㄱ"), ("rktt", "갓", "ㅅ"),
+    ])
+    func nonStandardCombinationStartsNewSyllable(keys: String, committed: String, marked: String) {
+        let codes: [Character: UInt16] = ["d": 2, "k": 40, "i": 34, "j": 38, "u": 32, "l": 37, "r": 15, "t": 17]
+        let (composer, delegate) = makeComposer()
+        for key in keys {
+            let shifted = key.isUppercase
+            let event = TestEventFactory.keyEvent(
+                char: String(key), keyCode: codes[Character(key.lowercased())]!, modifiers: shifted ? .shift : []
+            )!
+            _ = composer.handle(event, delegate: delegate)
+        }
+        #expect(delegate.insertedTexts.last == committed)
+        #expect(delegate.markedText == marked, "got '\(delegate.markedText)'")
+    }
+
+    @Test("Standard compound vowels and finals still combine: 의, 외, 위, 닭, 값")
+    func standardCombinationsStillCombine() {
+        let codes: [Character: UInt16] = ["d": 2, "m": 46, "l": 37, "h": 4, "n": 45, "e": 14, "k": 40,
+                                          "f": 3, "r": 15, "q": 12, "t": 17]
+        for (keys, syllable) in [("dml", "의"), ("dhl", "외"), ("dnl", "위"), ("ekfr", "닭"), ("rkqt", "값")] {
+            let (composer, delegate) = makeComposer()
+            for key in keys {
+                _ = composer.handle(TestEventFactory.keyEvent(char: String(key), keyCode: codes[key]!)!, delegate: delegate)
+            }
+            #expect(delegate.insertedTexts.isEmpty)
+            #expect(delegate.markedText == syllable, "\(keys): got '\(delegate.markedText)'")
+        }
+    }
+
     // MARK: - Helper
-    
+
     private func makeComposer() -> (HangulComposer, MockComposerDelegate) {
         let composer = HangulComposer(configuration: MockConfiguration())
         let delegate = MockComposerDelegate()
