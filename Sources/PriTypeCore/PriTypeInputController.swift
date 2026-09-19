@@ -332,9 +332,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         if Self.sharedController === self {
             composer.dismissHanjaCandidates(reason: "focus change")
         }
-        // NOTE: Do NOT clear localTextBuffer here.
-        // Cross-app hanja leaking is prevented by bundleId matching in handleHanjaLookup(),
-        // not by clearing the buffer. Clearing would make same-app hanja lookup impossible.
+        // NOTE: Do NOT clear localTextBuffer here: same-app Hanja lookups need it
+        // after a reactivation. Cross-app leaking is prevented by the composer:
+        // `markKeystroke` empties the buffer on the first keystroke in another
+        // app, and `handleHanjaLookup` ignores a buffer typed in another app.
         super.deactivateServer(sender)
         // Keep the session alive — async Hanja callbacks need the adapter, and a
         // handle() arriving before the next activateServer needs the context. But:

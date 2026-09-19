@@ -69,7 +69,7 @@ keyDown ──► PriTypeInputController.handle(event, client)
 - 영문 모드: 조합 중인 글자가 있으면 확정하고 `false`를 돌려준다. 키 처리는 앱이 한다.
 - 한자 후보창이 떠 있으면 키를 후보창에 먼저 넘긴다.
 - ⌘·⌃·⌥가 눌린 키: 조합을 확정하고 앱으로 넘긴다(단축키).
-- 글자 키 26개는 현재 라틴 배열이 만든 문자가 아니라 키 위치(`QwertyKeyMap`, US QWERTY)로 해석한다. Dvorak·Colemak·AZERTY에서도 같은 자모가 나오고, 윗줄 자모는 Shift로만 고른다(Caps Lock 무시). 그 밖의 키는 배열이 만든 문자를 그대로 쓰며 조합 엔진에 넘기지 않는다. 단, 글자 키에 문장부호를 둔 배열(AZERTY의 M 자리 쉼표, Dvorak의 Q W E 자리 `' , .`, Colemak의 P 자리 `;`)에서는 그 문장부호가 자모에 밀려 칠 키가 없어지므로, 숫자·문장부호 키를 US 위치로 읽는다(`LatinLayoutObserver`, `QwertyKeyMap.punctuation`). 이 판정은 글자 키가 마지막으로 친 문자로 하므로 배열이 바뀌면 따라간다. 독일어·북유럽처럼 글자 키가 모두 글자인 배열은 ö·ü 같은 문자를 그대로 친다.
+- 글자 키 26개는 현재 라틴 배열이 만든 문자가 아니라 키 위치(`QwertyKeyMap`, US QWERTY)로 해석한다. Dvorak·Colemak·AZERTY에서도 같은 자모가 나오고, 윗줄 자모는 Shift로만 고른다(Caps Lock 무시). 그 밖의 키는 배열이 만든 문자를 그대로 쓰며 조합 엔진에 넘기지 않는다. 단, 글자 키에 문장부호를 둔 배열(AZERTY의 M 자리 쉼표, Dvorak의 Q W E 자리 `' , .`, Colemak의 P 자리 `;`)에서는 그 문장부호가 자모에 밀려 칠 키가 없어지므로, 숫자·문장부호 키를 US 위치로 읽는다(`LatinLayoutObserver`, `QwertyKeyMap.punctuation`). 판정은 입력을 보고 한다. 글자 키가 글자가 아닌 문자를 한 번 쳐야 켜지므로, 입력기가 시작된 뒤 그 키(AZERTY라면 ㅡ)를 처음 치기 전까지는 배열의 문자가 그대로 나온다. 각 글자 키는 마지막으로 친 문자로 판정하므로, 배열이 바뀌면 해당 글자 키를 다시 칠 때 따라간다. dead key 뒤처럼 두 글자 이상이 온 입력은 판정에 쓰지 않는다. US 위치로 읽을 때 숫자는 Shift 없이 나오고(AZERTY와 반대), ISO 자판과 위치가 엇갈리는 키 50(`` ` ``/`~`)은 제외한다. 독일어·북유럽처럼 글자 키가 모두 글자인 배열은 ö·ü 같은 문자를 그대로 친다.
 - 특수 키
   - Return: 조합을 확정하고 키는 앱으로 넘긴다. GoodNotes는 줄바꿈을 직접 넣고, Hermes는 확정만 하고 키를 소비한다(`ClientCompatibilityPolicy`).
   - Esc: 조합 중이면 취소하고 소비, 아니면 앱으로 넘긴다.
@@ -261,7 +261,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 |---|---|---|
 | `PriType` | 실행 파일 | 앱 진입점(`main.swift`). 번들에서는 `PriTypeV2` |
 | `PriTypeCore` | 라이브러리 | 입력기 로직 전부. 외부 의존성은 libhangul-swift 하나이며 테스트한 리비전에 고정한다 |
-| `PriTypeIMKHarness` | 라이브러리 | 실제 `PriTypeInputController`를 가짜 입력창(`FakeTextClient`)에 연결해 키를 흘려 넣는 통합 테스트 도구. `Dubeolsik`은 한글 문장을 두벌식 키로 바꾼다 |
+| `PriTypeIMKHarness` | 라이브러리 | 실제 `PriTypeInputController`를 가짜 입력창(`FakeTextClient`)에 연결해 키를 흘려 넣는 통합 테스트 도구. 한자 후보창은 `FakeCandidatePresenter`가 대신해 후보를 기록하고 선택·클릭을 흉내 낸다. `Dubeolsik`은 한글 문장을 두벌식 키로 바꾼다 |
 | `PriTypeHanjaCompiler` | 실행 파일 | `hanja.txt` → `hanja.dat` 컴파일 |
 | `PriTypeBenchmark` | 실행 파일 | 한자 사전·검색, 자모 검색, 동시성, 좌표 검증, 타이핑 경로 지연 측정([BENCHMARK.md](BENCHMARK.md)) |
 | `PriTypeVerify` | 실행 파일 | CI에서 돌리는 조합 동작 점검 |
@@ -311,10 +311,10 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 swift test
 ```
 
-Swift Testing 기반, 361개 테스트와 57개 Suite(2026-09-19 기준). Command Line Tools에는 Testing 모듈이 없으므로 Xcode 툴체인이 필요하다.
+Swift Testing 기반, 377개 테스트와 57개 Suite(2026-09-19 기준). Command Line Tools에는 Testing 모듈이 없으므로 Xcode 툴체인이 필요하다.
 
 - 유닛 테스트: 조합, 키 위치, 전달 정책, 직접 삽입, 키 모니터(탭 이벤트 순서, IOKit 판정, 탭 스레드, 순서 대기열, 에코 필터), 한자 사전·검색·후보창 배치, 설정 이관, 입력 소스 정리, 업데이트 버전 비교, 등록 계약.
-- 통합 테스트(`IMKIntegrationTests`): `PriTypeIMKHarness`로 실제 컨트롤러를 돌린다. 확정 순서, 백스페이스, 중복 키, 한/영 전환(전환키, 대기열, Caps Lock, 재확인), 포커스 전환, 긴 문단 왕복 입력을 검증한다. 하니스는 macOS에 모드를 통보하는 부분을 기록만 하므로 테스트가 실제 입력 소스를 바꾸지 않는다.
+- 통합 테스트(`IMKIntegrationTests`): `PriTypeIMKHarness`로 실제 컨트롤러를 돌린다. 확정 순서, 백스페이스, 중복 키, 한/영 전환(전환키, 대기열, Caps Lock, 재확인), 포커스 전환, 긴 문단 왕복 입력, 한자(단어 변환, 짧은 끝말 교체, 커서가 옮겨진 뒤의 선택 취소, 클릭으로 닫은 뒤의 버퍼, 다른 앱의 글자, 늦은 비활성화)를 검증한다. 하니스는 macOS에 모드를 통보하는 부분을 기록만 하고 한자 후보창은 패널을 열지 않으므로, 테스트가 실제 입력 소스를 바꾸거나 창을 띄우지 않는다. 이벤트 탭의 후보창 키 라우팅과 클릭 감시는 실제 이벤트가 필요해 다루지 않는다.
 - `swift run PriTypeVerify`: 조합 동작 점검(CI에서 실행).
 - `swift run -c release PriTypeBenchmark`: 성능 측정.
 
