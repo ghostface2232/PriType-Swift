@@ -18,9 +18,10 @@ swift build -c release -Xswiftc -DNDEBUG
 mkdir -p build_dist/Contents/MacOS
 mkdir -p build_dist/Contents/Resources
 cp .build/release/PriType build_dist/Contents/MacOS/PriTypeV2
+Tools/stamp_sdk_version.sh build_dist/Contents/MacOS/PriTypeV2
 cp Info.plist build_dist/Contents/
 cp -R Resources/* build_dist/Contents/Resources/ || true
-cp "AppIcon.icns" build_dist/Contents/Resources/ 2>/dev/null || true
+Tools/compile_app_icon.sh build_dist/Contents/Resources
 cp "icon.tiff" build_dist/Contents/Resources/ 2>/dev/null || true
 cp "input-ko.tiff" build_dist/Contents/Resources/ 2>/dev/null || true
 cp "input-en.tiff" build_dist/Contents/Resources/ 2>/dev/null || true

@@ -45,11 +45,12 @@ mkdir -p "$RESOURCES_DIR"
 
 # Copy executable and Info.plist
 cp "$BUILD_DIR/PriType" "$MACOS_DIR/$APP_NAME"
+Tools/stamp_sdk_version.sh "$MACOS_DIR/$APP_NAME"
 cp Info.plist "$CONTENTS_DIR/"
 
 # Copy resources
 cp -R Resources/* "$RESOURCES_DIR/" 2>/dev/null || true
-cp "AppIcon.icns" "$RESOURCES_DIR/" 2>/dev/null || true
+Tools/compile_app_icon.sh "$RESOURCES_DIR"
 cp "icon.tiff" "$RESOURCES_DIR/" 2>/dev/null || true
 cp "input-ko.tiff" "$RESOURCES_DIR/" 2>/dev/null || true
 cp "input-en.tiff" "$RESOURCES_DIR/" 2>/dev/null || true

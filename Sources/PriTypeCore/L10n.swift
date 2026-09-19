@@ -151,4 +151,26 @@ public enum L10n {
         public static var removeButton: String { localized("exclusions.removeButton") }
         public static var empty: String { localized("exclusions.empty") }
     }
+
+    // MARK: - Settings Panes
+
+    public enum pane {
+        public static var switchingTitle: String { localized("pane.switching.title") }
+        public static var switchingDescription: String { localized("pane.switching.description") }
+        public static var hanjaTitle: String { localized("pane.hanja.title") }
+        public static var hanjaDescription: String { localized("pane.hanja.description") }
+        public static var exclusionsTitle: String { localized("pane.exclusions.title") }
+        public static var systemTitle: String { localized("pane.system.title") }
+        public static var systemDescription: String { localized("pane.system.description") }
+        public static var updateDescription: String { localized("pane.update.description") }
+        public static var experimentalTitle: String { localized("pane.experimental.title") }
+        public static var experimentalDescription: String { localized("pane.experimental.description") }
+    }
+
+    // MARK: - Experimental
+
+    public enum experimental {
+        public static var directInsertion: String { localized("experimental.directInsertion") }
+        public static var directInsertionDescription: String { localized("experimental.directInsertionDescription") }
+    }
 }
