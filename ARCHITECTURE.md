@@ -42,7 +42,7 @@ PriTypeV2.app
 2. `IMKServer`를 만든다.
 3. 저장된 키 바인딩을 이관·보정한다(`ConfigurationManager.migrateKeyBindingsIfNeeded`).
 4. 앞에 있는 앱을 추적해 전환 제외 앱을 판정할 준비를 한다(`ToggleExclusionPolicy.start`).
-5. 키 모니터를 시작한다(`setupIOKit`).
+5. 키 모니터를 시작한다(`KeyMonitors.start`, 설정 창의 권한 버튼도 같은 함수를 부른다).
    - 손쉬운 사용 권한이 없으면 시스템 요청 창을 띄우고, 허용될 때까지 1초마다 확인한 뒤 다시 시작한다.
    - `RightCommandSuppressor`(CGEventTap)를 시작한다. 실패하거나 나중에 탭이 반복해서 꺼지면 `IOKitManager`로 넘긴다. IOKit 경로는 입력 모니터링 권한을 확인하고, 없으면 요청한 뒤 허용될 때까지 2초마다 확인한다.
 6. 한자 변환이 켜져 있으면 백그라운드에서 한자 사전을 매핑한다.

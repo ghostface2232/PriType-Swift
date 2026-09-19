@@ -761,16 +761,9 @@ struct SettingsView: View {
             DispatchQueue.main.async {
                 self.isAccessibilityGranted = true
 
-                // Auto-start key monitoring that was skipped at launch
+                // Start key monitoring that was waiting for this grant.
                 if !RightCommandSuppressor.shared.isRunning {
-                    RightCommandSuppressor.shared.onToggle = { eventTime in
-                        InputModeCoordinator.shared.requestToggle(source: .customKey, eventTime: eventTime)
-                    }
-                    RightCommandSuppressor.shared.onHanjaLookup = { eventTime in
-                        InputModeCoordinator.shared.requestHanjaLookup(eventTime: eventTime)
-                    }
-                    let started = RightCommandSuppressor.shared.start()
-                    DebugLogger.log("Accessibility granted: CGEventTap start = \(started)")
+                    KeyMonitors.start()
                 }
             }
         }
