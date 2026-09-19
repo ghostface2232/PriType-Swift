@@ -281,4 +281,21 @@ struct IMKIntegrationTests {
         #expect(field.client.text == "요 한", "요 is not the 한 the candidate was looked up from")
         #expect(!harness.candidates.isVisible)
     }
+
+    @Test("A lookup in another app never joins the last syllable typed in the previous one")
+    func hanjaIgnoresPreviousApp() throws {
+        let (harness, first) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "한"))
+        let second = harness.makeField(bundleID: "com.pritype.imk-harness.other")
+        harness.focus(second)
+        #expect(first.client.text == "한")
+        harness.type(Dubeolsik.keys(for: "국"))
+        harness.pressHanjaKey()
+        let offered = try #require(harness.candidates.entries.first)
+        #expect(offered.hangul == "국", "not 韓國 from 한 + 국")
+        harness.candidates.choose(1)
+        #expect(second.client.text == offered.hanja)
+        #expect(first.client.text == "한")
+    }
 }

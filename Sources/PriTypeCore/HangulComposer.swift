@@ -581,7 +581,16 @@ public class HangulComposer: @unchecked Sendable {
     private var lastInputBundleId: String = ""
     
     /// Record which app the current keystroke is from (called from handle via controller)
+    ///
+    /// A keystroke in another app empties the buffer: what it holds was typed
+    /// there. Leaving a field commits its syllable and keeps it as the buffer's
+    /// last character, and once this records the new app `isBufferFromApp`
+    /// would vouch for that stranger, so a lookup would join it to the word
+    /// typed here (…한 in one app, 국 in the next → 韓國).
     public func markKeystroke(bundleId: String) {
+        if bundleId != lastInputBundleId {
+            localTextBuffer = ""
+        }
         lastInputBundleId = bundleId
     }
     
