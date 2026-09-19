@@ -49,10 +49,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         // Check for updates now and then daily. An input method runs from login to
         // logout, often for weeks, so a check only at launch would rarely run.
         // The scheduler lets the system pick an idle moment; the 24h throttle
-        // inside `checkForUpdatesIfNeeded` still decides whether to ask GitHub.
+        // inside `checkForUpdatesIfNeeded` decides whether to ask GitHub. It
+        // wakes every 6h, not 24h: a wake exactly 24h after the last check lands
+        // a moment short of the throttle and would be skipped, stretching
+        // "daily" to every other day. Skipped wakes cost no network.
         Self.checkForUpdates {}
         updateCheckScheduler.repeats = true
-        updateCheckScheduler.interval = 24 * 60 * 60
+        updateCheckScheduler.interval = 6 * 60 * 60
         updateCheckScheduler.qualityOfService = .utility
         updateCheckScheduler.schedule { completion in
             Self.checkForUpdates { completion(.finished) }
