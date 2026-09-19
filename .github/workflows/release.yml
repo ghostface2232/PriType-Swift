@@ -5,7 +5,8 @@ on:
     tags:
       - 'v*'
   # Manual runs build and package without publishing, to check the runner and
-  # signing before tagging. The package is kept as a workflow artifact.
+  # signing before tagging. The package is kept as a workflow artifact. A manual
+  # run can be started from a tag too, so publishing checks the event, not the ref.
   workflow_dispatch:
 
 permissions:
@@ -33,7 +34,7 @@ jobs:
       uses: actions/checkout@v5
 
     - name: Extract version from tag
-      if: github.ref_type == 'tag'
+      if: github.event_name == 'push'
       id: version
       run: |
         VERSION="${GITHUB_REF#refs/tags/v}"
@@ -45,7 +46,7 @@ jobs:
         fi
 
     - name: Validate tag matches Info.plist channel
-      if: github.ref_type == 'tag'
+      if: github.event_name == 'push'
       run: |
         TAG_VERSION="${{ steps.version.outputs.VERSION }}"
         EXPECTED_CHANNEL="stable"
@@ -110,7 +111,7 @@ jobs:
       run: ./build_release.sh
 
     - name: Keep package from manual run
-      if: github.ref_type != 'tag'
+      if: github.event_name == 'workflow_dispatch'
       uses: actions/upload-artifact@v4
       with:
         name: PriTypeV2_Release
@@ -118,7 +119,7 @@ jobs:
         retention-days: 7
 
     - name: Create GitHub Release
-      if: github.ref_type == 'tag'
+      if: github.event_name == 'push'
       uses: softprops/action-gh-release@v2
       with:
         name: "PriType ${{ steps.version.outputs.VERSION }}"
