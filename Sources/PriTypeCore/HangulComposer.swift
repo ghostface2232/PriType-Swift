@@ -343,10 +343,15 @@ public class HangulComposer: @unchecked Sendable {
     /// 갓 + ㅅ → 갔). There, ㅐ ㅒ ㅔ ㅖ ㄲ ㅆ come only from their own keys.
     private func breaksOffFromSyllable(_ key: Character) -> Bool {
         guard let last = syllableKeys.last else { return false }
-        switch (last, key) {
-        case ("k", "l"), ("i", "l"), ("j", "l"), ("u", "l"),
-             ("k", "L"), ("i", "L"), ("j", "L"), ("u", "L"):
+        // Shift types the same ㅏ ㅑ ㅓ ㅕ ㅣ, so the vowels match either case.
+        // It does not for ㄱ and ㅅ (R and T are ㄲ and ㅆ).
+        switch (last.lowercased(), key.lowercased()) {
+        case ("k", "l"), ("i", "l"), ("j", "l"), ("u", "l"):
             return true
+        default:
+            break
+        }
+        switch (last, key) {
         case ("r", "r"), ("t", "t"):
             // A consonant after the vowel is the final one.
             return syllableKeys.count >= 3

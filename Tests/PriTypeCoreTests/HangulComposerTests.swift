@@ -592,13 +592,19 @@ struct HangulComposerTests {
 
     @Test("Combinations the standard 두벌식 lacks start a new syllable", arguments: [
         ("dkl", "아", "ㅣ"), ("dil", "야", "ㅣ"), ("djl", "어", "ㅣ"), ("dul", "여", "ㅣ"),
+        // Shift types the same ㅏ ㅑ ㅓ ㅕ ㅣ, so it must not let the pair join.
+        ("dKL", "아", "ㅣ"), ("dIl", "야", "ㅣ"), ("dJl", "어", "ㅣ"), ("dUL", "여", "ㅣ"),
         ("rkrr", "각", "ㄱ"), ("rktt", "갓", "ㅅ"),
     ])
     func nonStandardCombinationStartsNewSyllable(keys: String, committed: String, marked: String) {
         let codes: [Character: UInt16] = ["d": 2, "k": 40, "i": 34, "j": 38, "u": 32, "l": 37, "r": 15, "t": 17]
         let (composer, delegate) = makeComposer()
         for key in keys {
-            _ = composer.handle(TestEventFactory.keyEvent(char: String(key), keyCode: codes[key]!)!, delegate: delegate)
+            let shifted = key.isUppercase
+            let event = TestEventFactory.keyEvent(
+                char: String(key), keyCode: codes[Character(key.lowercased())]!, modifiers: shifted ? .shift : []
+            )!
+            _ = composer.handle(event, delegate: delegate)
         }
         #expect(delegate.insertedTexts.last == committed)
         #expect(delegate.markedText == marked, "got '\(delegate.markedText)'")
