@@ -236,11 +236,11 @@ public enum CursorRectResolver {
         }
 
         DebugLogger.log("Hanja AX: raw bounds = \(bounds)")
+        guard let primaryHeight = primaryDisplayHeight else { return nil }
 
-        // Chrome returns (0, y, 0, 0) — only y is valid
-        // If we have a valid y but x/width/height are zero, supplement from element position
-        if bounds.size.width == 0 && bounds.size.height == 0 && bounds.origin.y > 0 {
-            // Get the element's position to supplement x coordinate
+        // Chrome returns (0, y, 0, 0) — only y is valid. Supplement x from the
+        // element's position.
+        if bounds.size.width == 0 && bounds.size.height == 0 {
             var posValue: AnyObject?
             if AXUIElementCopyAttributeValue(axElement, kAXPositionAttribute as CFString, &posValue) == .success,
                let pv = validatedAXValue(posValue) {
@@ -249,22 +249,15 @@ public enum CursorRectResolver {
                     DebugLogger.log("Hanja AX: element position was not a CGPoint")
                     return nil
                 }
-
-                // Use element x + small offset, AX y, default height
-                let defaultHeight: CGFloat = 18
-                guard let screenHeight = NSScreen.main?.frame.height else { return nil }
-                let flippedY = screenHeight - bounds.origin.y - defaultHeight
-                let result = NSRect(x: pos.x, y: flippedY, width: 0, height: defaultHeight)
-                DebugLogger.log("Hanja AX: Chrome partial → supplemented with element pos: \(result)")
-
-                if isValidCursorRect(result) { return result }
+                if let result = chromiumPartialCaret(bounds, elementX: pos.x, primaryHeight: primaryHeight) {
+                    DebugLogger.log("Hanja AX: Chrome partial → supplemented with element pos: \(result)")
+                    if isValidCursorRect(result) { return result }
+                }
             }
         }
 
         // Normal case: full bounds available
-        guard let screenHeight = NSScreen.main?.frame.height else { return nil }
-        let flippedY = screenHeight - bounds.origin.y - bounds.size.height
-        let result = NSRect(x: bounds.origin.x, y: flippedY, width: bounds.size.width, height: bounds.size.height)
+        let result = appKitRect(fromAX: bounds, primaryHeight: primaryHeight)
 
         guard isValidCursorRect(result) else {
             DebugLogger.log("Hanja AX: converted rect invalid: \(result)")
@@ -295,16 +288,47 @@ public enum CursorRectResolver {
         }
 
         // Use the bottom-left of the element as a rough caret position
-        guard let screenHeight = NSScreen.main?.frame.height else { return nil }
+        guard let primaryHeight = primaryDisplayHeight else { return nil }
         let defaultHeight: CGFloat = 18
-        // Place at element's x, and bottom of element (y + height in AX coords)
-        let axBottom = pos.y + size.height
-        let flippedY = screenHeight - axBottom
-        let result = NSRect(x: pos.x, y: flippedY, width: 0, height: defaultHeight)
+        let bottomLeft = appKitRect(fromAX: CGRect(x: pos.x, y: pos.y + size.height, width: 0, height: 0),
+                                    primaryHeight: primaryHeight)
+        let result = NSRect(x: pos.x, y: bottomLeft.minY, width: 0, height: defaultHeight)
 
         DebugLogger.log("Hanja AX: element position fallback: \(result)")
         guard isValidCursorRect(result) else { return nil }
         return result
+    }
+
+    // MARK: - Accessibility Coordinates
+
+    /// Height of the primary display, the one with the menu bar. Accessibility
+    /// reports global coordinates from ITS top-left corner with y growing down;
+    /// AppKit's screen coordinates start at its bottom-left with y growing up.
+    /// Not `NSScreen.main`, which is the display with the key window: when that
+    /// is an external display of another height, the caret lands off by the
+    /// difference.
+    static var primaryDisplayHeight: CGFloat? {
+        NSScreen.screens.first?.frame.height
+    }
+
+    /// An Accessibility rect in AppKit screen coordinates.
+    static func appKitRect(fromAX rect: CGRect, primaryHeight: CGFloat) -> NSRect {
+        NSRect(x: rect.origin.x, y: primaryHeight - rect.origin.y - rect.height,
+               width: rect.width, height: rect.height)
+    }
+
+    /// Chromium answers AXBoundsForRange with only a y: (0, y, 0, 0). With the
+    /// focused element's x that still places the caret's line. A display above
+    /// or left of the primary one has negative coordinates, so a real y is told
+    /// from a missing one by its magnitude, not its sign. `nil` when `bounds` is
+    /// not such a partial answer.
+    static func chromiumPartialCaret(_ bounds: CGRect, elementX: CGFloat, primaryHeight: CGFloat) -> NSRect? {
+        guard bounds.width == 0, bounds.height == 0, bounds.origin.y.isFinite, abs(bounds.origin.y) > 1 else {
+            return nil
+        }
+        let lineHeight: CGFloat = 18
+        return appKitRect(fromAX: CGRect(x: elementX, y: bounds.origin.y, width: 0, height: lineHeight),
+                          primaryHeight: primaryHeight)
     }
 
     private static func validatedAXElement(_ value: AnyObject?) -> AXUIElement? {

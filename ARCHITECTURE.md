@@ -189,7 +189,7 @@ Caps Lock, 입력 메뉴, 그리고 4단계 통보에 대한 응답이 모두 �
 1. `firstRect(forCharacterRange:)`: 조합 영역, 없으면 선택 영역.
 2. 1이 무효이면 `attributes(forCharacterIndex:lineHeightRectangle:)`.
 3. 같은 클라이언트(입력창)의 직전 한자 검색에서 얻은 좌표. 다른 클라이언트의 좌표는 쓰지 않는다. 그 입력창은 다른 창이나 다른 모니터에 있을 수 있다.
-4. 손쉬운 사용 API: 포커스된 요소의 `AXSelectedTextRange`와 `AXBoundsForRange`, 안 되면 요소의 위치와 크기.
+4. 손쉬운 사용 API: 포커스된 요소의 `AXSelectedTextRange`와 `AXBoundsForRange`, 안 되면 요소의 위치와 크기. 손쉬운 사용 좌표(주 화면 왼쪽 위 기준, y 아래로)는 주 화면(메뉴 막대가 있는 화면)의 높이로 뒤집는다. Chromium이 y만 주는 응답 `(0, y, 0, 0)`은 요소의 x로 보충하며, 주 화면 위나 왼쪽 모니터의 음수 y도 받는다.
 5. 마우스 위치.
 
 유효성(`isValidCursorRect`): 값이 모두 유한하고, 높이가 양수이며, x·y의 절댓값이 1보다 크고, 원점이 연결된 화면 안에 있어야 한다. 음수 좌표는 주 화면 왼쪽·아래의 보조 모니터에서 정상이므로 부호는 보지 않는다.
