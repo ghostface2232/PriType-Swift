@@ -138,10 +138,11 @@ public enum CursorRectResolver {
 
     // MARK: - Accessibility API Cursor Position
 
-    /// Per call. Generous for an app that is merely slow (Chromium turns its
-    /// accessibility support on at the first query), short enough that a hung
-    /// app costs a noticeable pause rather than a frozen keyboard.
-    private static let accessibilityTimeout: Float = 0.25
+    /// Per call. Not measured against a real slow app: chosen to leave room for
+    /// one that is merely slow (Chromium turns its accessibility support on at
+    /// the first query) while a hung app costs at most about 3s — the six calls
+    /// of one lookup — instead of freezing typing for over half a minute.
+    private static let accessibilityTimeout: Float = 0.5
 
     /// Get cursor position via macOS Accessibility API
     /// Chromium/Electron apps have broken IMK firstRect but properly implement AX text attributes.
