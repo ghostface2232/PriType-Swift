@@ -730,8 +730,7 @@ struct SettingsView: View {
     }
 
     private func openLatestRelease() {
-        let url = URL(string: "https://github.com/Meapri/PriType-Swift/releases/latest")!
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(AboutInfo.latestReleaseURL)
     }
 
     private func openInputSourceSettings() {

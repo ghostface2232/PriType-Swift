@@ -31,6 +31,17 @@ public struct AboutInfo: Sendable {
         "\(version) (\(releaseChannel.displayName))"
     }
     
+    /// GitHub repository that publishes PriType releases (`owner/name`).
+    ///
+    /// Update checks and the "latest release" link both read this, so a fork
+    /// only has to change it here.
+    public static let repository = "ghostface2232/PriType-Swift"
+
+    /// Page of the newest stable release on GitHub.
+    public static var latestReleaseURL: URL {
+        URL(string: "https://github.com/\(repository)/releases/latest")!
+    }
+
     /// Copyright notice (localized)
     public static var copyright: String { L10n.app.copyright }
     

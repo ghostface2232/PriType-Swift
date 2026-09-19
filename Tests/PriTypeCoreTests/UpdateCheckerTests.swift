@@ -201,7 +201,7 @@ struct UpdateCheckerTests {
     ) -> UpdateChecker.GitHubRelease {
         UpdateChecker.GitHubRelease(
             tagName: tagName,
-            htmlUrl: "https://github.com/Meapri/PriType-Swift/releases/tag/\(tagName)",
+            htmlUrl: "https://github.com/\(AboutInfo.repository)/releases/tag/\(tagName)",
             name: name,
             body: nil,
             draft: draft,
