@@ -108,3 +108,7 @@
 /* Experimental */
 "experimental.directInsertion" = "윈도우식 직접 입력";
 "experimental.directInsertionDescription" = "조합 중인 글자를 밑줄 없이 바로 입력합니다. macOS 26부터 조합 밑줄을 없애는 유일한 방법입니다. 네이티브 앱에만 적용되고, 웹·Electron 앱과 터미널에서는 기존 방식으로 동작합니다.";
+
+/* Input menu */
+"menu.settings" = "PriType 설정…";
+"menu.about" = "PriType 정보";

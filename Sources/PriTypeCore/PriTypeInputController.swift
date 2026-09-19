@@ -540,14 +540,14 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         let menu = NSMenu()
 
         // Settings
-        let settingsItem = NSMenuItem(title: "PriType 설정...", action: #selector(openSettings(_:)), keyEquivalent: "")
+        let settingsItem = NSMenuItem(title: L10n.menu.settings, action: #selector(openSettings(_:)), keyEquivalent: "")
         settingsItem.target = self
         menu.addItem(settingsItem)
 
         menu.addItem(NSMenuItem.separator())
 
         // About
-        let aboutItem = NSMenuItem(title: "PriType 정보", action: #selector(showAbout(_:)), keyEquivalent: "")
+        let aboutItem = NSMenuItem(title: L10n.menu.about, action: #selector(showAbout(_:)), keyEquivalent: "")
         aboutItem.target = self
         menu.addItem(aboutItem)
 

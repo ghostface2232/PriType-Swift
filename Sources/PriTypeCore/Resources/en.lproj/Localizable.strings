@@ -108,3 +108,7 @@
 /* Experimental */
 "experimental.directInsertion" = "Windows-Style Direct Input";
 "experimental.directInsertionDescription" = "Types the syllable you’re composing without an underline, the only way to do so since macOS 26. Works in native apps; web apps, Electron apps and terminals keep the standard behavior.";
+
+/* Input menu */
+"menu.settings" = "PriType Settings…";
+"menu.about" = "About PriType";

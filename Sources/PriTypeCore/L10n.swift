@@ -91,6 +91,14 @@ public enum L10n {
         public static var version: String { localized("about.version") }
     }
     
+    // MARK: - Input Menu
+
+    /// Items PriType adds to the system input menu.
+    public enum menu {
+        public static var settings: String { localized("menu.settings") }
+        public static var about: String { localized("menu.about") }
+    }
+
     // MARK: - App
     
     public enum app {
