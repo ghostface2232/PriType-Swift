@@ -45,8 +45,14 @@ public final class HanjaManager: @unchecked Sendable {
     }
 
     /// Map the dictionary, or wait for the thread that is mapping it. For the
-    /// launch-time preload; key presses go through `search`, which never waits.
+    /// launch-time preload and turning Hanja conversion on; key presses go through
+    /// `search`, which never waits.
     public func loadIfNeeded() {
+        // Hanja turned off and on again while the first load still runs: this
+        // request is the newer one, so that load's result is kept after all.
+        // Without this the wait below ends with the dictionary unmapped, and the
+        // first Hanja key maps it on the main thread.
+        condition.withLock { discardLoadInProgress = false }
         guard dictionary() == nil else { return }
         condition.withLock {
             while case .loading = state { condition.wait() }
