@@ -164,30 +164,34 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// - A different client object ⇒ new session (full context analysis).
     /// - Same client after deactivateServer ⇒ re-analyze (focus may have moved to a
     ///   different field of the same app, e.g. a password field).
-    /// - Finder lightweight context ⇒ re-analyze per keystroke (desktop vs. rename
-    ///   field can only be told apart by coordinates at keystroke time).
+    /// - Lightweight context from activation ⇒ full analysis on the first key. For
+    ///   Finder that is where desktop and rename field are told apart, by the
+    ///   coordinates the field reports once it is actually typed into.
     private func ensureSession(for client: IMKTextInput) -> InputSession {
         if let session, session.matches(client) {
             if session.contextNeedsRefresh || session.context.isLightweight {
                 session.refreshContext(ClientContextDetector.analyze(client: client))
                 session.armFocusLossFinalizer()
-            } else if session.context.isLightweight && session.context.isFinder {
-                session.refreshContext(ClientContextDetector.analyze(client: client))
             }
             return session
         }
 
         DebugLogger.log("PriTypeInputController: client changed or no session, analyzing (Slow Path)")
+        let newSession = replaceSession(client: client, context: ClientContextDetector.analyze(client: client))
+        syncRomanKeyboardLayout(for: client)
+        return newSession
+    }
+
+    /// End the current session's composition and make a new one for `client` the
+    /// live session. The old session stops watching focus: the composer is shared,
+    /// so its observer firing later would flush the new session's text into the
+    /// old client.
+    private func replaceSession(client: IMKTextInput, context: ClientContext) -> InputSession {
         session?.finalize(reason: .deactivateServer)
-        let newSession = InputSession(
-            client: client,
-            context: ClientContextDetector.analyze(client: client),
-            composer: composer
-        )
         session?.disarmFocusLossFinalizer()
+        let newSession = InputSession(client: client, context: context, composer: composer)
         session = newSession
         newSession.armFocusLossFinalizer()
-        syncRomanKeyboardLayout(for: client)
         return newSession
     }
 
@@ -198,13 +202,9 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     private func finalizeActiveComposition(sender: Any?, reason: CompositionFinalizeReason) {
         guard Self.sharedController === self else { return }
         let senderClient = sender as? IMKTextInput
-        if let session {
-            if session.adapter is DirectInsertionAdapter
-                || senderClient == nil
-                || session.matches(senderClient!) {
-                session.finalize(reason: reason)
-                return
-            }
+        if let session, session.adapter is DirectInsertionAdapter || senderClient.map(session.matches) ?? true {
+            session.finalize(reason: reason)
+            return
         }
         if let senderClient, composer.hasActiveComposition {
             InputSession.finalizeMarkedComposition(composer: composer, client: senderClient, reason: reason)
@@ -290,18 +290,13 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
                 // Repeated activation in Chromium must preserve direct-preedit tracking.
                 existing.armFocusLossFinalizer()
             } else {
-                session?.finalize(reason: .deactivateServer)
-                // PERFORMANCE: Analyze context ONCE per activation (lightweight — no
-                // client IPC) and let `ensureSession` upgrade it lazily. This avoids
-                // heavy IPC calls (validAttributes, coordinates) on every focus change.
-                let newSession = InputSession(
+                // Lightweight context: no client IPC on a focus change. The first
+                // key upgrades it (`ensureSession`), paying for validAttributes and
+                // coordinates only in fields that are actually typed into.
+                let newSession = replaceSession(
                     client: client,
-                    context: ClientContextDetector.analyzeForActivation(client: client),
-                    composer: composer
+                    context: ClientContextDetector.analyzeForActivation(client: client)
                 )
-                session?.disarmFocusLossFinalizer()
-                session = newSession
-                newSession.armFocusLossFinalizer()
                 DebugLogger.log("Activated for client: \(newSession.context.bundleId) (Lightweight Context)")
             }
         } else {
@@ -311,9 +306,6 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             session?.disarmFocusLossFinalizer()
             session?.markContextStale()
         }
-
-        // Set as active controller for toggle access
-        Self.sharedController = self
     }
 
     override public func deactivateServer(_ sender: Any!) {
