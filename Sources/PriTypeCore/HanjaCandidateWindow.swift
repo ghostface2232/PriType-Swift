@@ -45,16 +45,19 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         }
     }
 
-    /// Whether the window is showing candidates, readable from any thread.
+    /// How many candidates the shown page has (0: no window), readable from any
+    /// thread.
     ///
     /// The event tap consults it on every keyDown so it can route candidate keys
     /// itself. Some clients never hand those keys to the input method: once the
     /// syllable is committed for the lookup, Terminal sends Escape, the arrows
     /// and Return straight to the shell — Return would run the command line
-    /// instead of choosing a candidate. Set on show, cleared on every dismissal.
-    private static let acceptingKeysState = OSAllocatedUnfairLock(initialState: false)
-    public static var isAcceptingKeys: Bool { acceptingKeysState.withLock { $0 } }
-    static func setAcceptingKeys(_ value: Bool) { acceptingKeysState.withLock { $0 = value } }
+    /// instead of choosing a candidate. The count, not just a flag, because a
+    /// digit past the page's last candidate is not a candidate key: the tap must
+    /// let it through. Set whenever a page is drawn, cleared on every dismissal.
+    private static let pageCandidatesState = OSAllocatedUnfairLock(initialState: 0)
+    public static var shownPageCandidates: Int { pageCandidatesState.withLock { $0 } }
+    static func setShownPageCandidates(_ count: Int) { pageCandidatesState.withLock { $0 = count } }
 
     /// Watches for clicks outside the panel while it is up (`watchClicks`).
     private var clickMonitor: Any?
@@ -147,7 +150,6 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         updateContent()
         positionWindow(near: cursorRect)
         panel.orderFrontRegardless()
-        Self.setAcceptingKeys(true)
         watchClicks()
 
         DebugLogger.log("Hanja: Window shown at \(panel.frame), level=\(panel.level.rawValue)")
@@ -190,7 +192,7 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
 
     @MainActor
     private func dismissOnMain() {
-        Self.setAcceptingKeys(false)
+        Self.setShownPageCandidates(0)
         stopWatchingClicks()
         window?.orderOut(nil)
         candidates = []
@@ -229,14 +231,18 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         case ignore
     }
 
+    private static let digitKeys: [Int64: Int] = [18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9,
+                                                  83: 1, 84: 2, 85: 3, 86: 4, 87: 5, 88: 6, 89: 7, 91: 8, 92: 9]
+
     /// Candidate-key routing by physical key, so digits work on any layout
     /// (AZERTY types them only with Shift). Keys with Command, Control or Option
-    /// are shortcuts and are never routed.
-    public static func route(keyCode: Int64, flags: CGEventFlags) -> RoutedKey {
+    /// are shortcuts and are never routed. A digit with no candidate on the page
+    /// closes the window and reaches the app, as it does on the IMK path.
+    public static func route(keyCode: Int64, flags: CGEventFlags, pageCandidates: Int) -> RoutedKey {
         if !flags.intersection([.maskCommand, .maskControl, .maskAlternate]).isEmpty { return .ignore }
-        let digits: [Int64: Int] = [18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9,
-                                    83: 1, 84: 2, 85: 3, 86: 4, 87: 5, 88: 6, 89: 7, 91: 8, 92: 9]
-        if let digit = digits[keyCode], !flags.contains(.maskShift) { return .consume(digit: digit) }
+        if let digit = digitKeys[keyCode], !flags.contains(.maskShift) {
+            return digit <= pageCandidates ? .consume(digit: digit) : .dismissAndPass
+        }
         switch keyCode {
         case 53, 36, 76, 125, 126, 48, 30, 33: return .consume(digit: nil)   // Esc Return Enter ↓ ↑ Tab ] [
         case 123, 124: return .dismissAndPass                                 // ← →
@@ -330,7 +336,7 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
     /// Used after selection, where the onSelect callback already handles state cleanup
     @MainActor
     private func dismissWithoutCallback() {
-        Self.setAcceptingKeys(false)
+        Self.setShownPageCandidates(0)
         stopWatchingClicks()
         window?.orderOut(nil)
         candidates = []
@@ -348,6 +354,7 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         let endIndex = min(startIndex + pageSize, candidates.count)
         let pageEntries = Array(candidates[startIndex..<endIndex])
         let totalPages = (candidates.count + pageSize - 1) / pageSize
+        Self.setShownPageCandidates(pageEntries.count)
         
         let view = HanjaCandidateView(
             entries: pageEntries,

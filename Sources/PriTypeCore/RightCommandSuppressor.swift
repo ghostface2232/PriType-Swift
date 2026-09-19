@@ -444,8 +444,9 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             // Candidate keys while the Hanja window is up. Routed here rather than
             // through IMK because some clients (Terminal) never pass Escape, the
             // arrows or Return to the input method once nothing is marked.
-            if HanjaCandidateWindow.isAcceptingKeys {
-                switch HanjaCandidateWindow.route(keyCode: keyCode, flags: event.flags) {
+            let pageCandidates = HanjaCandidateWindow.shownPageCandidates
+            if pageCandidates > 0 {
+                switch HanjaCandidateWindow.route(keyCode: keyCode, flags: event.flags, pageCandidates: pageCandidates) {
                 case .consume(let digit):
                     let code = UInt16(keyCode)
                     DispatchQueue.main.async {
