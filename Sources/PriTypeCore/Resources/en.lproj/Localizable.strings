@@ -1,17 +1,6 @@
 /* PriType Settings UI - English */
 
-/* General */
-"settings.title" = "Settings";
-"settings.footer" = "Designed for macOS";
-
-/* Toggle Key */
-"toggle.title" = "Korean/English Toggle";
-"toggle.rightCmd" = "⌘ Right Command";
-"toggle.ctrlSpace" = "⌃ Control + Space";
-"toggle.description" = "Choose the key to toggle between Korean and English";
-
 /* Key Binding */
-"keyBinding.title" = "Key Settings";
 "keyBinding.toggleKey" = "Toggle Key";
 "keyBinding.hanjaKey" = "Hanja Key";
 "keyBinding.toggleTrigger" = "Switch Timing";
@@ -24,11 +13,8 @@
 "keyBinding.hanjaEnabledDescription" = "When off, the Hanja dictionary isn’t loaded and the Hanja key works as usual.";
 "keyBinding.disabledByHanjaOff" = "Disabled while Hanja conversion is off";
 "keyBinding.recording" = "Press a key...";
-"keyBinding.change" = "Change";
 "keyBinding.conflict" = "Cannot use the same key";
 "keyBinding.conflictRestored" = "Cannot use the same key. Restored the previous setting.";
-"keyBinding.reset" = "Reset to Default";
-"keyBinding.capsLockSummary" = "When Caps Lock input-source switching is on, PriType's toggle key is disabled.";
 "keyBinding.capsLockStatusTitle" = "Caps Lock input-source switch";
 "keyBinding.capsLockStatusOn" = "On";
 "keyBinding.capsLockStatusOff" = "Off";
@@ -41,7 +27,6 @@
 "keyBinding.capsLockOpenSettings" = "Open Input Source Settings";
 
 /* About */
-"about.title" = "About";
 "about.description" = "Korean Input Method for macOS";
 "about.version" = "Version";
 
@@ -61,7 +46,6 @@
 "update.autoCheck" = "Automatically check for updates";
 
 /* System */
-"system.title" = "System Options";
 "system.accessibility" = "Accessibility Permission";
 "system.accessibilityGranted" = "Granted";
 "system.accessibilityRequest" = "Request Permission";
@@ -76,7 +60,6 @@
 "system.removeABCFailed" = "Failed";
 
 /* Toggle Key App Exclusions */
-"exclusions.title" = "Toggle Key Exclusions";
 "exclusions.subtitle" = "While these apps are in front, the toggle and Hanja keys pass straight through. Useful for remote desktops and virtual machines.";
 "exclusions.addButton" = "Add App…";
 "exclusions.removeButton" = "Remove";

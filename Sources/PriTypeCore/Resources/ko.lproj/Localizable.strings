@@ -1,17 +1,6 @@
 /* PriType Settings UI - Korean */
 
-/* General */
-"settings.title" = "설정";
-"settings.footer" = "Designed for macOS";
-
-/* Toggle Key */
-"toggle.title" = "한/영 전환";
-"toggle.rightCmd" = "⌘ 오른쪽 Command";
-"toggle.ctrlSpace" = "⌃ Control + Space";
-"toggle.description" = "한/영 전환에 사용할 키를 선택하세요";
-
 /* Key Binding */
-"keyBinding.title" = "키 설정";
 "keyBinding.toggleKey" = "한/영 전환키";
 "keyBinding.hanjaKey" = "한자 입력키";
 "keyBinding.toggleTrigger" = "전환 시점";
@@ -24,11 +13,8 @@
 "keyBinding.hanjaEnabledDescription" = "끄면 한자 사전을 불러오지 않고, 한자키는 원래 키로 동작합니다.";
 "keyBinding.disabledByHanjaOff" = "한자 변환이 꺼져 있어 비활성화됨";
 "keyBinding.recording" = "키를 입력하세요...";
-"keyBinding.change" = "변경";
 "keyBinding.conflict" = "같은 키는 사용할 수 없습니다";
 "keyBinding.conflictRestored" = "같은 키는 사용할 수 없습니다. 기존 설정으로 복원했습니다.";
-"keyBinding.reset" = "기본값으로 복원";
-"keyBinding.capsLockSummary" = "Caps Lock 입력 소스 전환이 켜져 있으면 PriType 한/영 전환키는 비활성화됩니다.";
 "keyBinding.capsLockStatusTitle" = "Caps Lock 입력 소스 전환";
 "keyBinding.capsLockStatusOn" = "켜짐";
 "keyBinding.capsLockStatusOff" = "꺼짐";
@@ -41,7 +27,6 @@
 "keyBinding.capsLockOpenSettings" = "입력 소스 설정 열기";
 
 /* About */
-"about.title" = "정보";
 "about.description" = "macOS용 한글 입력기";
 "about.version" = "버전";
 
@@ -61,7 +46,6 @@
 "update.autoCheck" = "자동으로 업데이트 확인";
 
 /* System */
-"system.title" = "시스템 옵션";
 "system.accessibility" = "손쉬운 사용 권한";
 "system.accessibilityGranted" = "허용됨";
 "system.accessibilityRequest" = "권한 요청";
@@ -76,7 +60,6 @@
 "system.removeABCFailed" = "비활성화 실패";
 
 /* Toggle Key App Exclusions */
-"exclusions.title" = "전환키 제외 앱";
 "exclusions.subtitle" = "이 앱들이 앞에 있으면 전환키와 한자키를 앱에 그대로 넘깁니다. 원격 데스크톱이나 가상 머신에서 유용합니다.";
 "exclusions.addButton" = "앱 추가…";
 "exclusions.removeButton" = "제거";
