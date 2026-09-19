@@ -44,7 +44,7 @@ public enum ABCLayoutStatusProbe {
     /// the main thread.
     public static func isABCDisabledInFreshProcess(
         executable: URL? = Bundle.main.executableURL,
-        timeout: TimeInterval = 5
+        timeout: TimeInterval = 2
     ) -> Bool {
         guard let executable else {
             DebugLogger.log("ABCLayoutStatusProbe: no executable URL")
