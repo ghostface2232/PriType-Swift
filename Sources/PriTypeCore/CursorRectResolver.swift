@@ -138,6 +138,11 @@ public enum CursorRectResolver {
 
     // MARK: - Accessibility API Cursor Position
 
+    /// Per call. Generous for an app that is merely slow (Chromium turns its
+    /// accessibility support on at the first query), short enough that a hung
+    /// app costs a noticeable pause rather than a frozen keyboard.
+    private static let accessibilityTimeout: Float = 0.25
+
     /// Get cursor position via macOS Accessibility API
     /// Chromium/Electron apps have broken IMK firstRect but properly implement AX text attributes.
     /// Uses AXSelectedTextRange → AXBoundsForRange to get the caret's screen coordinates.
@@ -145,6 +150,13 @@ public enum CursorRectResolver {
     /// - Returns: NSRect of the caret position in screen coordinates (bottom-left origin), or nil if unavailable
     private static func getCursorRectViaAccessibility() -> NSRect? {
         let systemWide = AXUIElementCreateSystemWide()
+        // Every call below is a synchronous round trip to the focused app, on the
+        // main thread that all of PriType's typing runs on. The default timeout is
+        // about six seconds per call, so a busy app could freeze input everywhere
+        // for tens of seconds. On the system-wide element this sets the timeout for
+        // every element the process creates; a caret is useless that late anyway,
+        // and the mouse position is the next fallback.
+        AXUIElementSetMessagingTimeout(systemWide, accessibilityTimeout)
 
         // Get the currently focused UI element
         var focusedElement: AnyObject?
