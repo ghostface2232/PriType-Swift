@@ -166,7 +166,7 @@ public final class UpdateChecker: @unchecked Sendable {
             // Record successful check time
             ConfigurationManager.shared.lastUpdateCheck = Date()
             
-            if Self.isNewer(latestVersion, than: currentVersion) {
+            if Self.offersUpdate(latest: latestVersion, current: currentVersion, channel: AboutInfo.releaseChannel) {
                 // Find PKG asset download URL
                 let pkgAsset = release.assets.first { $0.name.hasSuffix(".pkg") }
                 
@@ -246,6 +246,17 @@ public final class UpdateChecker: @unchecked Sendable {
     ///   `CFBundleShortVersionString` to the tag string exactly, so the only way to
     ///   reach that state is to tag both forms — which would be two tags for one
     ///   semantic version. Keep tags to a single canonical form.
+    /// Whether the latest stable release should be offered to this build.
+    ///
+    /// A beta carries its release's final version number: `v2.8.0-beta.1` ships
+    /// with CFBundleShortVersionString 2.8.0 (release.yml enforces it). So a
+    /// stable release of the same number is the build that beta led up to, and
+    /// is newer even though the numbers compare equal.
+    static func offersUpdate(latest: String, current: String, channel: ReleaseChannel) -> Bool {
+        if isNewer(latest, than: current) { return true }
+        return channel == .beta && !isNewer(current, than: latest)
+    }
+
     static func isNewer(_ latest: String, than current: String) -> Bool {
         let lhs = versionComponents(latest)
         let rhs = versionComponents(current)

@@ -7,6 +7,14 @@ import Foundation
 @Suite("UpdateChecker")
 struct UpdateCheckerTests {
     
+    @Test("A beta is offered the stable release of its own version, a stable build is not")
+    func betaIsOfferedItsStableRelease() {
+        #expect(UpdateChecker.offersUpdate(latest: "2.8.0", current: "2.8.0", channel: .beta))
+        #expect(!UpdateChecker.offersUpdate(latest: "2.8.0", current: "2.8.0", channel: .stable))
+        #expect(!UpdateChecker.offersUpdate(latest: "2.7.4", current: "2.8.0", channel: .beta))
+        #expect(UpdateChecker.offersUpdate(latest: "2.8.1", current: "2.8.0", channel: .stable))
+    }
+
     @Test("Version comparison: newer version detected")
     func newerVersionDetected() {
         #expect(UpdateChecker.isNewer("2.5.0", than: "2.4.2"))
