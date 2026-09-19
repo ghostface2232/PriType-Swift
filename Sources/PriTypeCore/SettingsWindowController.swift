@@ -28,42 +28,21 @@ public class SettingsWindowController: NSObject {
         // Create hosting controller
         let hostingController = NSHostingController(rootView: settingsView)
 
-        // Create window with Liquid Glass style
+        // Laid out like System Settings: a full-height sidebar under the traffic
+        // lights and a unified toolbar that shows the selected pane's title.
+        // SwiftUI supplies the materials; the window only has to allow them.
+        hostingController.sceneBridgingOptions = [.toolbars]
         let newWindow = NSWindow(contentViewController: hostingController)
-        // Visually hidden (titleVisibility = .hidden) but still used by the Window
-        // menu, Mission Control, and VoiceOver — so keep it localized.
-        newWindow.title = "PriType \(L10n.settings.title)"
-        newWindow.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
-        newWindow.titlebarAppearsTransparent = true
-        newWindow.titleVisibility = .hidden
-        newWindow.isMovableByWindowBackground = true
-        newWindow.titlebarSeparatorStyle = .none
-
-        // Liquid Glass window background
-        newWindow.backgroundColor = .clear
-        newWindow.isOpaque = false
-
-        // Use native Liquid Glass on Tahoe and a vibrancy fallback on Sonoma/Sequoia.
-        if #available(macOS 26.0, *) {
-            let glassView = NSGlassEffectView()
-            glassView.cornerRadius = 14
-            glassView.contentView = hostingController.view
-            newWindow.contentView = glassView
-        } else {
-            let visualEffectView = NSVisualEffectView()
-            visualEffectView.material = .hudWindow
-            visualEffectView.blendingMode = .behindWindow
-            visualEffectView.state = .active
-            visualEffectView.addSubview(hostingController.view)
-            hostingController.view.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                hostingController.view.leadingAnchor.constraint(equalTo: visualEffectView.leadingAnchor),
-                hostingController.view.trailingAnchor.constraint(equalTo: visualEffectView.trailingAnchor),
-                hostingController.view.topAnchor.constraint(equalTo: visualEffectView.topAnchor),
-                hostingController.view.bottomAnchor.constraint(equalTo: visualEffectView.bottomAnchor)
-            ])
-            newWindow.contentView = visualEffectView
-        }
+        newWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        // An empty toolbar is what lets the sidebar run up under the traffic
+        // lights; the selected pane's navigationTitle fills in the title.
+        let toolbar = NSToolbar(identifier: "PriTypeSettings")
+        // The default display mode reserves a label row, which makes the
+        // toolbar 66pt tall instead of System Settings' 52pt.
+        toolbar.displayMode = .iconOnly
+        newWindow.toolbar = toolbar
+        newWindow.toolbarStyle = .unified
+        newWindow.setFrameAutosaveName("PriTypeSettings")
 
         // Set proper size to avoid truncation
         newWindow.setContentSize(NSSize(width: PriTypeConfig.settingsWindowWidth, height: PriTypeConfig.settingsWindowHeight))
@@ -140,22 +119,47 @@ struct SettingsView: View {
         case error
     }
 
+    @State private var selection: SettingsPane? = .switching
+
     var body: some View {
-        VStack(spacing: 0) {
-            settingsHeader
-                .zIndex(1)
+        NavigationSplitView {
+            List(selection: $selection) {
+                SettingsSidebarAppRow()
+                    .selectionDisabled()
 
-            ScrollView(.vertical, showsIndicators: false) {
-                settingsContent
-                    .padding(.top, 16)
-                    .padding(.bottom, 16)
-                    .padding(.horizontal, 28)
+                ForEach(SettingsPane.groups, id: \.self) { group in
+                    Section {
+                        ForEach(group) { pane in
+                            Label {
+                                Text(pane.title)
+                            } icon: {
+                                SettingsPaneIcon(pane: pane, size: 20)
+                            }
+                            .help(pane.description)
+                            .tag(pane)
+                        }
+                    }
+                }
             }
-            .clipped()
-
-            settingsFooter
+            .listStyle(.sidebar)
+            .frame(minWidth: PriTypeConfig.settingsSidebarWidth)
+            .navigationSplitViewColumnWidth(min: PriTypeConfig.settingsSidebarWidth, ideal: PriTypeConfig.settingsSidebarWidth, max: 280)
+            .toolbar(removing: .sidebarToggle)
+        } detail: {
+            let pane = selection ?? .switching
+            Form {
+                paneContent(pane)
+            }
+            .formStyle(.grouped)
+            // The grouped form leaves 20pt under the toolbar; System Settings
+            // leaves 12pt, so pull the content up by the difference.
+            .contentMargins(.top, -8, for: .scrollContent)
+            .navigationTitle(pane.title)
+            // NSHostingController does not bridge navigationTitle into the
+            // window, so the toolbar would read "Untitled" without this.
+            .background(WindowTitleSetter(title: pane.title))
         }
-        .frame(width: PriTypeConfig.settingsWindowWidth, height: PriTypeConfig.settingsWindowHeight)
+        .frame(minWidth: PriTypeConfig.settingsWindowWidth, minHeight: PriTypeConfig.settingsWindowHeight)
         .onAppear {
             toggleKeyBinding = ConfigurationManager.shared.toggleKeyBinding
             hanjaKeyBinding = ConfigurationManager.shared.hanjaKeyBinding
@@ -179,6 +183,56 @@ struct SettingsView: View {
         } message: {
             Text(L10n.keyBinding.capsLockBlockedMessage)
         }
+        // Attached at the root so a change is saved whichever pane made it.
+        .onChange(of: toggleKeyBinding) { _, newValue in
+            if isRestoringKeyBinding {
+                isRestoringKeyBinding = false
+                return
+            }
+            if newValue == hanjaKeyBinding {
+                showRestoredConflict()
+                isRestoringKeyBinding = true
+                toggleKeyBinding = ConfigurationManager.shared.toggleKeyBinding
+                return
+            }
+            ConfigurationManager.shared.toggleKeyBinding = newValue
+            clearKeyConflict()
+        }
+        .onChange(of: toggleTrigger) { _, newValue in
+            ConfigurationManager.shared.toggleTrigger = newValue
+            RightCommandSuppressor.shared.restartForTriggerChange()
+        }
+        .onChange(of: hanjaEnabled) { _, isOn in
+            ConfigurationManager.shared.hanjaEnabled = isOn
+            if isOn {
+                DispatchQueue.global(qos: .utility).async {
+                    HanjaManager.shared.loadIfNeeded()
+                }
+            } else {
+                PriTypeInputController.sharedComposer.dismissHanjaCandidates(reason: "Hanja turned off")
+                HanjaManager.shared.unload()
+            }
+        }
+        .onChange(of: hanjaKeyBinding) { _, newValue in
+            if isRestoringKeyBinding {
+                isRestoringKeyBinding = false
+                return
+            }
+            if newValue == toggleKeyBinding {
+                showRestoredConflict()
+                isRestoringKeyBinding = true
+                hanjaKeyBinding = ConfigurationManager.shared.hanjaKeyBinding
+                return
+            }
+            ConfigurationManager.shared.hanjaKeyBinding = newValue
+            clearKeyConflict()
+        }
+        .onChange(of: autoUpdateCheckEnabled) { _, newValue in
+            ConfigurationManager.shared.autoUpdateCheckEnabled = newValue
+        }
+        .onChange(of: experimentalDirectInsertion) { _, newValue in
+            ConfigurationManager.shared.experimentalDirectInsertion = newValue
+        }
         .onDisappear {
             removeABCTask?.cancel()
             removeABCTask = nil
@@ -190,461 +244,260 @@ struct SettingsView: View {
         }
     }
 
-    private var settingsContent: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            CapsLockStatusCard(
-                isEnabled: capsLockSwitchEnabled,
-                openSettings: openInputSourceSettings
+    @ViewBuilder
+    private func paneContent(_ pane: SettingsPane) -> some View {
+        switch pane {
+        case .switching: switchingPane
+        case .hanja: hanjaPane
+        case .exclusions: exclusionsPane
+        case .system: systemPane
+        case .update: updatePane
+        case .experimental: experimentalPane
+        }
+    }
+
+    @ViewBuilder
+    private var switchingPane: some View {
+        Section {
+            LabeledContent {
+                StatusLabel(
+                    title: capsLockSwitchEnabled ? L10n.keyBinding.capsLockStatusOn : L10n.keyBinding.capsLockStatusOff,
+                    systemImage: capsLockSwitchEnabled ? "checkmark.circle.fill" : "minus.circle.fill",
+                    color: capsLockSwitchEnabled ? .green : .secondary
+                )
+            } label: {
+                SettingsRowLabel(
+                    title: L10n.keyBinding.capsLockStatusTitle,
+                    subtitle: capsLockSwitchEnabled
+                        ? L10n.keyBinding.capsLockOnDescription : L10n.keyBinding.capsLockOffDescription
+                )
+            }
+
+            HStack {
+                Spacer()
+                Button(L10n.keyBinding.capsLockOpenSettings, action: openInputSourceSettings)
+            }
+        }
+
+        Section {
+            KeyRecorderRow(
+                label: L10n.keyBinding.toggleKey,
+                binding: $toggleKeyBinding,
+                conflictBinding: hanjaKeyBinding,
+                hasConflict: $hasKeyConflict,
+                isDisabled: capsLockSwitchEnabled,
+                disabledReason: L10n.keyBinding.disabledByCapsLock,
+                valueOverride: capsLockSwitchEnabled ? L10n.keyBinding.managedByMacOS : nil,
+                onCapsLockBlocked: { showCapsLockBlockedAlert = true }
             )
 
-            SettingsSection(
-                title: L10n.keyBinding.title,
-                icon: "command"
-            ) {
-                VStack(spacing: 0) {
-                    KeyRecorderRow(
-                        label: L10n.keyBinding.toggleKey,
-                        icon: "globe",
-                        binding: $toggleKeyBinding,
-                        conflictBinding: hanjaKeyBinding,
-                        hasConflict: $hasKeyConflict,
-                        isDisabled: capsLockSwitchEnabled,
-                        disabledReason: L10n.keyBinding.disabledByCapsLock,
-                        valueOverride: capsLockSwitchEnabled ? L10n.keyBinding.managedByMacOS : nil,
-                        onCapsLockBlocked: { showCapsLockBlockedAlert = true }
-                    )
-
-                    ToggleTriggerRow(
-                        trigger: $toggleTrigger,
-                        isDisabled: capsLockSwitchEnabled || !toggleKeyBinding.isModifierKey
-                            || !toggleKeyBinding.isModifierOnly
-                    )
-
-                    Divider()
-                        .opacity(0.2)
-                        .padding(.horizontal, 12)
-
-                    SettingsToggleRow(
-                        title: L10n.keyBinding.hanjaEnabled,
-                        subtitle: L10n.keyBinding.hanjaEnabledDescription,
-                        icon: "character.book.closed",
-                        isOn: $hanjaEnabled
-                    )
-
-                    Divider()
-                        .opacity(0.2)
-                        .padding(.horizontal, 12)
-
-                    KeyRecorderRow(
-                        label: L10n.keyBinding.hanjaKey,
-                        icon: "keyboard",
-                        binding: $hanjaKeyBinding,
-                        conflictBinding: toggleKeyBinding,
-                        hasConflict: $hasKeyConflict,
-                        isDisabled: !hanjaEnabled,
-                        disabledReason: L10n.keyBinding.disabledByHanjaOff,
-                        valueOverride: nil,
-                        onCapsLockBlocked: { showCapsLockBlockedAlert = true }
-                    )
-
-                    if hasKeyConflict {
-                        HStack(spacing: 4) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.orange)
-                            Text(showKeyConflictRestored ? L10n.keyBinding.conflictRestored : L10n.keyBinding.conflict)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.orange)
-                        }
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 12)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-
-                    // A binding that shadows a macOS shortcut is allowed, but the
-                    // user should know why that shortcut stopped responding.
-                    ForEach(systemShortcutWarnings, id: \.self) { warning in
-                        HStack(alignment: .top, spacing: 4) {
-                            Image(systemName: "info.circle.fill")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.orange)
-                            Text(warning)
-                                .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 12)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-                }
-            }
-            .onChange(of: toggleKeyBinding) { _, newValue in
-                if isRestoringKeyBinding {
-                    isRestoringKeyBinding = false
-                    return
-                }
-                if newValue == hanjaKeyBinding {
-                    showRestoredConflict()
-                    isRestoringKeyBinding = true
-                    toggleKeyBinding = ConfigurationManager.shared.toggleKeyBinding
-                    return
-                }
-                ConfigurationManager.shared.toggleKeyBinding = newValue
-                clearKeyConflict()
-            }
-            .onChange(of: toggleTrigger) { _, newValue in
-                ConfigurationManager.shared.toggleTrigger = newValue
-                RightCommandSuppressor.shared.restartForTriggerChange()
-            }
-            .onChange(of: hanjaEnabled) { _, isOn in
-                ConfigurationManager.shared.hanjaEnabled = isOn
-                if isOn {
-                    DispatchQueue.global(qos: .utility).async {
-                        HanjaManager.shared.loadIfNeeded()
-                    }
-                } else {
-                    PriTypeInputController.sharedComposer.dismissHanjaCandidates(reason: "Hanja turned off")
-                    HanjaManager.shared.unload()
-                }
-            }
-            .onChange(of: hanjaKeyBinding) { _, newValue in
-                if isRestoringKeyBinding {
-                    isRestoringKeyBinding = false
-                    return
-                }
-                if newValue == toggleKeyBinding {
-                    showRestoredConflict()
-                    isRestoringKeyBinding = true
-                    hanjaKeyBinding = ConfigurationManager.shared.hanjaKeyBinding
-                    return
-                }
-                ConfigurationManager.shared.hanjaKeyBinding = newValue
-                clearKeyConflict()
-            }
-
-            SettingsSection(
-                title: L10n.update.title,
-                icon: "arrow.triangle.2.circlepath"
-            ) {
-                VStack(spacing: 0) {
-                    SettingsToggleRow(
-                        title: L10n.update.autoCheck,
-                        icon: "clock.arrow.2.circlepath",
-                        isOn: $autoUpdateCheckEnabled
-                    )
-
-                    Divider()
-                        .opacity(0.2)
-                        .padding(.horizontal, 12)
-
-                    HStack(spacing: 10) {
-                        Button(action: { checkForUpdates() }) {
-                            HStack(spacing: 6) {
-                                if updateStatus == .checking {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                } else {
-                                    Image(systemName: "arrow.clockwise")
-                                        .font(.system(size: 12, weight: .medium))
-                                }
-                                Text(L10n.update.checkButton)
-                                    .font(.system(size: 13, weight: .medium))
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.roundedRectangle(radius: 7))
-                        .controlSize(.small)
-                        .disabled(updateStatus == .checking)
-
-                        Spacer()
-
-                        updateStatusView
-                    }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 12)
-                }
-            }
-            .onChange(of: autoUpdateCheckEnabled) { _, newValue in
-                ConfigurationManager.shared.autoUpdateCheckEnabled = newValue
-            }
-
-            SettingsSection(
-                title: L10n.system.title,
-                icon: "gearshape.2"
-            ) {
-                VStack(spacing: 0) {
-                    HStack(alignment: .top, spacing: 10) {
-                        SettingsRowIcon(systemName: "hand.raised")
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(L10n.system.accessibility)
-                                .font(.system(size: 14, weight: .regular))
-                                .foregroundStyle(.primary)
-
-                            Text(L10n.system.accessibilitySubtitle)
-                                .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .layoutPriority(1)
-
-                        Spacer()
-
-                        if isAccessibilityGranted {
-                            StatusPill(
-                                title: L10n.system.accessibilityGranted,
-                                systemImage: "checkmark.circle.fill",
-                                color: .green
-                            )
-                        } else {
-                            Button(action: { requestAccessibility() }) {
-                                Text(L10n.system.accessibilityRequest)
-                                    .font(.system(size: 12, weight: .medium))
-                            }
-                            .buttonStyle(.bordered)
-                            .buttonBorderShape(.roundedRectangle(radius: 7))
-                            .controlSize(.small)
-                        }
-                    }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 12)
-
-                    Divider()
-                        .opacity(0.15)
-                        .padding(.horizontal, 12)
-
-                    HStack(alignment: .top, spacing: 10) {
-                        SettingsRowIcon(systemName: "keyboard.badge.eye")
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(L10n.system.inputMonitoring)
-                                .font(.system(size: 14, weight: .regular))
-                                .foregroundStyle(.primary)
-
-                            Text(L10n.system.inputMonitoringSubtitle)
-                                .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .layoutPriority(1)
-
-                        Spacer()
-
-                        if inputMonitoringAccess == .granted {
-                            StatusPill(
-                                title: L10n.system.accessibilityGranted,
-                                systemImage: "checkmark.circle.fill",
-                                color: .green
-                            )
-                        } else {
-                            Button(action: { requestInputMonitoring() }) {
-                                Text(inputMonitoringAccess == .denied
-                                     ? L10n.system.openSystemSettings : L10n.system.accessibilityRequest)
-                                    .font(.system(size: 12, weight: .medium))
-                            }
-                            .buttonStyle(.bordered)
-                            .buttonBorderShape(.roundedRectangle(radius: 7))
-                            .controlSize(.small)
-                        }
-                    }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 12)
-
-                    Divider()
-                        .opacity(0.15)
-                        .padding(.horizontal, 12)
-
-                    // Disable default English (ABC) input source — restored 2.6.5 feature.
-                    HStack(alignment: .center, spacing: 10) {
-                        SettingsRowIcon(systemName: "minus.square")
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(L10n.system.removeABC)
-                                .font(.system(size: 14, weight: .regular))
-                                .foregroundStyle(.primary)
-
-                            Text(L10n.system.removeABCSubtitle)
-                                .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .layoutPriority(1)
-
-                        Spacer()
-
-                        switch removeABCStatus {
-                        case .working:
-                            ProgressView()
-                                .controlSize(.small)
-                        case .success:
-                            StatusPill(
-                                title: L10n.system.removeABCSuccess,
-                                systemImage: "checkmark.circle.fill",
-                                color: .green
-                            )
-                        case .error:
-                            StatusPill(
-                                title: L10n.system.removeABCFailed,
-                                systemImage: "exclamationmark.triangle.fill",
-                                color: .orange
-                            )
-                        case .idle:
-                            Button(action: { removeABCKeyboard() }) {
-                                Text(L10n.system.removeABCButton)
-                                    .font(.system(size: 12, weight: .medium))
-                                    .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
-                            }
-                            .buttonStyle(.bordered)
-                            .buttonBorderShape(.roundedRectangle(radius: 7))
-                            .controlSize(.small)
-                            .frame(minWidth: 70)
-                            // Overlapping attempts would spawn competing killalls
-                            // and competing status resets.
-                            .disabled(removeABCStatus == .working)
-                        }
-                    }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 12)
-                }
-            }
-
-            SettingsSection(
-                title: L10n.exclusions.title,
-                icon: "rectangle.on.rectangle.slash"
-            ) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(L10n.exclusions.subtitle)
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 10)
-                        .padding(.horizontal, 12)
-
-                    if excludedApps.isEmpty {
-                        Text(L10n.exclusions.empty)
-                            .font(.system(size: 12, weight: .regular))
-                            .foregroundStyle(.tertiary)
-                            .padding(.vertical, 10)
-                            .padding(.horizontal, 12)
-                    } else {
-                        ForEach(excludedApps) { app in
-                            Divider()
-                                .opacity(0.2)
-                                .padding(.horizontal, 12)
-
-                            HStack(spacing: 10) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(app.displayName)
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(.primary)
-                                    Text(app.bundleID)
-                                        .font(.system(size: 10, weight: .regular))
-                                        .foregroundStyle(.tertiary)
-                                }
-
-                                Spacer()
-
-                                Button(L10n.exclusions.removeButton) {
-                                    removeExcludedApp(app)
-                                }
-                                .buttonStyle(.bordered)
-                                .buttonBorderShape(.roundedRectangle(radius: 7))
-                                .controlSize(.small)
-                            }
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 12)
-                        }
-                    }
-
-                    Divider()
-                        .opacity(0.2)
-                        .padding(.horizontal, 12)
-
-                    HStack {
-                        Button(action: { addExcludedApp() }) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 12, weight: .medium))
-                                Text(L10n.exclusions.addButton)
-                                    .font(.system(size: 13, weight: .medium))
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.roundedRectangle(radius: 7))
-                        .controlSize(.small)
-
-                        Spacer()
-                    }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 12)
-                }
-            }
-
-            SettingsSection(
-                title: "실험적 기능",
-                icon: "flask"
-            ) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Toggle(isOn: $experimentalDirectInsertion) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("윈도우식 직접 입력 (실험)")
-                                .font(.system(size: 14, weight: .regular))
-                                .foregroundStyle(.primary)
-
-                            Text("조합 중인 글자를 밑줄 없는 실제 텍스트로 입력합니다. macOS 26부터는 시스템이 조합 밑줄을 강제하므로 밑줄 없는 한글 입력은 이 모드가 유일합니다. 네이티브 앱(카카오톡·메모 등)에 적용되며, 웹/Electron 앱(브라우저·VS Code·Slack 등)과 터미널은 텍스트 위치를 정확히 알 수 없어 자동으로 기존 방식으로 안전하게 동작합니다. 변경은 즉시 적용됩니다.")
-                                .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .layoutPriority(1)
-                    }
-                    .toggleStyle(.switch)
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 12)
-                }
-            }
-            .onChange(of: experimentalDirectInsertion) { _, newValue in
-                ConfigurationManager.shared.experimentalDirectInsertion = newValue
-            }
+            ToggleTriggerRow(
+                trigger: $toggleTrigger,
+                isDisabled: capsLockSwitchEnabled || !toggleKeyBinding.isModifierKey
+                    || !toggleKeyBinding.isModifierOnly
+            )
+        } footer: {
+            keyBindingNotes
         }
     }
 
-    private var settingsHeader: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                SettingsHeaderIcon()
+    @ViewBuilder
+    private var hanjaPane: some View {
+        Section {
+            Toggle(isOn: $hanjaEnabled) {
+                SettingsRowLabel(
+                    title: L10n.keyBinding.hanjaEnabled,
+                    subtitle: L10n.keyBinding.hanjaEnabledDescription
+                )
+            }
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("PriType")
-                        .font(.system(size: 23, weight: .semibold))
-                        .foregroundStyle(.primary)
-                    Text(L10n.settings.title)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.secondary)
+            KeyRecorderRow(
+                label: L10n.keyBinding.hanjaKey,
+                binding: $hanjaKeyBinding,
+                conflictBinding: toggleKeyBinding,
+                hasConflict: $hasKeyConflict,
+                isDisabled: !hanjaEnabled,
+                disabledReason: L10n.keyBinding.disabledByHanjaOff,
+                valueOverride: nil,
+                onCapsLockBlocked: { showCapsLockBlockedAlert = true }
+            )
+        } footer: {
+            keyBindingNotes
+        }
+    }
+
+    @ViewBuilder
+    private var exclusionsPane: some View {
+        Section {
+            if excludedApps.isEmpty {
+                Text(L10n.exclusions.empty)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(excludedApps) { app in
+                    LabeledContent {
+                        Button(L10n.exclusions.removeButton) { removeExcludedApp(app) }
+                    } label: {
+                        SettingsRowLabel(title: app.displayName, subtitle: app.bundleID)
+                    }
                 }
+            }
 
+            HStack {
                 Spacer()
+                Button(L10n.exclusions.addButton) { addExcludedApp() }
             }
-            .padding(.top, 24)
-            .padding(.bottom, 16)
-            .padding(.horizontal, 28)
-
-            Divider()
-                .opacity(0.22)
-                .padding(.horizontal, 20)
+        } footer: {
+            SettingsFootnote(L10n.exclusions.subtitle)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    private var settingsFooter: some View {
-        HStack {
-            Spacer()
-            Text("v\(AboutInfo.displayVersion)")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.tertiary)
-                .padding(.vertical, 7)
-            Spacer()
+    @ViewBuilder
+    private var systemPane: some View {
+        Section {
+            LabeledContent {
+                if isAccessibilityGranted {
+                    StatusLabel(
+                        title: L10n.system.accessibilityGranted,
+                        systemImage: "checkmark.circle.fill",
+                        color: .green
+                    )
+                } else {
+                    Button(L10n.system.accessibilityRequest) { requestAccessibility() }
+                }
+            } label: {
+                SettingsRowLabel(
+                    title: L10n.system.accessibility,
+                    subtitle: L10n.system.accessibilitySubtitle
+                )
+            }
+
+            LabeledContent {
+                if inputMonitoringAccess == .granted {
+                    StatusLabel(
+                        title: L10n.system.accessibilityGranted,
+                        systemImage: "checkmark.circle.fill",
+                        color: .green
+                    )
+                } else {
+                    Button(inputMonitoringAccess == .denied
+                           ? L10n.system.openSystemSettings : L10n.system.accessibilityRequest) {
+                        requestInputMonitoring()
+                    }
+                }
+            } label: {
+                SettingsRowLabel(
+                    title: L10n.system.inputMonitoring,
+                    subtitle: L10n.system.inputMonitoringSubtitle
+                )
+            }
+        }
+
+        // Disable default English (ABC) input source — restored 2.6.5 feature.
+        Section {
+            LabeledContent {
+                switch removeABCStatus {
+                case .working:
+                    ProgressView()
+                        .controlSize(.small)
+                case .success:
+                    StatusLabel(
+                        title: L10n.system.removeABCSuccess,
+                        systemImage: "checkmark.circle.fill",
+                        color: .green
+                    )
+                case .error:
+                    StatusLabel(
+                        title: L10n.system.removeABCFailed,
+                        systemImage: "exclamationmark.triangle.fill",
+                        color: .orange
+                    )
+                case .idle:
+                    Button(L10n.system.removeABCButton) { removeABCKeyboard() }
+                        // Overlapping attempts would spawn competing killalls
+                        // and competing status resets.
+                        .disabled(removeABCStatus == .working)
+                }
+            } label: {
+                SettingsRowLabel(
+                    title: L10n.system.removeABC,
+                    subtitle: L10n.system.removeABCSubtitle
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var updatePane: some View {
+        Section {
+            Toggle(L10n.update.autoCheck, isOn: $autoUpdateCheckEnabled)
+
+            LabeledContent(L10n.about.version) {
+                Text("v\(AboutInfo.displayVersion)")
+                    .textSelection(.enabled)
+            }
+
+            HStack(spacing: 8) {
+                updateStatusView
+                Spacer()
+                if updateStatus == .checking {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Button(L10n.update.checkButton) { checkForUpdates() }
+                    .disabled(updateStatus == .checking)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var experimentalPane: some View {
+        Section {
+            Toggle(isOn: $experimentalDirectInsertion) {
+                SettingsRowLabel(
+                    title: L10n.experimental.directInsertion,
+                    subtitle: L10n.experimental.directInsertionDescription
+                )
+            }
+        } footer: {
+            SettingsFootnote(L10n.pane.experimentalDescription)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Conflict and shadowed-shortcut notes shown under the key rows.
+    @ViewBuilder
+    private var keyBindingNotes: some View {
+        let warnings = systemShortcutWarnings
+        if hasKeyConflict || !warnings.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                if hasKeyConflict {
+                    Label(
+                        showKeyConflictRestored ? L10n.keyBinding.conflictRestored : L10n.keyBinding.conflict,
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(.orange)
+                    .transition(.opacity)
+                }
+
+                // A binding that shadows a macOS shortcut is allowed, but the
+                // user should know why that shortcut stopped responding.
+                ForEach(warnings, id: \.self) { warning in
+                    Label {
+                        Text(warning)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+            .font(.subheadline)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -657,41 +510,19 @@ struct SettingsView: View {
             EmptyView()
         case .checking:
             Text(L10n.update.checking)
-                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
         case .upToDate:
-            HStack(spacing: 4) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.green)
-                Text(L10n.update.upToDate)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .transition(.opacity)
+            StatusLabel(title: L10n.update.upToDate, systemImage: "checkmark.circle.fill", color: .green)
+                .transition(.opacity)
         case .available(let version):
             Button(action: { openLatestRelease() }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.cyan)
-                    Text(String(format: L10n.update.available, version))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.cyan)
-                }
+                Label(String(format: L10n.update.available, version), systemImage: "arrow.down.circle.fill")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.link)
             .transition(.opacity)
         case .error:
-            HStack(spacing: 4) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.orange)
-                Text(L10n.update.error)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .transition(.opacity)
+            StatusLabel(title: L10n.update.error, systemImage: "exclamationmark.triangle.fill", color: .orange)
+                .transition(.opacity)
         }
     }
 
@@ -931,185 +762,183 @@ struct SettingsView: View {
     }
 }
 
-struct SettingsHeaderIcon: View {
-    private var image: NSImage {
-        NSImage(named: "AppIcon") ?? NSApp.applicationIconImage
+// MARK: - Settings Components
+
+/// One page of the settings window, listed in the sidebar.
+enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
+    case switching
+    case hanja
+    case exclusions
+    case system
+    case update
+    case experimental
+
+    var id: String { rawValue }
+
+    /// Sidebar groups: how typing behaves, then the app itself.
+    static let groups: [[SettingsPane]] = [
+        [.switching, .hanja, .exclusions],
+        [.system, .update, .experimental],
+    ]
+
+    var title: String {
+        switch self {
+        case .switching: L10n.pane.switchingTitle
+        case .hanja: L10n.pane.hanjaTitle
+        case .exclusions: L10n.pane.exclusionsTitle
+        case .system: L10n.pane.systemTitle
+        case .update: L10n.update.title
+        case .experimental: L10n.pane.experimentalTitle
+        }
     }
 
+    var description: String {
+        switch self {
+        case .switching: L10n.pane.switchingDescription
+        case .hanja: L10n.pane.hanjaDescription
+        case .exclusions: L10n.exclusions.subtitle
+        case .system: L10n.pane.systemDescription
+        case .update: L10n.pane.updateDescription
+        case .experimental: L10n.pane.experimentalDescription
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .switching: "globe"
+        case .hanja: "character.book.closed.fill"
+        case .exclusions: "nosign"
+        case .system: "hand.raised.fill"
+        case .update: "arrow.triangle.2.circlepath"
+        case .experimental: "flask.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .switching: .blue
+        case .hanja: .orange
+        case .exclusions: .red
+        case .system: .blue
+        case .update: .gray
+        case .experimental: .purple
+        }
+    }
+}
+
+/// The colored rounded-square icon System Settings puts beside each pane.
+struct SettingsPaneIcon: View {
+    let pane: SettingsPane
+    let size: CGFloat
+
     var body: some View {
-        Image(nsImage: image)
-            .resizable()
-            .interpolation(.high)
-            .scaledToFit()
-            .frame(width: 48, height: 48)
-            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+        let shape = RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+        shape
+            .fill(pane.tint.gradient)
+            .frame(width: size, height: size)
+            .overlay {
+                Image(systemName: pane.systemImage)
+                    .font(.system(size: size * 0.48, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            // A light rim and a soft shadow keep a blue tile distinct from the
+            // blue selection behind it, as System Settings' icons are.
+            .overlay {
+                shape.strokeBorder(.white.opacity(0.25), lineWidth: 0.5)
+            }
+            .shadow(color: .black.opacity(0.2), radius: 0.75, y: 0.5)
             .accessibilityHidden(true)
     }
 }
 
-// MARK: - Visual Effect View (Window Background)
+/// App icon, name and version at the top of the sidebar, in the spot System
+/// Settings gives the Apple Account.
+struct SettingsSidebarAppRow: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            // The icon is compiled into Assets.car under the bundle's icon name,
+            // so ask the app rather than NSImage(named:).
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 36, height: 36)
+                .accessibilityHidden(true)
 
-struct VisualEffectView: NSViewRepresentable {
-    let material: NSVisualEffectView.Material
-    let blendingMode: NSVisualEffectView.BlendingMode
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = material
-        view.blendingMode = blendingMode
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = material
-        nsView.blendingMode = blendingMode
+            VStack(alignment: .leading, spacing: 1) {
+                Text("PriType")
+                    .font(.body.weight(.semibold))
+                Text("v\(AboutInfo.displayVersion)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 
-private extension View {
-    @ViewBuilder
-    func pritypeGlassSurface(cornerRadius: CGFloat) -> some View {
-        if #available(macOS 26.0, *) {
-            self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
-        } else {
-            self.background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.regularMaterial)
-            )
+/// Sets the hosting window's title, which the unified toolbar shows.
+struct WindowTitleSetter: NSViewRepresentable {
+    let title: String
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        let title = title
+        // The view has no window until it is inserted into the hierarchy.
+        DispatchQueue.main.async {
+            nsView.window?.title = title
         }
     }
 }
 
-// MARK: - Settings Components (Minimal Glass)
-
-struct CapsLockStatusCard: View {
-    let isEnabled: Bool
-    let openSettings: () -> Void
+/// A row title with an optional secondary description, as in System Settings.
+struct SettingsRowLabel: View {
+    let title: String
+    var subtitle: String?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            SettingsRowIcon(systemName: "capslock")
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(L10n.keyBinding.capsLockStatusTitle)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .layoutPriority(1)
-
-                    Spacer(minLength: 8)
-
-                    StatusPill(
-                        title: isEnabled ? L10n.keyBinding.capsLockStatusOn : L10n.keyBinding.capsLockStatusOff,
-                        systemImage: isEnabled ? "checkmark.circle.fill" : "minus.circle.fill",
-                        color: isEnabled ? .green : .secondary
-                    )
-                }
-
-                Text(isEnabled ? L10n.keyBinding.capsLockOnDescription : L10n.keyBinding.capsLockOffDescription)
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                HStack {
-                    Button(action: openSettings) {
-                        Text(L10n.keyBinding.capsLockOpenSettings)
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.roundedRectangle(radius: 7))
-                    .controlSize(.small)
-                    .fixedSize()
-
-                    Spacer(minLength: 0)
-                }
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+            if let subtitle {
+                SettingsFootnote(subtitle)
             }
-            .layoutPriority(1)
         }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 14)
-        .pritypeGlassSurface(cornerRadius: 12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(.primary.opacity(0.07), lineWidth: 1)
-        )
+        // Keep wrapped descriptions clear of the control on the right.
+        .padding(.trailing, 16)
     }
 }
 
-struct StatusPill: View {
+struct SettingsFootnote: View {
+    let text: String
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// A read-only state shown where a control would otherwise sit.
+struct StatusLabel: View {
     let title: String
     let systemImage: String
     let color: Color
 
     var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: systemImage)
-                .font(.system(size: 10, weight: .semibold))
+        Label {
             Text(title)
-                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+        } icon: {
+            Image(systemName: systemImage)
+                .foregroundStyle(color)
         }
-        .foregroundStyle(color)
-        .padding(.vertical, 3)
-        .padding(.horizontal, 7)
-        .background(
-            Capsule(style: .continuous)
-                .fill(color.opacity(0.12))
-        )
         .fixedSize()
-    }
-}
-
-struct SettingsRowIcon: View {
-    let systemName: String
-
-    var body: some View {
-        Image(systemName: systemName)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.secondary)
-            .symbolRenderingMode(.hierarchical)
-            .frame(width: 22, height: 22)
-    }
-}
-
-/// A section with a label and a single readable glass surface for its content.
-struct SettingsSection<Content: View>: View {
-    let title: String
-    let icon: String
-    let content: Content
-
-    init(title: String, icon: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.icon = icon
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .medium))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.tertiary)
-                Text(title)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 2)
-
-            VStack(spacing: 0) {
-                content
-            }
-            .padding(.vertical, 4)
-            .pritypeGlassSurface(cornerRadius: 14)
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(.primary.opacity(0.07), lineWidth: 1)
-            )
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(title)
     }
 }
 
@@ -1120,74 +949,20 @@ struct ToggleTriggerRow: View {
     let isDisabled: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            SettingsRowIcon(systemName: "hand.tap")
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.keyBinding.toggleTrigger)
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(.primary)
-
-                Text(isDisabled ? L10n.keyBinding.toggleTriggerOnlyModifiers
-                     : trigger == .press ? L10n.keyBinding.toggleTriggerPressDescription
-                     : L10n.keyBinding.toggleTriggerTapDescription)
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .layoutPriority(1)
-
-            Spacer()
-
-            Picker("", selection: $trigger) {
-                Text(L10n.keyBinding.toggleTriggerPress).tag(ToggleTrigger.press)
-                Text(L10n.keyBinding.toggleTriggerTap).tag(ToggleTrigger.tapAlone)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .disabled(isDisabled)
+        Picker(selection: $trigger) {
+            Text(L10n.keyBinding.toggleTriggerPress).tag(ToggleTrigger.press)
+            Text(L10n.keyBinding.toggleTriggerTap).tag(ToggleTrigger.tapAlone)
+        } label: {
+            SettingsRowLabel(
+                title: L10n.keyBinding.toggleTrigger,
+                subtitle: isDisabled ? L10n.keyBinding.toggleTriggerOnlyModifiers
+                    : trigger == .press ? L10n.keyBinding.toggleTriggerPressDescription
+                    : L10n.keyBinding.toggleTriggerTapDescription
+            )
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
-        .opacity(isDisabled ? 0.6 : 1)
-    }
-}
-
-/// A toggle row — icon uses plain background instead of glass
-struct SettingsToggleRow: View {
-    let title: String
-    var subtitle: String?
-    let icon: String
-    @Binding var isOn: Bool
-
-    var body: some View {
-        HStack(spacing: 10) {
-            SettingsRowIcon(systemName: icon)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .layoutPriority(1)
-
-            Spacer()
-
-            Toggle("", isOn: $isOn)
-                .toggleStyle(.switch)
-                .labelsHidden()
-        }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
+        .pickerStyle(.menu)
+        .fixedSize(horizontal: false, vertical: true)
+        .disabled(isDisabled)
     }
 }
 
@@ -1197,7 +972,6 @@ struct SettingsToggleRow: View {
 /// In recording mode, the next key press is captured and saved.
 struct KeyRecorderRow: View {
     let label: String
-    let icon: String
     @Binding var binding: KeyBinding
     let conflictBinding: KeyBinding
     @Binding var hasConflict: Bool
@@ -1208,30 +982,11 @@ struct KeyRecorderRow: View {
 
     @State private var isRecording = false
     @State private var recordingOwner = UUID()
-    @State private var isHovering = false
     @State private var monitor: Any?
     @State private var pulseAnimation = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            SettingsRowIcon(systemName: icon)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(label)
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(.primary)
-
-                if isDisabled, let disabledReason {
-                    Text(disabledReason)
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .layoutPriority(1)
-
-            Spacer()
-
+        LabeledContent {
             Button(action: {
                 guard !isDisabled else { return }
                 if isRecording {
@@ -1250,28 +1005,19 @@ struct KeyRecorderRow: View {
                             .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulseAnimation)
 
                         Text(L10n.keyBinding.recording)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.blue)
                     } else {
                         Text(valueOverride ?? binding.displayName)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.primary)
                             .lineLimit(1)
                     }
                 }
+                .frame(minWidth: 96)
             }
+            .tint(isRecording ? Color.accentColor : nil)
             .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-            .controlSize(.small)
-            .disabled(isDisabled)
-            .tint(isRecording ? Color.blue : nil)
-            .onHover { hover in
-                isHovering = hover
-            }
+        } label: {
+            SettingsRowLabel(title: label, subtitle: isDisabled ? disabledReason : nil)
         }
-        .opacity(isDisabled ? 0.62 : 1)
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
+        .disabled(isDisabled)
         .onChange(of: isDisabled) { _, disabled in
             if disabled {
                 stopRecording()

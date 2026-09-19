@@ -19,6 +19,7 @@ mkdir -p "$RESOURCES_DIR"
 
 echo "Copying executable..."
 cp "$BUILD_DIR/PriType" "$MACOS_DIR/PriTypeV2"
+Tools/stamp_sdk_version.sh "$MACOS_DIR/PriTypeV2"
 
 echo "Copying Info.plist..."
 cp Info.plist "$CONTENTS_DIR/"

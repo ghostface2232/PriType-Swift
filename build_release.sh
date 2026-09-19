@@ -43,6 +43,7 @@ mkdir -p "$RESOURCES_DIR"
 
 # Copy executable and Info.plist
 cp "$BUILD_DIR/PriType" "$MACOS_DIR/$APP_NAME"
+Tools/stamp_sdk_version.sh "$MACOS_DIR/$APP_NAME"
 cp Info.plist "$CONTENTS_DIR/"
 
 # Copy resources
