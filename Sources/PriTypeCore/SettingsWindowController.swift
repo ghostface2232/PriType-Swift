@@ -34,6 +34,10 @@ public class SettingsWindowController: NSObject {
         hostingController.sceneBridgingOptions = [.toolbars]
         let newWindow = NSWindow(contentViewController: hostingController)
         newWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        // This controller owns the window (`window`, cleared in windowWillClose).
+        // NSWindow's default of releasing itself on close would be a second,
+        // unbalanced release of the same object under ARC.
+        newWindow.isReleasedWhenClosed = false
         // An empty toolbar is what lets the sidebar run up under the traffic
         // lights; the selected pane's navigationTitle fills in the title.
         let toolbar = NSToolbar(identifier: "PriTypeSettings")
