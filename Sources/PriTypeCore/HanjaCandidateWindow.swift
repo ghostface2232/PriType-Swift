@@ -192,15 +192,30 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
 
     @MainActor
     private func dismissOnMain() {
+        let dismissCallback = onDismiss
+        hide()
+        dismissCallback?()
+    }
+
+    /// Everything closing the window undoes, on every path. The panel itself is
+    /// kept for the next lookup, but not the candidates' SwiftUI tree: it is
+    /// rebuilt on every show, so holding the last one between lookups only
+    /// keeps its views and glass layers in memory.
+    @MainActor
+    private func hide() {
         Self.setShownPageCandidates(0)
         stopWatchingClicks()
         window?.orderOut(nil)
+        if #available(macOS 26.0, *), let glass = contentContainer as? NSGlassEffectView {
+            glass.contentView = nil
+        } else {
+            contentContainer?.subviews.forEach { $0.removeFromSuperview() }
+        }
         candidates = []
-        let dismissCallback = onDismiss
-        onDismiss = nil
+        currentPage = 0
         onSelect = nil
+        onDismiss = nil
         onClickOutside = nil
-        dismissCallback?()
     }
     
     /// Handle a key event while the candidate window is visible
@@ -325,26 +340,11 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
     private func selectCandidate(at index: Int) {
         guard index < candidates.count else { return }
         let entry = candidates[index]
-        let callback = onSelect
-        // Fire onSelect BEFORE dismiss to preserve hanjaKey state
-        callback?(entry)
-        // Dismiss without calling onDismiss (selection already handled cleanup)
-        dismissWithoutCallback()
+        // Select, then hide without onDismiss: the selection did the cleanup.
+        onSelect?(entry)
+        hide()
     }
     
-    /// Hide the window without triggering onDismiss callback
-    /// Used after selection, where the onSelect callback already handles state cleanup
-    @MainActor
-    private func dismissWithoutCallback() {
-        Self.setShownPageCandidates(0)
-        stopWatchingClicks()
-        window?.orderOut(nil)
-        candidates = []
-        onSelect = nil
-        onDismiss = nil
-        onClickOutside = nil
-        currentPage = 0
-    }
     
     @MainActor
     private func updateContent() {
