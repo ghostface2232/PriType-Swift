@@ -282,6 +282,21 @@ struct IMKIntegrationTests {
         #expect(!harness.candidates.isVisible)
     }
 
+    @Test("After a click closes the candidates, the next lookup reads the host, not the old buffer")
+    func hanjaClickClearsBuffer() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "요"))
+        harness.press(.space)
+        harness.type(Dubeolsik.keys(for: "대한"))
+        harness.pressHanjaKey()
+        harness.candidates.clickOutside()
+        #expect(!harness.candidates.isVisible)
+        field.client.placeCaret(at: 1)       // the click landed after 요
+        harness.pressHanjaKey()
+        #expect(harness.candidates.entries.first?.hangul == "요", "not 대한, typed before the click")
+    }
+
     @Test("A candidate chosen with the caret before where its word could end inserts nothing")
     func hanjaCaretBeforeWord() {
         let (harness, field) = start()

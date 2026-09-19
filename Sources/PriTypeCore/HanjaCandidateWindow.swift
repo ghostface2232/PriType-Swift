@@ -7,11 +7,14 @@ import os
 /// candidates, so tests drive a selection without opening a panel.
 public protocol HanjaCandidatePresenting: AnyObject {
     var isVisible: Bool { get }
+    /// `onClickOutside` runs, after `onDismiss`, when a click anywhere but the
+    /// candidates closed them: the caret may have moved.
     func show(
         entries: [HanjaEntry],
         cursorRect: NSRect,
         onSelect: @escaping @Sendable (HanjaEntry) -> Void,
-        onDismiss: @escaping @Sendable () -> Void
+        onDismiss: @escaping @Sendable () -> Void,
+        onClickOutside: @escaping @Sendable () -> Void
     )
     func dismiss()
     /// A key the input method received while the candidates are up.
@@ -34,6 +37,7 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
     private let pageSize = 9
     private var onSelect: (@Sendable (HanjaEntry) -> Void)?
     private var onDismiss: (@Sendable () -> Void)?
+    private var onClickOutside: (@Sendable () -> Void)?
     
     public var isVisible: Bool {
         MainActor.assumeIsolated {
@@ -63,18 +67,21 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
     ///   - cursorRect: The rect near the text cursor to position the window
     ///   - onSelect: Callback when a candidate is selected
     ///   - onDismiss: Callback when the window is dismissed
+    ///   - onClickOutside: Callback, after `onDismiss`, when a click outside closed it
     public func show(
         entries: [HanjaEntry],
         cursorRect: NSRect,
         onSelect: @escaping @Sendable (HanjaEntry) -> Void,
-        onDismiss: @escaping @Sendable () -> Void
+        onDismiss: @escaping @Sendable () -> Void,
+        onClickOutside: @escaping @Sendable () -> Void
     ) {
         MainActor.assumeIsolated {
             showOnMain(
                 entries: entries,
                 cursorRect: cursorRect,
                 onSelect: onSelect,
-                onDismiss: onDismiss
+                onDismiss: onDismiss,
+                onClickOutside: onClickOutside
             )
         }
     }
@@ -84,12 +91,14 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         entries: [HanjaEntry],
         cursorRect: NSRect,
         onSelect: @escaping @Sendable (HanjaEntry) -> Void,
-        onDismiss: @escaping @Sendable () -> Void
+        onDismiss: @escaping @Sendable () -> Void,
+        onClickOutside: @escaping @Sendable () -> Void
     ) {
         self.candidates = entries
         self.currentPage = 0
         self.onSelect = onSelect
         self.onDismiss = onDismiss
+        self.onClickOutside = onClickOutside
         
         guard !entries.isEmpty else {
             dismiss()
@@ -164,7 +173,10 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         ) { [weak self] _ in
             DebugLogger.log("Hanja: click outside the candidates")
-            self?.dismiss()
+            guard let self else { return }
+            let clickedOutside = self.onClickOutside
+            self.dismiss()
+            clickedOutside?()
         }
     }
 
@@ -185,6 +197,7 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         let dismissCallback = onDismiss
         onDismiss = nil
         onSelect = nil
+        onClickOutside = nil
         dismissCallback?()
     }
     
@@ -323,6 +336,7 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         candidates = []
         onSelect = nil
         onDismiss = nil
+        onClickOutside = nil
         currentPage = 0
     }
     

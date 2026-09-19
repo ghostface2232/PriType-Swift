@@ -790,6 +790,12 @@ public class HangulComposer: @unchecked Sendable {
                 self?.hanjaMode = false
                 self?.hanjaKey = ""
                 DebugLogger.log("Hanja: Dismissed")
+            },
+            onClickOutside: { [weak self] in
+                // The click may have moved the caret, and with nothing marked
+                // IMK does not say so: the buffer no longer ends at the caret,
+                // and the next lookup must not convert the word typed before it.
+                self?.localTextBuffer = ""
             }
         )
         

@@ -10,6 +10,7 @@ public final class FakeCandidatePresenter: HanjaCandidatePresenting, @unchecked 
 
     private var onSelect: (@Sendable (HanjaEntry) -> Void)?
     private var onDismiss: (@Sendable () -> Void)?
+    private var onClickOutside: (@Sendable () -> Void)?
 
     public init() {}
 
@@ -17,11 +18,13 @@ public final class FakeCandidatePresenter: HanjaCandidatePresenting, @unchecked 
         entries: [HanjaEntry],
         cursorRect: NSRect,
         onSelect: @escaping @Sendable (HanjaEntry) -> Void,
-        onDismiss: @escaping @Sendable () -> Void
+        onDismiss: @escaping @Sendable () -> Void,
+        onClickOutside: @escaping @Sendable () -> Void
     ) {
         self.entries = entries
         self.onSelect = onSelect
         self.onDismiss = onDismiss
+        self.onClickOutside = onClickOutside
         isVisible = !entries.isEmpty
     }
 
@@ -56,6 +59,14 @@ public final class FakeCandidatePresenter: HanjaCandidatePresenting, @unchecked 
         }
     }
 
+    /// A click anywhere but the candidates, as the window's click monitor
+    /// sees it: they close, then the composer hears the caret may have moved.
+    public func clickOutside() {
+        let clickedOutside = onClickOutside
+        dismiss()
+        clickedOutside?()
+    }
+
     /// Choose the candidate numbered `number` (1-based, across pages), as a
     /// click on it would.
     public func choose(_ number: Int) {
@@ -71,5 +82,6 @@ public final class FakeCandidatePresenter: HanjaCandidatePresenting, @unchecked 
         isVisible = false
         onSelect = nil
         onDismiss = nil
+        onClickOutside = nil
     }
 }
