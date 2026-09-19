@@ -25,12 +25,24 @@ if [ -n "$CURRENT_USER" ]; then
     fi
 fi
 
+# The installer runs this script as root. Anything launched for the user must
+# run as the user, in their GUI session: an input method started as root reads
+# root's preferences, and System Settings opened as root edits root's.
+run_as_user() {
+    [ -n "$CURRENT_USER" ] && [ "$CURRENT_USER" != "root" ] || return 0
+    launchctl asuser "$(id -u "$CURRENT_USER")" sudo -u "$CURRENT_USER" "$@"
+}
+
 # 4. Launch the new PriTypeV2 process
 #    macOS InputMethodKit will auto-relaunch if it was previously registered,
 #    but we explicitly launch it to cover first-install, input-source migration,
 #    and re-enable edge cases without relying on optional system scripting runtimes.
+#    Only when IMK has not relaunched it already: `open` on a running PriTypeV2
+#    is a reopen, which shows the settings window.
 sleep 0.5
-open "$APP_PATH" || true
+if ! pgrep -xq PriTypeV2; then
+    run_as_user open "$APP_PATH" || true
+fi
 
 if [ "$IS_UPDATE" = true ]; then
     # Update: no UI prompt. The installer success screen is enough, and avoiding
@@ -38,7 +50,7 @@ if [ "$IS_UPDATE" = true ]; then
     true
 else
     # Fresh install: guide the user to add the input source without AppleScript.
-    open "x-apple.systempreferences:com.apple.preference.keyboard?InputSources" || true
+    run_as_user open "x-apple.systempreferences:com.apple.preference.keyboard?InputSources" || true
 fi
 
 exit 0
