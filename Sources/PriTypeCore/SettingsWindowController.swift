@@ -42,11 +42,15 @@ public class SettingsWindowController: NSObject {
         toolbar.displayMode = .iconOnly
         newWindow.toolbar = toolbar
         newWindow.toolbarStyle = .unified
+        // Reopen where the user left it; the first time, at the designed size in
+        // the middle of the screen. Sizing unconditionally would overwrite the
+        // restored frame on every open. The view's minimum size (the designed
+        // one) still clamps a frame saved by an older, smaller layout.
         newWindow.setFrameAutosaveName("PriTypeSettings")
-
-        // Set proper size to avoid truncation
-        newWindow.setContentSize(NSSize(width: PriTypeConfig.settingsWindowWidth, height: PriTypeConfig.settingsWindowHeight))
-        newWindow.center()
+        if !newWindow.setFrameUsingName("PriTypeSettings") {
+            newWindow.setContentSize(NSSize(width: PriTypeConfig.settingsWindowWidth, height: PriTypeConfig.settingsWindowHeight))
+            newWindow.center()
+        }
         newWindow.delegate = self
 
         self.window = newWindow
