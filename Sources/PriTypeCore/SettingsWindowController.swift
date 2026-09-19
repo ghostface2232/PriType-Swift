@@ -678,12 +678,15 @@ struct SettingsView: View {
             do {
                 let confirmed = try await ABCRemovalVerification.confirm(
                     result: result,
-                    // Off the main thread: the probe blocks for the child's
-                    // lifetime, and the settings window must keep responding.
+                    // The probe blocks its thread for the child's lifetime: not
+                    // main (the window must keep responding), and not the Swift
+                    // concurrency pool, whose few threads must never block.
                     isDisabled: {
-                        await Task.detached(priority: .userInitiated) {
-                            ABCLayoutStatusProbe.isABCDisabledInFreshProcess()
-                        }.value
+                        await withCheckedContinuation { continuation in
+                            DispatchQueue.global(qos: .userInitiated).async {
+                                continuation.resume(returning: ABCLayoutStatusProbe.isABCDisabledInFreshProcess())
+                            }
+                        }
                     }
                 )
                 try Task.checkCancellation()
