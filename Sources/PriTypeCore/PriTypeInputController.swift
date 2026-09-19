@@ -137,6 +137,11 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             previous.session?.finalize(reason: .deactivateServer)
             previous.session?.disarmFocusLossFinalizer()
             previous.session?.markContextStale()
+            // Open candidates belong to the previous client. Its deactivation
+            // would close them, but IMK may deliver that only after this
+            // activation — and then it no longer owns the engine and leaves
+            // them up, with the event tap routing this client's keys to them.
+            composer.dismissHanjaCandidates(reason: "another client took over")
         }
         Self.sharedController = self
         if let pending = pendingSystemMode {

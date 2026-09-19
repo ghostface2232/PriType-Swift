@@ -101,6 +101,14 @@ public final class IMKHarness {
         focused = field
     }
 
+    /// Move focus to `field` in the order some hosts use: the new controller is
+    /// activated while the current one is still active. The field left behind
+    /// is not deactivated; the test does that when it wants the late call.
+    public func activateAhead(_ field: Field) {
+        field.controller.activateServer(field.client)
+        focused = field
+    }
+
     /// Focus leaves every field (e.g. another app without text input).
     public func blur() {
         guard let focused else { return }

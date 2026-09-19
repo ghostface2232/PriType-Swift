@@ -298,4 +298,20 @@ struct IMKIntegrationTests {
         #expect(second.client.text == offered.hanja)
         #expect(first.client.text == "한")
     }
+
+    @Test("Candidates close when another field activates before the old one deactivates")
+    func hanjaClosesOnLateDeactivation() {
+        let (harness, first) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "한"))
+        harness.pressHanjaKey()
+        #expect(harness.candidates.isVisible)
+        let second = harness.makeField(bundleID: "com.pritype.imk-harness.other")
+        harness.activateAhead(second)
+        #expect(!harness.candidates.isVisible, "the new client's keys must not reach them")
+        first.controller.deactivateServer(first.client)
+        harness.type(Dubeolsik.keys(for: "가"))
+        #expect(second.client.markedText == "가")
+        #expect(first.client.text == "한")
+    }
 }

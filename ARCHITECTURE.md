@@ -52,7 +52,7 @@ PriTypeV2.app
 
 ```
 keyDown ──► PriTypeInputController.handle(event, client)
-   1. claimActiveController        공유 조합기의 주인을 이 컨트롤러로 바꾸고, 보류된 시스템 모드를 적용
+   1. claimActiveController        공유 조합기의 주인을 이 컨트롤러로 바꾸고(이전 주인의 조합 확정, 한자 후보창 닫기), 보류된 시스템 모드를 적용
    2. ensureSession(client)        같은 클라이언트면 세션 재사용, 필요하면 컨텍스트 재분석, 다르면 새 세션
    3. applyPendingKeyActions       이 키보다 먼저 눌린 전환·한자 동작만 먼저 실행
    4. 중복 keyDown 억제             같은 물리 키를 두 번 보내는 앱(KakaoTalk 등): 두 번째는 첫 결과를 재사용
@@ -179,6 +179,7 @@ Caps Lock, 입력 메뉴, 그리고 4단계 통보에 대한 응답이 모두 �
   - 그 밖의 키: 닫고 평소처럼 입력한다
 - 창이 떠 있는 동안에는 이벤트 탭이 후보창 키를 직접 가로챈다(`isAcceptingKeys`, `route`). Terminal처럼 조합 중인 글자가 없으면 Esc·방향키·Return을 입력기에 넘기지 않는 앱이 있기 때문이다. 숫자는 키 위치로 인식한다.
 - 닫히는 경우: 선택, Esc, 한자키 다시 누르기, 한/영 전환, 포커스가 다른 창이나 앱으로 이동, 후보창 밖 클릭, 한자 변환 끄기.
+- 포커스 이동은 두 곳에서 닫는다. 주인 컨트롤러의 `deactivateServer`, 그리고 다른 컨트롤러가 공유 조합기를 넘겨받는 `claimActiveController`다. IMK는 새 입력창을 먼저 활성화하고 이전 입력창을 나중에 비활성화하기도 하는데, 그때 이전 컨트롤러는 이미 주인이 아니어서 창을 닫지 않는다.
 - 후보창 밖 클릭은 창이 떠 있는 동안만 거는 전역 마우스 모니터로 감지한다. 조합 중인 글자가 없으면 IMK는 클릭을 입력기에 알리지 않으므로, 이것이 없으면 클릭으로 옮긴 커서 앞 글자를 다음 숫자키가 바꿀 수 있다. 후보창 자체의 클릭은 PriType 앱으로 오므로 이 모니터에 잡히지 않는다.
 
 ### 후보창 위치 (`CursorRectResolver`, `HanjaCandidateWindow.panelOrigin`)
