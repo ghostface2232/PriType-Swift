@@ -88,12 +88,14 @@ struct SettingsView: View {
     @State private var inputMonitoringAccess = IOKitManager.InputMonitoringAccess.notDetermined
     @State private var hasKeyConflict = false
     @State private var showKeyConflictRestored = false
+    @State private var conflictReset: DispatchWorkItem?
     @State private var isRestoringKeyBinding = false
     @State private var showCapsLockBlockedAlert = false
     @State private var capsLockSwitchEnabled = false
 
     // Update check state
     @State private var updateStatus: UpdateStatus = .idle
+    @State private var updateStatusReset: DispatchWorkItem?
 
     // Polls for the accessibility grant while the window is open. Stored so it can
     // be replaced on repeated taps and invalidated when the view disappears.
@@ -101,8 +103,7 @@ struct SettingsView: View {
 
     // Disable-default-English (ABC) action state (restored 2.6.5 feature)
     @State private var removeABCStatus: RemoveABCStatus = .idle
-    // Pending status reset, replaced on each finish so timers cannot interleave.
-    @State private var removeABCResetWorkItem: DispatchWorkItem?
+    @State private var removeABCReset: DispatchWorkItem?
     @State private var removeABCTask: Task<Void, Never>?
 
     // Experimental Windows-style direct insertion (Phase 3). Default OFF.
@@ -244,8 +245,10 @@ struct SettingsView: View {
         .onDisappear {
             removeABCTask?.cancel()
             removeABCTask = nil
-            removeABCResetWorkItem?.cancel()
-            removeABCResetWorkItem = nil
+            for reset in [removeABCReset, updateStatusReset, conflictReset] { reset?.cancel() }
+            removeABCReset = nil
+            updateStatusReset = nil
+            conflictReset = nil
             removeABCStatus = .idle
             accessibilityPollTimer?.invalidate()
             accessibilityPollTimer = nil
@@ -537,6 +540,8 @@ struct SettingsView: View {
     // MARK: - Actions
 
     private func checkForUpdates() {
+        // A result shown by the previous check must not be cleared mid-request.
+        updateStatusReset?.cancel()
         withAnimation { updateStatus = .checking }
 
         Task {
@@ -557,11 +562,8 @@ struct SettingsView: View {
 
                 // Auto-dismiss success/error after 8 seconds
                 if updateStatus == .upToDate || updateStatus == .error {
-                    Task {
-                        try? await Task.sleep(for: .seconds(8))
-                        await MainActor.run {
-                            withAnimation { updateStatus = .idle }
-                        }
+                    replaceReset($updateStatusReset, after: 8) {
+                        withAnimation { updateStatus = .idle }
                     }
                 }
             }
@@ -590,12 +592,21 @@ struct SettingsView: View {
             showKeyConflictRestored = true
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        replaceReset($conflictReset, after: 2) {
             withAnimation(.easeInOut(duration: 0.2)) {
                 hasKeyConflict = false
                 showKeyConflictRestored = false
             }
         }
+    }
+
+    /// Run `reset` after `seconds` unless a newer reset takes the slot first, so
+    /// an older timer can never clear the status that replaced it.
+    private func replaceReset(_ slot: Binding<DispatchWorkItem?>, after seconds: Double, _ reset: @escaping () -> Void) {
+        slot.wrappedValue?.cancel()
+        let item = DispatchWorkItem(block: reset)
+        slot.wrappedValue = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: item)
     }
 
     /// Warnings for bindings that shadow a well-known macOS shortcut.
@@ -657,8 +668,8 @@ struct SettingsView: View {
     /// every successful removal (see `ABCLayoutStatusProbe`).
     private func removeABCKeyboard() {
         guard removeABCStatus != .working else { return }
-        removeABCResetWorkItem?.cancel()
-        removeABCResetWorkItem = nil
+        removeABCReset?.cancel()
+        removeABCReset = nil
         withAnimation { removeABCStatus = .working }
 
         let manager = InputSourceManager.shared
@@ -691,13 +702,9 @@ struct SettingsView: View {
 
     private func finishRemoveABC(_ status: RemoveABCStatus) {
         withAnimation { removeABCStatus = status }
-        // Replace any in-flight reset so an older timer cannot clear a newer status.
-        removeABCResetWorkItem?.cancel()
-        let reset = DispatchWorkItem {
+        replaceReset($removeABCReset, after: 3) {
             withAnimation { removeABCStatus = .idle }
         }
-        removeABCResetWorkItem = reset
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: reset)
     }
 
     // MARK: - Toggle Exclusion Logic
