@@ -15,8 +15,14 @@ MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 PKG_OUTPUT="PriTypeV2_Debug.pkg"
 COMPONENT_PLIST="PriTypeV2_components.plist"
-APP_SIGN="Developer ID Application: Chanwoo Park (M4U438VG59)"
-PKG_SIGN="Developer ID Installer: Chanwoo Park (M4U438VG59)"
+# Signing identities: the environment's, else the first Developer ID in the
+# keychain (as build_release.sh does), never one developer's hard-coded name.
+APP_SIGN="${APP_SIGN:-$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application:/ {print $2; exit}')}"
+PKG_SIGN="${PKG_SIGN:-$(security find-identity -v | awk -F'"' '/Developer ID Installer:/ {print $2; exit}')}"
+if [ -z "$APP_SIGN" ] || [ -z "$PKG_SIGN" ]; then
+    echo "Error: Developer ID Application and Installer certificates are required (or set APP_SIGN / PKG_SIGN)." >&2
+    exit 1
+fi
 KEYCHAIN_PROFILE="PriTypeNotary"
 
 cleanup() {
