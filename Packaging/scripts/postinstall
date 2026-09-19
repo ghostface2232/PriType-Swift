@@ -40,7 +40,7 @@ run_as_user() {
 #    Only when IMK has not relaunched it already: `open` on a running PriTypeV2
 #    is a reopen, which shows the settings window.
 sleep 0.5
-if ! pgrep -xq PriTypeV2; then
+if ! pgrep -xq -u "$CURRENT_USER" PriTypeV2; then
     run_as_user open "$APP_PATH" || true
 fi
 
