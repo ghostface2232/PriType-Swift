@@ -352,8 +352,7 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         onSelect?(entry)
         hide()
     }
-    
-    
+
     @MainActor
     private func updateContent() {
         guard let window = window else { return }
