@@ -140,8 +140,9 @@ public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
         return caretRect
     }
 
-    /// A plausible caret on the main screen, for the Hanja window's placement.
-    private var caretRect: NSRect { NSRect(x: 400, y: 400, width: 1, height: 18) }
+    /// Where the field says its caret is, for the Hanja window's placement: a
+    /// plausible caret on the main screen, unless a test makes it misreport.
+    public var caretRect = NSRect(x: 400, y: 400, width: 1, height: 18)
 
     public func validAttributesForMarkedText() -> [Any]! {
         [NSAttributedString.Key.underlineStyle.rawValue,

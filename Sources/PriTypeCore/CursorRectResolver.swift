@@ -16,17 +16,24 @@ import InputMethodKit
 /// 4. Accessibility API (`AXSelectedTextRange` → `AXBoundsForRange`)
 /// 5. mouse location (last resort)
 public enum CursorRectResolver {
-    /// Cached last-known-good cursor position. When Chromium blocks coordinate
-    /// queries, reuse the last successful position instead of jumping to the mouse.
-    nonisolated(unsafe) static var lastKnownCursorRect: NSRect?
+    /// The last position resolved for a client. When Chromium blocks coordinate
+    /// queries, the same client's last position beats jumping to the mouse. It
+    /// is never reused for another client: that one's caret can be in another
+    /// window or on another display, and the candidates would open there.
+    nonisolated(unsafe) static var lastKnownCursorRect: (client: ObjectIdentifier, rect: NSRect)?
 
     /// Resolve a usable caret rect for `client`, falling back through the strategy
     /// chain. Always returns SOMETHING displayable (mouse location at worst).
     /// Call BEFORE committing the preedit: Chromium updates cursor position
     /// asynchronously after commit, so post-commit queries return garbage.
-    static func resolve(client: IMKTextInput?) -> NSRect {
+    /// `accessibility` is strategy 4; tests replace it.
+    static func resolve(
+        client: IMKTextInput?,
+        accessibility: () -> NSRect? = getCursorRectViaAccessibility
+    ) -> NSRect {
         var cursorRect = NSRect(x: NSEvent.mouseLocation.x, y: NSEvent.mouseLocation.y - 20, width: 0, height: 20)
         var resolved = false
+        let clientID = client.map { ObjectIdentifier($0 as AnyObject) }
 
         if let client {
             var actualRange = NSRange()
@@ -65,19 +72,19 @@ public enum CursorRectResolver {
                 }
             }
 
-            // Strategy 3: Use cached last-known-good position (fcitx5-style)
-            // If coordinate query failed but we have a recent successful position,
-            // reuse it. The window stays near where it last appeared — much better
-            // than jumping to the mouse cursor across the screen.
-            if !resolved, let cached = lastKnownCursorRect {
-                cursorRect = cached
+            // Strategy 3: this client's last-known-good position (fcitx5-style).
+            // If the coordinate query failed but the same client answered before,
+            // the window stays near where it last appeared — much better than
+            // jumping to the mouse cursor across the screen.
+            if !resolved, let cached = lastKnownCursorRect, cached.client == clientID {
+                cursorRect = cached.rect
                 resolved = true
-                DebugLogger.log("Hanja: using cached last-known-good position: \(cached)")
+                DebugLogger.log("Hanja: using this client's last-known-good position: \(cached.rect)")
             }
 
             // Strategy 4: AX element position (rough approximation)
             if !resolved {
-                if let axRect = getCursorRectViaAccessibility() {
+                if let axRect = accessibility() {
                     cursorRect = axRect
                     resolved = true
                     DebugLogger.log("Hanja: cursor from Accessibility API: \(axRect)")
@@ -87,9 +94,9 @@ public enum CursorRectResolver {
             }
         }
 
-        // Cache the resolved position for future fallback
-        if resolved {
-            lastKnownCursorRect = cursorRect
+        // Cache the resolved position for this client's future fallback
+        if resolved, let clientID {
+            lastKnownCursorRect = (clientID, cursorRect)
         }
 
         return cursorRect

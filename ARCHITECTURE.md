@@ -188,7 +188,7 @@ Caps Lock, 입력 메뉴, 그리고 4단계 통보에 대한 응답이 모두 �
 
 1. `firstRect(forCharacterRange:)`: 조합 영역, 없으면 선택 영역.
 2. 1이 무효이면 `attributes(forCharacterIndex:lineHeightRectangle:)`.
-3. 직전 한자 검색에서 얻은 좌표.
+3. 같은 클라이언트(입력창)의 직전 한자 검색에서 얻은 좌표. 다른 클라이언트의 좌표는 쓰지 않는다. 그 입력창은 다른 창이나 다른 모니터에 있을 수 있다.
 4. 손쉬운 사용 API: 포커스된 요소의 `AXSelectedTextRange`와 `AXBoundsForRange`, 안 되면 요소의 위치와 크기.
 5. 마우스 위치.
 
