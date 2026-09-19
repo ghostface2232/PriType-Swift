@@ -185,11 +185,12 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// End the current session's composition and make a new one for `client` the
     /// live session. The old session stops watching focus: the composer is shared,
     /// so its observer firing later would flush the new session's text into the
-    /// old client.
-    private func replaceSession(client: IMKTextInput, context: ClientContext) -> InputSession {
+    /// old client. `context` is evaluated after the old composition is committed,
+    /// so the old client's commit never waits on the new client's analysis IPC.
+    private func replaceSession(client: IMKTextInput, context: @autoclosure () -> ClientContext) -> InputSession {
         session?.finalize(reason: .deactivateServer)
         session?.disarmFocusLossFinalizer()
-        let newSession = InputSession(client: client, context: context, composer: composer)
+        let newSession = InputSession(client: client, context: context(), composer: composer)
         session = newSession
         newSession.armFocusLossFinalizer()
         return newSession
