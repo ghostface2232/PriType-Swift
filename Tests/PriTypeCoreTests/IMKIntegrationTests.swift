@@ -237,4 +237,116 @@ struct IMKIntegrationTests {
         harness.type("gk")
         #expect(second.client.text == "gk")
     }
+
+    // MARK: Hanja
+
+    @Test("The Hanja key offers the word before the caret, and a digit converts it")
+    func hanjaWord() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "대한민국"))
+        harness.pressHanjaKey()
+        #expect(field.client.markedText == nil, "the syllable is committed for the lookup")
+        #expect(harness.candidates.entries.first?.hanja == "大韓民國")
+        harness.type("1")
+        #expect(field.client.text == "大韓民國")
+        #expect(!harness.candidates.isVisible)
+    }
+
+    @Test("A shorter ending replaces only its own syllables")
+    func hanjaShorterEnding() throws {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "대한민국"))
+        harness.pressHanjaKey()
+        let number = try #require(harness.candidates.entries.firstIndex { $0.hanja == "國" }) + 1
+        harness.candidates.choose(number)
+        #expect(field.client.text == "대한민國")
+        harness.type(Dubeolsik.keys(for: "가"))
+        #expect(field.client.text == "대한민國가")
+    }
+
+    @Test("A one-syllable candidate chosen after the caret moved leaves the text alone")
+    func hanjaAfterCaretMoved() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "요"))
+        harness.press(.space)
+        harness.type(Dubeolsik.keys(for: "한"))
+        harness.pressHanjaKey()
+        #expect(harness.candidates.entries.first?.hanja == "韓")
+        // A click after 요: IMK tells the input method nothing, nothing is marked.
+        field.client.placeCaret(at: 1)
+        harness.candidates.choose(1)
+        #expect(field.client.text == "요 한", "요 is not the 한 the candidate was looked up from")
+        #expect(!harness.candidates.isVisible)
+    }
+
+    @Test("After a click closes the candidates, the next lookup reads the host, not the old buffer")
+    func hanjaClickClearsBuffer() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "요"))
+        harness.press(.space)
+        harness.type(Dubeolsik.keys(for: "대한"))
+        harness.pressHanjaKey()
+        harness.candidates.clickOutside()
+        #expect(!harness.candidates.isVisible)
+        field.client.placeCaret(at: 1)       // the click landed after 요
+        harness.pressHanjaKey()
+        #expect(harness.candidates.entries.first?.hangul == "요", "not 대한, typed before the click")
+    }
+
+    @Test("A candidate chosen with the caret before where its word could end inserts nothing")
+    func hanjaCaretBeforeWord() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "요"))
+        harness.press(.space)
+        harness.type(Dubeolsik.keys(for: "한"))
+        harness.pressHanjaKey()
+        field.client.placeCaret(at: 0)
+        harness.candidates.choose(1)
+        #expect(field.client.text == "요 한")
+
+        harness.type(Dubeolsik.keys(for: "대한민국"))   // now at the start: 대한민국요 한
+        harness.pressHanjaKey()
+        #expect(harness.candidates.entries.first?.hanja == "大韓民國")
+        field.client.placeCaret(at: 2)
+        harness.candidates.choose(1)
+        #expect(field.client.text == "대한민국요 한", "not 대한大韓民國민국요 한")
+    }
+
+    @Test("A lookup in another app never joins the last syllable typed in the previous one")
+    func hanjaIgnoresPreviousApp() throws {
+        let (harness, first) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "한"))
+        let second = harness.makeField(bundleID: "com.pritype.imk-harness.other")
+        harness.focus(second)
+        #expect(first.client.text == "한")
+        harness.type(Dubeolsik.keys(for: "국"))
+        harness.pressHanjaKey()
+        let offered = try #require(harness.candidates.entries.first)
+        #expect(offered.hangul == "국", "not 韓國 from 한 + 국")
+        harness.candidates.choose(1)
+        #expect(second.client.text == offered.hanja)
+        #expect(first.client.text == "한")
+    }
+
+    @Test("Candidates close when another field activates before the old one deactivates")
+    func hanjaClosesOnLateDeactivation() {
+        let (harness, first) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "한"))
+        harness.pressHanjaKey()
+        #expect(harness.candidates.isVisible)
+        let second = harness.makeField(bundleID: "com.pritype.imk-harness.other")
+        harness.activateAhead(second)
+        #expect(!harness.candidates.isVisible, "the new client's keys must not reach them")
+        first.controller.deactivateServer(first.client)
+        harness.type(Dubeolsik.keys(for: "가"))
+        #expect(second.client.markedText == "가")
+        #expect(first.client.text == "한")
+    }
 }

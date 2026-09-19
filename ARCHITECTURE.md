@@ -52,11 +52,11 @@ PriTypeV2.app
 
 ```
 keyDown ──► PriTypeInputController.handle(event, client)
-   1. claimActiveController        공유 조합기의 주인을 이 컨트롤러로 바꾸고, 보류된 시스템 모드를 적용
+   1. claimActiveController        공유 조합기의 주인을 이 컨트롤러로 바꾸고(이전 주인의 조합 확정, 한자 후보창 닫기), 보류된 시스템 모드를 적용
    2. ensureSession(client)        같은 클라이언트면 세션 재사용, 필요하면 컨텍스트 재분석, 다르면 새 세션
    3. applyPendingKeyActions       이 키보다 먼저 눌린 전환·한자 동작만 먼저 실행
    4. 중복 keyDown 억제             같은 물리 키를 두 번 보내는 앱(KakaoTalk 등): 두 번째는 첫 결과를 재사용
-   5. markKeystroke(bundleId)      한자 검색이 다른 앱의 입력 버퍼를 쓰지 않도록 기록
+   5. markKeystroke(bundleId)      앱이 바뀌었으면 입력 버퍼를 비우고, 한자 검색이 볼 앱을 기록
    6. Secure Input 게이트           비밀번호 입력 등: 조합을 버리고 키를 그대로 통과
    7. ensureAdapterMatchesPolicy   전달 방식이 바뀌었으면(실험 설정 변경 등) 어댑터 교체
    8. prepareForInput              직접 삽입 모드: 이전 글자가 아직 제자리인지 확인
@@ -69,7 +69,7 @@ keyDown ──► PriTypeInputController.handle(event, client)
 - 영문 모드: 조합 중인 글자가 있으면 확정하고 `false`를 돌려준다. 키 처리는 앱이 한다.
 - 한자 후보창이 떠 있으면 키를 후보창에 먼저 넘긴다.
 - ⌘·⌃·⌥가 눌린 키: 조합을 확정하고 앱으로 넘긴다(단축키).
-- 글자 키 26개는 현재 라틴 배열이 만든 문자가 아니라 키 위치(`QwertyKeyMap`, US QWERTY)로 해석한다. Dvorak·Colemak·AZERTY에서도 같은 자모가 나오고, 윗줄 자모는 Shift로만 고른다(Caps Lock 무시). 그 밖의 키는 배열이 만든 문자를 그대로 쓰며 조합 엔진에 넘기지 않는다.
+- 글자 키 26개는 현재 라틴 배열이 만든 문자가 아니라 키 위치(`QwertyKeyMap`, US QWERTY)로 해석한다. Dvorak·Colemak·AZERTY에서도 같은 자모가 나오고, 윗줄 자모는 Shift로만 고른다(Caps Lock 무시). 그 밖의 키는 배열이 만든 문자를 그대로 쓰며 조합 엔진에 넘기지 않는다. 단, 글자 키에 문장부호를 둔 배열(AZERTY의 M 자리 쉼표, Dvorak의 Q W E 자리 `' , .`, Colemak의 P 자리 `;`)에서는 그 문장부호가 자모에 밀려 칠 키가 없어지므로, 숫자·문장부호 키를 US 위치로 읽는다(`LatinLayoutObserver`, `QwertyKeyMap.punctuation`). 판정은 입력을 보고 한다. 글자 키가 글자가 아닌 문자를 한 번 쳐야 켜지므로, 입력기가 시작된 뒤 그 키(AZERTY라면 ㅡ)를 처음 치기 전까지는 배열의 문자가 그대로 나온다. 각 글자 키는 마지막으로 친 문자로 판정하므로, 배열이 바뀌면 해당 글자 키를 다시 칠 때 따라간다. dead key 뒤처럼 두 글자 이상이 온 입력은 판정에 쓰지 않는다. US 위치로 읽을 때 숫자는 Shift 없이 나오고(AZERTY와 반대), ISO 자판과 위치가 엇갈리는 키 50(`` ` ``/`~`)은 제외한다. 독일어·북유럽처럼 글자 키가 모두 글자인 배열은 ö·ü 같은 문자를 그대로 친다.
 - 특수 키
   - Return: 조합을 확정하고 키는 앱으로 넘긴다. GoodNotes는 줄바꿈을 직접 넣고, Hermes는 확정만 하고 키를 소비한다(`ClientCompatibilityPolicy`).
   - Esc: 조합 중이면 취소하고 소비, 아니면 앱으로 넘긴다.
@@ -160,11 +160,11 @@ Caps Lock, 입력 메뉴, 그리고 4단계 통보에 대한 응답이 모두 �
 
 - 단어 단위(`searchWord(endingWith:)`): 조합 중인 글자와 로컬 입력 버퍼(없으면 앱이 알려 주는 커서 앞 글자)에서 끝의 한글 음절을 최대 10개 모은다. 가장 긴 끝말부터 한 음절까지 차례로 사전을 찾는다. "대한민국" → 大韓民國, 民國, 國….
 - 자모 특수문자: 자음 하나를 조합 중일 때는 `jamo_symbols.json`(자음 14개, 특수문자 390개)에서 찾는다. libhangul이 주는 초성 자모(U+1100~)는 호환 자모(U+3131~)로 바꿔 찾는다.
-- 입력 버퍼는 같은 앱에서 친 것만 쓴다. 방향키, Tab, Return, 단축키, 모드 전환, 클릭 확정 때 비워진다.
+- 입력 버퍼는 같은 앱에서 친 것만 쓴다. 다른 앱에서 키를 치면 비워진다(입력창을 떠날 때 확정한 마지막 음절이 다음 앱의 단어에 붙지 않게). 한자키를 누른 앱이 마지막으로 키를 친 앱과 다르면 버퍼를 보지 않는다. 방향키, Tab, Return, 단축키, 모드 전환, 클릭 확정, 후보창 밖 클릭 때도 비워진다.
 
 ### 선택과 교체
 
-후보는 자기 한글 부분만 바꾼다(`replacementRange` = 커서 앞 한글 길이). 여러 음절을 바꿀 때는 앱이 알려 주는 커서 앞 글자가 후보의 한글과 같을 때만 바꾼다. 입력기가 모르는 클릭으로 커서가 옮겨졌다면 선택을 취소한다. 후보창을 연 뒤 클라이언트가 바뀌었어도 취소한다.
+후보는 자기 한글 부분만 바꾼다(`replacementRange` = 커서 앞 한글 길이). 앱이 커서 앞 글자를 알려 주면, 한 음절이든 단어든 그 글자가 후보의 한글과 같을 때만 바꾼다(`canReplace`). 입력기가 모르는 클릭으로 커서가 옮겨졌거나 문서가 NFD라 글자가 맞지 않으면 선택을 취소한다. 커서가 후보의 한글 길이보다 앞에 있어도 취소한다. 커서 앞 글자를 알려 주지 않는 앱(nil 또는 빈 문자열)에서는 확인 없이 바꾸고, 커서 위치를 알려 주지 않는 앱(`NSNotFound`, 비정상 값)에서는 커서 위치에 넣는다. 후보창을 연 뒤 클라이언트가 바뀌었어도 취소한다.
 
 ### 후보창 (`HanjaCandidateWindow`)
 
@@ -178,16 +178,18 @@ Caps Lock, 입력 메뉴, 그리고 4단계 통보에 대한 응답이 모두 �
   - ←, →: 닫고 앱으로 넘긴다
   - 그 밖의 키: 닫고 평소처럼 입력한다
 - 창이 떠 있는 동안에는 이벤트 탭이 후보창 키를 직접 가로챈다(`isAcceptingKeys`, `route`). Terminal처럼 조합 중인 글자가 없으면 Esc·방향키·Return을 입력기에 넘기지 않는 앱이 있기 때문이다. 숫자는 키 위치로 인식한다.
-- 닫히는 경우: 선택, Esc, 한자키 다시 누르기, 한/영 전환, 포커스가 다른 창이나 앱으로 이동, 한자 변환 끄기.
+- 닫히는 경우: 선택, Esc, 한자키 다시 누르기, 한/영 전환, 포커스가 다른 창이나 앱으로 이동, 후보창 밖 클릭, 한자 변환 끄기.
+- 포커스 이동은 두 곳에서 닫는다. 주인 컨트롤러의 `deactivateServer`, 그리고 다른 컨트롤러가 공유 조합기를 넘겨받는 `claimActiveController`다. IMK는 새 입력창을 먼저 활성화하고 이전 입력창을 나중에 비활성화하기도 하는데, 그때 이전 컨트롤러는 이미 주인이 아니어서 창을 닫지 않는다.
+- 후보창 밖 클릭은 창이 떠 있는 동안만 거는 전역 마우스 모니터로 감지한다. 조합 중인 글자가 없으면 IMK는 클릭을 입력기에 알리지 않으므로, 이것이 없으면 클릭으로 옮긴 커서 앞 글자를 다음 숫자키가 바꿀 수 있다. 후보창 자체의 클릭은 PriType 앱으로 오므로 이 모니터에 잡히지 않는다. 클릭으로 닫으면 입력 버퍼도 비운다(`onClickOutside`). 커서가 옮겨졌을 수 있어 버퍼가 더는 커서 앞 글자가 아니기 때문이다.
 
 ### 후보창 위치 (`CursorRectResolver`, `HanjaCandidateWindow.panelOrigin`)
 
 한자키를 누르면 조합을 확정하기 전에 커서 위치를 구한다. Chromium 계열은 확정 직후 좌표를 비동기로 갱신하기 때문이다.
 
 1. `firstRect(forCharacterRange:)`: 조합 영역, 없으면 선택 영역.
-2. 1이 무효이면 `attributes(forCharacterIndex:lineHeightRectangle:)`.
-3. 직전 한자 검색에서 얻은 좌표.
-4. 손쉬운 사용 API: 포커스된 요소의 `AXSelectedTextRange`와 `AXBoundsForRange`, 안 되면 요소의 위치와 크기.
+2. 1이 무효이면 `attributes(forCharacterIndex:lineHeightRectangle:)`. 인덱스 0을 먼저 묻고(Squirrel·macSKK·fcitx5와 같음), 무효이면 커서 앞 글자의 문서 인덱스를 묻는다. Google Docs에서 측정해 보니 `firstRect`는 모든 범위에서 쓰레기값이었고, 인덱스 0은 커서를 돌려주었으며, 1 이상의 인덱스는 창 모서리 근처의 고정된 자리를 돌려주었다.
+3. 같은 클라이언트(입력창)의 직전 한자 검색에서 얻은 좌표. 다른 클라이언트의 좌표는 쓰지 않는다. 그 입력창은 다른 창이나 다른 모니터에 있을 수 있다.
+4. 손쉬운 사용 API: 포커스된 요소의 `AXSelectedTextRange`와 `AXBoundsForRange`, 안 되면 요소의 위치와 크기. 손쉬운 사용 좌표(주 화면 왼쪽 위 기준, y 아래로)는 주 화면(메뉴 막대가 있는 화면)의 높이로 뒤집는다. Chromium이 y만 주는 응답 `(0, y, 0, 0)`은 요소의 x로 보충하며, 주 화면 위나 왼쪽 모니터의 음수 y도 받는다.
 5. 마우스 위치.
 
 유효성(`isValidCursorRect`): 값이 모두 유한하고, 높이가 양수이며, x·y의 절댓값이 1보다 크고, 원점이 연결된 화면 안에 있어야 한다. 음수 좌표는 주 화면 왼쪽·아래의 보조 모니터에서 정상이므로 부호는 보지 않는다.
@@ -259,7 +261,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 |---|---|---|
 | `PriType` | 실행 파일 | 앱 진입점(`main.swift`). 번들에서는 `PriTypeV2` |
 | `PriTypeCore` | 라이브러리 | 입력기 로직 전부. 외부 의존성은 libhangul-swift 하나이며 테스트한 리비전에 고정한다 |
-| `PriTypeIMKHarness` | 라이브러리 | 실제 `PriTypeInputController`를 가짜 입력창(`FakeTextClient`)에 연결해 키를 흘려 넣는 통합 테스트 도구. `Dubeolsik`은 한글 문장을 두벌식 키로 바꾼다 |
+| `PriTypeIMKHarness` | 라이브러리 | 실제 `PriTypeInputController`를 가짜 입력창(`FakeTextClient`)에 연결해 키를 흘려 넣는 통합 테스트 도구. 한자 후보창은 `FakeCandidatePresenter`가 대신해 후보를 기록하고 선택·클릭을 흉내 낸다. `Dubeolsik`은 한글 문장을 두벌식 키로 바꾼다 |
 | `PriTypeHanjaCompiler` | 실행 파일 | `hanja.txt` → `hanja.dat` 컴파일 |
 | `PriTypeBenchmark` | 실행 파일 | 한자 사전·검색, 자모 검색, 동시성, 좌표 검증, 타이핑 경로 지연 측정([BENCHMARK.md](BENCHMARK.md)) |
 | `PriTypeVerify` | 실행 파일 | CI에서 돌리는 조합 동작 점검 |
@@ -279,7 +281,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `HangulComposerTypes` | `HangulComposerDelegate` 프로토콜, `InputMode` |
 | `CompositionHelpers` | libhangul 출력(UCSChar 배열)을 NFC 문자열로 변환 |
 | `TextConvenienceHandler` | 한글 조합 중 더블스페이스 마침표 |
-| `KeyCode` | 키 코드 상수, `QwertyKeyMap`(글자 키 위치 → QWERTY 글자) |
+| `KeyCode` | 키 코드 상수, `QwertyKeyMap`(글자 키 위치 → QWERTY 글자, 숫자·문장부호 키 → US 문자), `LatinLayoutObserver`(글자 키에 문장부호를 둔 배열 감지) |
 | `InputModeCoordinator` | 전환·한자 동작의 키 순서 대기열, `SystemModeEchoFilter`, `DeferredInputMode` |
 | `RightCommandSuppressor` | CGEventTap 키 모니터, `EventTapThread` |
 | `IOKitManager` | IOHIDManager 대체 키 모니터, 손쉬운 사용·입력 모니터링 권한 확인 |
@@ -309,10 +311,10 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 swift test
 ```
 
-Swift Testing 기반, 361개 테스트와 57개 Suite(2026-09-19 기준). Command Line Tools에는 Testing 모듈이 없으므로 Xcode 툴체인이 필요하다.
+Swift Testing 기반, 377개 테스트와 57개 Suite(2026-09-19 기준). Command Line Tools에는 Testing 모듈이 없으므로 Xcode 툴체인이 필요하다.
 
 - 유닛 테스트: 조합, 키 위치, 전달 정책, 직접 삽입, 키 모니터(탭 이벤트 순서, IOKit 판정, 탭 스레드, 순서 대기열, 에코 필터), 한자 사전·검색·후보창 배치, 설정 이관, 입력 소스 정리, 업데이트 버전 비교, 등록 계약.
-- 통합 테스트(`IMKIntegrationTests`): `PriTypeIMKHarness`로 실제 컨트롤러를 돌린다. 확정 순서, 백스페이스, 중복 키, 한/영 전환(전환키, 대기열, Caps Lock, 재확인), 포커스 전환, 긴 문단 왕복 입력을 검증한다. 하니스는 macOS에 모드를 통보하는 부분을 기록만 하므로 테스트가 실제 입력 소스를 바꾸지 않는다.
+- 통합 테스트(`IMKIntegrationTests`): `PriTypeIMKHarness`로 실제 컨트롤러를 돌린다. 확정 순서, 백스페이스, 중복 키, 한/영 전환(전환키, 대기열, Caps Lock, 재확인), 포커스 전환, 긴 문단 왕복 입력, 한자(단어 변환, 짧은 끝말 교체, 커서가 옮겨진 뒤의 선택 취소, 클릭으로 닫은 뒤의 버퍼, 다른 앱의 글자, 늦은 비활성화)를 검증한다. 하니스는 macOS에 모드를 통보하는 부분을 기록만 하고 한자 후보창은 패널을 열지 않으므로, 테스트가 실제 입력 소스를 바꾸거나 창을 띄우지 않는다. 이벤트 탭의 후보창 키 라우팅과 클릭 감시는 실제 이벤트가 필요해 다루지 않는다.
 - `swift run PriTypeVerify`: 조합 동작 점검(CI에서 실행).
 - `swift run -c release PriTypeBenchmark`: 성능 측정.
 

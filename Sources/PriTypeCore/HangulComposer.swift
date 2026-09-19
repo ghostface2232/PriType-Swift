@@ -89,7 +89,21 @@ public class HangulComposer: @unchecked Sendable {
     /// Text convenience handler (double-space period)
     /// Owns all state for text convenience features
     private let textConvenience: TextConvenienceHandler
-    
+
+    /// Whether the user's Latin layout moved punctuation onto the letter keys.
+    private var latinLayout = LatinLayoutObserver()
+
+    /// Shows Hanja candidates. The IMK harness replaces it with a recorder.
+    public var candidatePresenter: any HanjaCandidatePresenting = HanjaCandidateWindow.shared
+
+    /// The app in front, which a Hanja lookup checks the input buffer against.
+    /// The IMK harness replaces it with its focused field's app.
+    public var frontmostBundleID: () -> String? = HangulComposer.systemFrontmostBundleID
+
+    public static func systemFrontmostBundleID() -> String? {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    }
+
     // MARK: - Initialization
     
     /// Creates a new HangulComposer with default settings
@@ -358,8 +372,8 @@ public class HangulComposer: @unchecked Sendable {
         
         // If Hanja candidate window is visible, forward keys to it
         if hanjaMode {
-            let consumed = HanjaCandidateWindow.shared.handleKey(event)
-            if !HanjaCandidateWindow.shared.isVisible {
+            let consumed = candidatePresenter.handleKey(event)
+            if !candidatePresenter.isVisible {
                 hanjaMode = false
                 hanjaKey = ""
             }
@@ -389,9 +403,16 @@ public class HangulComposer: @unchecked Sendable {
         
         // Letter keys compose from their position, not the active Latin layout: the
         // Hangul layout is defined on QWERTY positions, and only Shift (never Caps
-        // Lock) picks the upper row. Every other key keeps what the layout typed.
-        let positional = QwertyKeyMap.character(for: keyCode, shifted: event.modifierFlags.contains(.shift))
-        let composes = positional != nil
+        // Lock) picks the upper row. Every other key keeps what the layout typed,
+        // unless the layout put punctuation on the letter keys: then digits and
+        // punctuation come from their US positions (`LatinLayoutObserver`).
+        let shifted = event.modifierFlags.contains(.shift)
+        latinLayout.observe(keyCode: keyCode, characters: event.characters)
+        let letter = QwertyKeyMap.character(for: keyCode, shifted: shifted)
+        let composes = letter != nil
+        let positional = letter ?? (latinLayout.displacesPunctuation
+            ? QwertyKeyMap.punctuation(for: keyCode, shifted: shifted)
+            : nil)
         guard let inputCharacters = positional ?? event.characters, !inputCharacters.isEmpty else {
             return false
         }
@@ -570,7 +591,16 @@ public class HangulComposer: @unchecked Sendable {
     private var lastInputBundleId: String = ""
     
     /// Record which app the current keystroke is from (called from handle via controller)
+    ///
+    /// A keystroke in another app empties the buffer: what it holds was typed
+    /// there. Leaving a field commits its syllable and keeps it as the buffer's
+    /// last character, and once this records the new app `isBufferFromApp`
+    /// would vouch for that stranger, so a lookup would join it to the word
+    /// typed here (…한 in one app, 국 in the next → 韓國).
     public func markKeystroke(bundleId: String) {
+        if bundleId != lastInputBundleId {
+            localTextBuffer = ""
+        }
         lastInputBundleId = bundleId
     }
     
@@ -589,7 +619,7 @@ public class HangulComposer: @unchecked Sendable {
     /// keys routed to this client can reach it.
     public func dismissHanjaCandidates(reason: String) {
         guard hanjaMode else { return }
-        HanjaCandidateWindow.shared.dismiss()
+        candidatePresenter.dismiss()
         hanjaMode = false
         hanjaKey = ""
         DebugLogger.log("Hanja: dismissed by \(reason)")
@@ -603,8 +633,8 @@ public class HangulComposer: @unchecked Sendable {
         // A lookup queued just before the setting was turned off.
         guard ConfigurationManager.shared.hanjaEnabled else { return }
         // Toggle behavior: if already showing, dismiss
-        if HanjaCandidateWindow.shared.isVisible {
-            HanjaCandidateWindow.shared.dismiss()
+        if candidatePresenter.isVisible {
+            candidatePresenter.dismiss()
             hanjaMode = false
             hanjaKey = ""
             DebugLogger.log("Hanja: Toggled off")
@@ -640,7 +670,7 @@ public class HangulComposer: @unchecked Sendable {
         // The buffer counts only if it was filled in the app that has focus now.
         // Use NSWorkspace as the primary source of truth for frontmost app, because
         // cachedContext might be stale if the user clicked a non-text area in a new app.
-        let currentBundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let currentBundleId = frontmostBundleID()
             ?? PriTypeInputController.sharedController?.cachedContext?.bundleId ?? ""
         let buffer = isBufferFromApp(currentBundleId) ? localTextBuffer : ""
 
@@ -681,7 +711,7 @@ public class HangulComposer: @unchecked Sendable {
         // so firstRect() returns garbage values if called after commitComposition().
         // While preedit is active, the cursor is at the marked text position → valid
         // coordinates. The strategy chain lives in CursorRectResolver.
-        let cursorRect = CursorRectResolver.resolve(client: PriTypeInputController.sharedController?.client())
+        let cursorRect = CursorRectResolver.resolve(client: PriTypeInputController.sharedController?.currentClient)
 
         // Commit preedit AFTER capturing cursor position
         if hadPreedit {
@@ -692,21 +722,20 @@ public class HangulComposer: @unchecked Sendable {
         // Use ObjectIdentifier instead of weak reference: if the weak ref is deallocated,
         // validation would be skipped and hanja could be inserted into a wrong client.
         let snapshotClientID: ObjectIdentifier? = {
-            if let client = PriTypeInputController.sharedController?.client() as? IMKTextInput {
+            if let client = PriTypeInputController.sharedController?.currentClient {
                 return ObjectIdentifier(client as AnyObject)
             }
             return nil
         }()
         
-        HanjaCandidateWindow.shared.show(
+        candidatePresenter.show(
             entries: entries,
             cursorRect: cursorRect,
             onSelect: { [weak self, lookupIsBufferTail] entry in
                 guard let self = self else { return }
                 
                 // Validate: Ensure the client hasn't changed since the candidate window was shown
-                if let controller = PriTypeInputController.sharedController,
-                   let client = controller.client() {
+                if let client = PriTypeInputController.sharedController?.currentClient {
                     
                     // Safety check: if the client object changed (focus switched), dismiss silently
                     guard let originalID = snapshotClientID,
@@ -721,7 +750,16 @@ public class HangulComposer: @unchecked Sendable {
                     // may be a whole word ending at the caret.
                     let replacementLength = entry.hangul.utf16.count
                     let selRange = client.selectedRange()
-                    if selRange.location != NSNotFound && selRange.location < 10000000 && selRange.location >= replacementLength {
+                    if selRange.location != NSNotFound && selRange.location < 10000000 {
+                        // A caret closer to the start than the word is long
+                        // has left the word behind: inserting there instead
+                        // would put the Hanja in the middle of other text.
+                        guard selRange.location >= replacementLength else {
+                            DebugLogger.log("Hanja: the caret is before where the word could end — aborting selection")
+                            self.hanjaMode = false
+                            self.hanjaKey = ""
+                            return
+                        }
                         let replaceRange = NSRange(location: selRange.location - replacementLength, length: replacementLength)
                         let current = client.attributedSubstring(from: replaceRange)?.string
                         guard Self.canReplace(current, with: entry) else {
@@ -732,7 +770,9 @@ public class HangulComposer: @unchecked Sendable {
                         }
                         client.insertText(entry.hanja, replacementRange: replaceRange)
                     } else {
-                        // Fallback: just insert
+                        // The host reports no usable caret (NSNotFound, or
+                        // Chromium's garbage), so nothing can be checked or
+                        // replaced: insert at the caret, as always.
                         client.insertText(entry.hanja, replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
                     }
                 }
@@ -750,21 +790,28 @@ public class HangulComposer: @unchecked Sendable {
                 self?.hanjaMode = false
                 self?.hanjaKey = ""
                 DebugLogger.log("Hanja: Dismissed")
+            },
+            onClickOutside: { [weak self] in
+                // The click may have moved the caret, and with nothing marked
+                // IMK does not say so: the buffer no longer ends at the caret,
+                // and the next lookup must not convert the word typed before it.
+                self?.localTextBuffer = ""
             }
         )
         
         return true
     }
     
-    /// Whether a candidate may replace the text before the caret. A word spans
-    /// several syllables, so a stale buffer (the caret moved by a click the IME
-    /// never saw) would replace the wrong text. When the host reports that text
-    /// it must match. A single syllable, or a host that cannot report its text
-    /// (nil, or an empty string from hosts that answer with nothing), keeps the
-    /// old behavior of replacing blindly: Chromium hosts can report garbage, and
-    /// one syllable was never checked.
+    /// Whether a candidate may replace the text before the caret. The caret can
+    /// move without the IME hearing of it (a click, when nothing is marked), and
+    /// then the text before it is not what was looked up — for one syllable as
+    /// much as for a word. So when the host reports that text it must match.
+    /// Checking one syllable also refuses decomposed (NFD) text, where the
+    /// replaced UTF-16 unit would be a lone jamo of the syllable. A host that
+    /// cannot report its text (nil, or an empty string from hosts that answer
+    /// with nothing) is still replaced blindly: there is nothing to check.
     static func canReplace(_ current: String?, with entry: HanjaEntry) -> Bool {
-        guard let current, !current.isEmpty, entry.hangul.count > 1 else { return true }
+        guard let current, !current.isEmpty else { return true }
         return current.precomposedStringWithCanonicalMapping == entry.hangul.precomposedStringWithCanonicalMapping
     }
 

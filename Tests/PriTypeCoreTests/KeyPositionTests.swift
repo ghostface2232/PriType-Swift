@@ -77,4 +77,57 @@ struct KeyPositionTests {
         #expect(delegate.insertedTexts == ["m"])
         #expect(delegate.markedText.isEmpty)
     }
+
+    @Test("AZERTY: once the comma key types ㅡ, punctuation comes from the US positions")
+    func azertyGetsUSPunctuation() {
+        let (composer, delegate) = makeComposer()
+        // AZERTY types "," at the M key (46), where 두벌식 has ㅡ, and ";" at
+        // the US comma key (43), so the comma has no other key.
+        type([(",", 46, [])], into: composer, delegate)
+        #expect(delegate.markedText == "ㅡ")
+        type([(";", 43, []), ("m", 41, []), (":", 47, [.shift]), ("&", 18, [])], into: composer, delegate)
+        #expect(delegate.insertedTexts == ["ㅡ", ",", ";", ">", "1"])
+    }
+
+    @Test("Dvorak: ' , . on Q W E type jamo, and the US keys give the punctuation back")
+    func dvorakGetsUSPunctuation() {
+        let (composer, delegate) = makeComposer()
+        // Dvorak types "'" at Q (12), and "w" / "v" / "z" at US , . / (43, 47, 44).
+        type([("'", 12, [])], into: composer, delegate)
+        #expect(delegate.markedText == "ㅂ")
+        type([("w", 43, []), ("v", 47, []), ("Z", 44, [.shift])], into: composer, delegate)
+        #expect(delegate.insertedTexts == ["ㅂ", ",", ".", "?"])
+    }
+
+    @Test("A QWERTY-lettered layout keeps its own punctuation and national letters")
+    func germanKeepsItsKeys() {
+        let (composer, delegate) = makeComposer()
+        // German QWERTZ swaps Y and Z, both letters; ü and - sit off the letter keys.
+        type([("z", 16, []), ("y", 6, [])], into: composer, delegate)
+        let umlaut = composer.handle(TestEventFactory.keyEvent(char: "ü", keyCode: 33)!, delegate: delegate)
+        #expect(!umlaut, "ü reaches the host from the user's layout")
+        _ = composer.handle(TestEventFactory.keyEvent(char: "-", keyCode: 44)!, delegate: delegate)
+        #expect(delegate.insertedTexts.last == "-")
+    }
+
+    @Test("A letter after an unused dead accent is not taken for punctuation on the letter key")
+    func deadKeyResidueIsNoEvidence() {
+        let (composer, delegate) = makeComposer()
+        // German: ^ (dead) then R arrives as "^r".
+        type([("^r", 15, []), ("k", 40, [])], into: composer, delegate)
+        #expect(delegate.markedText == "가")
+        let umlaut = composer.handle(TestEventFactory.keyEvent(char: "ü", keyCode: 33)!, delegate: delegate)
+        #expect(!umlaut, "the layout is still taken as QWERTY-lettered")
+    }
+
+    @Test("The verdict follows the layout: letters on the letter keys again restore it")
+    func layoutVerdictFollowsChange() {
+        let (composer, delegate) = makeComposer()
+        type([(",", 46, [])], into: composer, delegate)       // AZERTY
+        type([(";", 43, [])], into: composer, delegate)
+        #expect(delegate.insertedTexts.last == ",")
+        type([("m", 46, [])], into: composer, delegate)       // the client now types QWERTY
+        type([(";", 43, [])], into: composer, delegate)
+        #expect(delegate.insertedTexts.last == ";", "the layout's own character again")
+    }
 }

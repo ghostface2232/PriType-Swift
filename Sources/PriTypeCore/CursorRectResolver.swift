@@ -11,22 +11,29 @@ import InputMethodKit
 /// inspired):
 ///
 /// 1. `firstRect(forCharacterRange:)` on the marked (else selected) range
-/// 2. `attributes(forCharacterIndex: pos-1)` — Chromium allows committed chars
+/// 2. `attributes(forCharacterIndex:)` at index 0, then at pos-1 — Chromium answers index 0 with the caret
 /// 3. cached last-known-good position (zero-cost, window stays where it last was)
 /// 4. Accessibility API (`AXSelectedTextRange` → `AXBoundsForRange`)
 /// 5. mouse location (last resort)
 public enum CursorRectResolver {
-    /// Cached last-known-good cursor position. When Chromium blocks coordinate
-    /// queries, reuse the last successful position instead of jumping to the mouse.
-    nonisolated(unsafe) static var lastKnownCursorRect: NSRect?
+    /// The last position resolved for a client. When Chromium blocks coordinate
+    /// queries, the same client's last position beats jumping to the mouse. It
+    /// is never reused for another client: that one's caret can be in another
+    /// window or on another display, and the candidates would open there.
+    nonisolated(unsafe) static var lastKnownCursorRect: (client: ObjectIdentifier, rect: NSRect)?
 
     /// Resolve a usable caret rect for `client`, falling back through the strategy
     /// chain. Always returns SOMETHING displayable (mouse location at worst).
     /// Call BEFORE committing the preedit: Chromium updates cursor position
     /// asynchronously after commit, so post-commit queries return garbage.
-    static func resolve(client: IMKTextInput?) -> NSRect {
+    /// `accessibility` is strategy 4; tests replace it.
+    static func resolve(
+        client: IMKTextInput?,
+        accessibility: () -> NSRect? = getCursorRectViaAccessibility
+    ) -> NSRect {
         var cursorRect = NSRect(x: NSEvent.mouseLocation.x, y: NSEvent.mouseLocation.y - 20, width: 0, height: 20)
         var resolved = false
+        let clientID = client.map { ObjectIdentifier($0 as AnyObject) }
 
         if let client {
             var actualRange = NSRange()
@@ -48,36 +55,43 @@ public enum CursorRectResolver {
                 } else {
                     DebugLogger.log("Hanja: firstRect returned invalid rect for range \(targetRange): \(rect)")
 
-                    // Strategy 2: attributes(forCharacterIndex: pos-1)
-                    // Like fcitx5, query the previously committed character (one IPC call only).
-                    // Chromium blocks queries for the active preedit character but allows committed ones.
-                    var lineRect = NSRect.zero
-                    let queryIndex = targetRange.location > 0 ? targetRange.location - 1 : 0
-                    _ = client.attributes(forCharacterIndex: queryIndex, lineHeightRectangle: &lineRect)
-
-                    if isValidCursorRect(lineRect) {
-                        cursorRect = lineRect
-                        resolved = true
-                        DebugLogger.log("Hanja: cursor from attributes(idx \(queryIndex)): \(lineRect)")
-                    } else {
+                    // Strategy 2: attributes(forCharacterIndex:), index 0 first, as
+                    // Squirrel, macSKK and fcitx5 ask. Measured in Google Docs (Chrome,
+                    // macOS 27): every firstRect query came back as garbage, while
+                    // index 0 answered with the caret itself, following it as each
+                    // syllable was typed. A document index past 0 answered with one
+                    // fixed spot near the window's corner — valid-looking, so it was
+                    // taken, and the candidates opened there from the second line on.
+                    // The previous character's document index stays as the fallback.
+                    var queryIndexes = [0]
+                    if targetRange.location > 1 { queryIndexes.append(targetRange.location - 1) }
+                    for queryIndex in queryIndexes {
+                        var lineRect = NSRect.zero
+                        _ = client.attributes(forCharacterIndex: queryIndex, lineHeightRectangle: &lineRect)
+                        if isValidCursorRect(lineRect) {
+                            cursorRect = lineRect
+                            resolved = true
+                            DebugLogger.log("Hanja: cursor from attributes(idx \(queryIndex)): \(lineRect)")
+                            break
+                        }
                         DebugLogger.log("Hanja: attributes(idx \(queryIndex)) also invalid: \(lineRect)")
                     }
                 }
             }
 
-            // Strategy 3: Use cached last-known-good position (fcitx5-style)
-            // If coordinate query failed but we have a recent successful position,
-            // reuse it. The window stays near where it last appeared — much better
-            // than jumping to the mouse cursor across the screen.
-            if !resolved, let cached = lastKnownCursorRect {
-                cursorRect = cached
+            // Strategy 3: this client's last-known-good position (fcitx5-style).
+            // If the coordinate query failed but the same client answered before,
+            // the window stays near where it last appeared — much better than
+            // jumping to the mouse cursor across the screen.
+            if !resolved, let cached = lastKnownCursorRect, cached.client == clientID {
+                cursorRect = cached.rect
                 resolved = true
-                DebugLogger.log("Hanja: using cached last-known-good position: \(cached)")
+                DebugLogger.log("Hanja: using this client's last-known-good position: \(cached.rect)")
             }
 
             // Strategy 4: AX element position (rough approximation)
             if !resolved {
-                if let axRect = getCursorRectViaAccessibility() {
+                if let axRect = accessibility() {
                     cursorRect = axRect
                     resolved = true
                     DebugLogger.log("Hanja: cursor from Accessibility API: \(axRect)")
@@ -87,9 +101,9 @@ public enum CursorRectResolver {
             }
         }
 
-        // Cache the resolved position for future fallback
-        if resolved {
-            lastKnownCursorRect = cursorRect
+        // Cache the resolved position for this client's future fallback
+        if resolved, let clientID {
+            lastKnownCursorRect = (clientID, cursorRect)
         }
 
         return cursorRect
@@ -229,11 +243,11 @@ public enum CursorRectResolver {
         }
 
         DebugLogger.log("Hanja AX: raw bounds = \(bounds)")
+        guard let primaryHeight = primaryDisplayHeight else { return nil }
 
-        // Chrome returns (0, y, 0, 0) — only y is valid
-        // If we have a valid y but x/width/height are zero, supplement from element position
-        if bounds.size.width == 0 && bounds.size.height == 0 && bounds.origin.y > 0 {
-            // Get the element's position to supplement x coordinate
+        // Chrome returns (0, y, 0, 0) — only y is valid. Supplement x from the
+        // element's position.
+        if bounds.size.width == 0 && bounds.size.height == 0 {
             var posValue: AnyObject?
             if AXUIElementCopyAttributeValue(axElement, kAXPositionAttribute as CFString, &posValue) == .success,
                let pv = validatedAXValue(posValue) {
@@ -242,22 +256,15 @@ public enum CursorRectResolver {
                     DebugLogger.log("Hanja AX: element position was not a CGPoint")
                     return nil
                 }
-
-                // Use element x + small offset, AX y, default height
-                let defaultHeight: CGFloat = 18
-                guard let screenHeight = NSScreen.main?.frame.height else { return nil }
-                let flippedY = screenHeight - bounds.origin.y - defaultHeight
-                let result = NSRect(x: pos.x, y: flippedY, width: 0, height: defaultHeight)
-                DebugLogger.log("Hanja AX: Chrome partial → supplemented with element pos: \(result)")
-
-                if isValidCursorRect(result) { return result }
+                if let result = chromiumPartialCaret(bounds, elementX: pos.x, primaryHeight: primaryHeight) {
+                    DebugLogger.log("Hanja AX: Chrome partial → supplemented with element pos: \(result)")
+                    if isValidCursorRect(result) { return result }
+                }
             }
         }
 
         // Normal case: full bounds available
-        guard let screenHeight = NSScreen.main?.frame.height else { return nil }
-        let flippedY = screenHeight - bounds.origin.y - bounds.size.height
-        let result = NSRect(x: bounds.origin.x, y: flippedY, width: bounds.size.width, height: bounds.size.height)
+        let result = appKitRect(fromAX: bounds, primaryHeight: primaryHeight)
 
         guard isValidCursorRect(result) else {
             DebugLogger.log("Hanja AX: converted rect invalid: \(result)")
@@ -288,16 +295,47 @@ public enum CursorRectResolver {
         }
 
         // Use the bottom-left of the element as a rough caret position
-        guard let screenHeight = NSScreen.main?.frame.height else { return nil }
+        guard let primaryHeight = primaryDisplayHeight else { return nil }
         let defaultHeight: CGFloat = 18
-        // Place at element's x, and bottom of element (y + height in AX coords)
-        let axBottom = pos.y + size.height
-        let flippedY = screenHeight - axBottom
-        let result = NSRect(x: pos.x, y: flippedY, width: 0, height: defaultHeight)
+        let bottomLeft = appKitRect(fromAX: CGRect(x: pos.x, y: pos.y + size.height, width: 0, height: 0),
+                                    primaryHeight: primaryHeight)
+        let result = NSRect(x: pos.x, y: bottomLeft.minY, width: 0, height: defaultHeight)
 
         DebugLogger.log("Hanja AX: element position fallback: \(result)")
         guard isValidCursorRect(result) else { return nil }
         return result
+    }
+
+    // MARK: - Accessibility Coordinates
+
+    /// Height of the primary display, the one with the menu bar. Accessibility
+    /// reports global coordinates from ITS top-left corner with y growing down;
+    /// AppKit's screen coordinates start at its bottom-left with y growing up.
+    /// Not `NSScreen.main`, which is the display with the key window: when that
+    /// is an external display of another height, the caret lands off by the
+    /// difference.
+    static var primaryDisplayHeight: CGFloat? {
+        NSScreen.screens.first?.frame.height
+    }
+
+    /// An Accessibility rect in AppKit screen coordinates.
+    static func appKitRect(fromAX rect: CGRect, primaryHeight: CGFloat) -> NSRect {
+        NSRect(x: rect.origin.x, y: primaryHeight - rect.origin.y - rect.height,
+               width: rect.width, height: rect.height)
+    }
+
+    /// Chromium answers AXBoundsForRange with only a y: (0, y, 0, 0). With the
+    /// focused element's x that still places the caret's line. A display above
+    /// or left of the primary one has negative coordinates, so a real y is told
+    /// from a missing one by its magnitude, not its sign. `nil` when `bounds` is
+    /// not such a partial answer.
+    static func chromiumPartialCaret(_ bounds: CGRect, elementX: CGFloat, primaryHeight: CGFloat) -> NSRect? {
+        guard bounds.width == 0, bounds.height == 0, bounds.origin.y.isFinite, abs(bounds.origin.y) > 1 else {
+            return nil
+        }
+        let lineHeight: CGFloat = 18
+        return appKitRect(fromAX: CGRect(x: elementX, y: bounds.origin.y, width: 0, height: lineHeight),
+                          primaryHeight: primaryHeight)
     }
 
     private static func validatedAXElement(_ value: AnyObject?) -> AXUIElement? {

@@ -110,6 +110,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// Session-derived views for collaborators (Hanja lookup in `HangulComposer`).
     public var currentAdapter: (any HangulComposerDelegate)? { session?.adapter }
     public var cachedContext: ClientContext? { session?.context }
+    /// The client this controller is typing into: the `sender` IMK passed with
+    /// the session's keys. The Hanja lookup reads and replaces text through it,
+    /// the same client every other edit goes to.
+    public var currentClient: IMKTextInput? { session?.client }
 
     #if DEBUG
     private var debugHandleLogCount = 0
@@ -133,6 +137,11 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             previous.session?.finalize(reason: .deactivateServer)
             previous.session?.disarmFocusLossFinalizer()
             previous.session?.markContextStale()
+            // Open candidates belong to the previous client. Its deactivation
+            // would close them, but IMK may deliver that only after this
+            // activation — and then it no longer owns the engine and leaves
+            // them up, with the event tap routing this client's keys to them.
+            composer.dismissHanjaCandidates(reason: "another client took over")
         }
         Self.sharedController = self
         if let pending = pendingSystemMode {
@@ -323,9 +332,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         if Self.sharedController === self {
             composer.dismissHanjaCandidates(reason: "focus change")
         }
-        // NOTE: Do NOT clear localTextBuffer here.
-        // Cross-app hanja leaking is prevented by bundleId matching in handleHanjaLookup(),
-        // not by clearing the buffer. Clearing would make same-app hanja lookup impossible.
+        // NOTE: Do NOT clear localTextBuffer here: same-app Hanja lookups need it
+        // after a reactivation. Cross-app leaking is prevented by the composer:
+        // `markKeystroke` empties the buffer on the first keystroke in another
+        // app, and `handleHanjaLookup` ignores a buffer typed in another app.
         super.deactivateServer(sender)
         // Keep the session alive — async Hanja callbacks need the adapter, and a
         // handle() arriving before the next activateServer needs the context. But:

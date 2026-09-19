@@ -277,7 +277,10 @@ struct HanjaWordLookupTests {
         #expect(HangulComposer.canReplace(nil, with: word))
         #expect(HangulComposer.canReplace("", with: word), "a host that reports nothing")
         let syllable = HanjaEntry(hangul: "한", hanja: "韓", meaning: "")
-        #expect(HangulComposer.canReplace("x", with: syllable))
+        #expect(HangulComposer.canReplace("한", with: syllable))
+        #expect(!HangulComposer.canReplace("요", with: syllable), "one syllable is checked too")
+        #expect(!HangulComposer.canReplace("\u{11AB}", with: syllable), "a lone jamo of NFD text")
+        #expect(HangulComposer.canReplace(nil, with: syllable))
     }
 
     @Test("The bundled dictionary converts a whole word")
