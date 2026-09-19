@@ -245,9 +245,10 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 |---|---|
 | `RightCommandSuppressor.lock` (재귀) | 탭의 모든 상태와 콜백. 콜백 전체 동안 잡는다. 콜백이 `stop()`을 부를 수 있어 재귀 잠금이다 |
 | `ConfigurationManager.keyBindingLock` | 탭이 키마다 읽는 값의 캐시: 전환키·한자키 바인딩, 전환 시점, 한자 켜짐 |
+| `PolledPreference.lock` | 다른 프로세스가 쓰는 설정의 캐시: Caps Lock 입력 소스 전환, 더블스페이스 마침표, 직접 입력 실험. 1초에 한 번까지만 다시 읽는다 |
 | `InputModeCoordinator.pendingActions` | 탭 스레드가 기록한 전환·한자 동작 대기열 |
 | `HanjaManager.condition` | 사전 로딩 상태. 미리 매핑만 기다리고 검색은 기다리지 않는다. 매핑된 사전 자체는 읽기 전용이다 |
-| `HanjaCandidateWindow.acceptingKeysState` | 탭이 읽는 후보창 표시 여부 |
+| `HanjaCandidateWindow.pageCandidatesState` | 탭이 읽는, 현재 쪽의 후보 수(0이면 창이 닫힘) |
 | `ToggleExclusionPolicy.lock` | 앞에 있는 앱과 제외 목록 |
 | libhangul `ThreadSafeHangulInputContext` | 조합 엔진 내부 상태 |
 
@@ -287,6 +288,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `IOKitManager` | IOHIDManager 대체 키 모니터, 손쉬운 사용·입력 모니터링 권한 확인 |
 | `HIDShortcutState` | IOKit 경로의 단축키 판정(HID usage 대응표, 장치별 눌린 키, 30초 만료, 한자키 0.5초 디바운스) |
 | `ToggleTrigger` | 전환 시점 설정과 `ModifierTapDetector` |
+| `KeyMonitors` | 키 모니터 시작의 유일한 경로: 콜백 연결, 탭, IOKit 대체 경로, 권한 대기 |
 | `KeyMonitorLifecycle` | 탭 실패 추적(`EventTapFailureTracker`), 좌우 수정키 상태(`ModifierKeyState`) |
 | `ToggleExclusionPolicy` | 전환키 제외 앱 판정 |
 | `KeyRecordingState`, `KeyRecordingSessions` | 설정 창 키 녹음 상태, 한 번에 한 행만 녹음 |
@@ -296,7 +298,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `CursorRectResolver` | 후보창 좌표 전략과 유효성 검증 |
 | `InputSourceManager` | TIS 조회, PriType 모드 선택, ABC 끄기, 유지보수 정리 |
 | `ABCLayoutStatusProbe`, `ABCRemovalVerification` | ABC 끄기 결과를 새 프로세스로 확인 |
-| `ConfigurationManager` | 사용자 설정(`UserDefaults`), 키 바인딩 이관, macOS 더블스페이스 설정 읽기. `ConfigurationProviding`으로 테스트에서 대체 가능 |
+| `ConfigurationManager` | 사용자 설정(`UserDefaults`), 키 바인딩 이관, macOS 설정 읽기(`PolledPreference`). `ConfigurationProviding`으로 테스트에서 대체 가능 |
 | `SettingsWindowController` | 설정 창 |
 | `UpdateChecker`, `UpdateNotifier`, `ReleaseChannel` | 업데이트 확인, 알림, 정식·베타 채널 판정 |
 | `AboutInfo` | 버전 정보, 정보 창 |
