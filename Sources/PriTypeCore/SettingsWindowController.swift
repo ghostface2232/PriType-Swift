@@ -62,12 +62,6 @@ public class SettingsWindowController: NSObject {
         newWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
-
-    @MainActor
-    public func closeSettings() {
-        window?.close()
-        window = nil
-    }
 }
 
 extension SettingsWindowController: NSWindowDelegate {
@@ -294,8 +288,6 @@ struct SettingsView: View {
             KeyRecorderRow(
                 label: L10n.keyBinding.toggleKey,
                 binding: $toggleKeyBinding,
-                conflictBinding: hanjaKeyBinding,
-                hasConflict: $hasKeyConflict,
                 isDisabled: capsLockSwitchEnabled,
                 disabledReason: L10n.keyBinding.disabledByCapsLock,
                 valueOverride: capsLockSwitchEnabled ? L10n.keyBinding.managedByMacOS : nil,
@@ -325,8 +317,6 @@ struct SettingsView: View {
             KeyRecorderRow(
                 label: L10n.keyBinding.hanjaKey,
                 binding: $hanjaKeyBinding,
-                conflictBinding: toggleKeyBinding,
-                hasConflict: $hasKeyConflict,
                 isDisabled: !hanjaEnabled,
                 disabledReason: L10n.keyBinding.disabledByHanjaOff,
                 valueOverride: nil,
@@ -984,8 +974,6 @@ struct ToggleTriggerRow: View {
 struct KeyRecorderRow: View {
     let label: String
     @Binding var binding: KeyBinding
-    let conflictBinding: KeyBinding
-    @Binding var hasConflict: Bool
     let isDisabled: Bool
     let disabledReason: String?
     let valueOverride: String?
