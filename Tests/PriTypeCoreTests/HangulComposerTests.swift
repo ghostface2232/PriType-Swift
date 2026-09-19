@@ -279,6 +279,29 @@ struct HangulComposerTests {
         #expect(delegate.markedText.isEmpty, "Marked text must be cleared after commit")
     }
 
+    @Test("Moving the caret or running a shortcut empties the Hanja buffer, in either mode")
+    func caretMovesAndShortcutsClearBuffer() {
+        // The buffer stands for the text before the caret. After any of these the
+        // caret may be elsewhere (or the text changed), so a Hanja lookup must not
+        // convert what was typed before them.
+        let keys: [(String, NSEvent)] = [
+            ("←", TestEventFactory.keyEvent(char: "\u{F702}", keyCode: KeyCode.leftArrow)!),
+            ("Tab", TestEventFactory.keyEvent(char: "\t", keyCode: KeyCode.tab)!),
+            ("Return", TestEventFactory.keyEvent(char: "\r", keyCode: KeyCode.`return`)!),
+            ("Home (Fn+←)", TestEventFactory.keyEvent(char: "\u{F729}", keyCode: 115)!),
+            ("⌘V", TestEventFactory.keyEvent(char: "v", keyCode: 9, modifiers: [.command])!)
+        ]
+        for mode in [InputMode.korean, .english] {
+            for (name, event) in keys {
+                let (composer, delegate) = makeComposer()
+                composer.setInputMode(mode)
+                composer.localTextBuffer = "한국"
+                _ = composer.handle(event, delegate: delegate)
+                #expect(composer.localTextBuffer.isEmpty, "\(name) in \(mode) mode left '\(composer.localTextBuffer)'")
+            }
+        }
+    }
+
     @Test("setInputMode clears the local text buffer")
     func setInputModeClearsLocalBuffer() {
         let (composer, _) = makeComposer()

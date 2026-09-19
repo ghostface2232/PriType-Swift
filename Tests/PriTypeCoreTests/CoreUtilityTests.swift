@@ -38,14 +38,19 @@ struct CompositionHelpersTests {
     
     @Test("Normalize full syllable preserves it")
     func normalizeSyllable() {
-        let result = CompositionHelpers.normalizeJamoForDisplay([0xAC00])
-        #expect(!result.isEmpty)
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0xAC00]) == "가")
     }
-    
-    @Test("Normalize Choseong Jamo produces non-empty result")
-    func normalizeChoseongJamo() {
-        let result = CompositionHelpers.normalizeJamoForDisplay([0x1100])
-        #expect(!result.isEmpty)
+
+    @Test("Initial, medial and final jamo all display as compatibility jamo")
+    func normalizeJamoPositions() {
+        // libhangul's preedit carries positional jamo (U+1100…); the marked text
+        // shows the compatibility forms (U+3131…), whichever slot the jamo is in.
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0x1100]) == "\u{3131}")  // ᄀ → ㄱ
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0x1112]) == "\u{314E}")  // ᄒ → ㅎ
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0x1161]) == "\u{314F}")  // ᅡ → ㅏ
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0x1175]) == "\u{3163}")  // ᅵ → ㅣ
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0x11A8]) == "\u{3131}")  // ᆨ → ㄱ
+        #expect(CompositionHelpers.normalizeJamoForDisplay([0x11C2]) == "\u{314E}")  // ᇂ → ㅎ
     }
 }
 
