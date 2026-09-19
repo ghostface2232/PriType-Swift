@@ -10,6 +10,7 @@ let kConnectionName = "PriType_InputString_v2"
 class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     
     private var hasLaunchedBefore = false
+    private let updateCheckScheduler = NSBackgroundActivityScheduler(identifier: "com.pritype.inputmethod.v2.updatecheck")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DebugLogger.log("AppDelegate: applicationDidFinishLaunching")
@@ -42,20 +43,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         // Setup update notifications
         UpdateNotifier.shared.setup()
         
-        // Check for updates in background (respects user preference and 24h throttle)
-        if ConfigurationManager.shared.autoUpdateCheckEnabled {
-            Task.detached(priority: .utility) {
-                let result = await UpdateChecker.shared.checkForUpdatesIfNeeded()
-                if case .updateAvailable(let info) = result {
-                    UpdateNotifier.shared.notifyUpdateAvailable(info)
-                }
-            }
+        // Check for updates now and then daily. An input method runs from login to
+        // logout, often for weeks, so a check only at launch would rarely run.
+        // The scheduler lets the system pick an idle moment; the 24h throttle
+        // inside `checkForUpdatesIfNeeded` still decides whether to ask GitHub.
+        Self.checkForUpdates {}
+        updateCheckScheduler.repeats = true
+        updateCheckScheduler.interval = 24 * 60 * 60
+        updateCheckScheduler.qualityOfService = .utility
+        updateCheckScheduler.schedule { completion in
+            Self.checkForUpdates { completion(.finished) }
         }
         
         // Mark as launched (don't show settings on first boot)
         hasLaunchedBefore = true
     }
     
+    /// One automatic check, if the user allows them (and 24h have passed).
+    private static func checkForUpdates(then done: @escaping @Sendable () -> Void) {
+        guard ConfigurationManager.shared.autoUpdateCheckEnabled else { return done() }
+        Task.detached(priority: .utility) {
+            let result = await UpdateChecker.shared.checkForUpdatesIfNeeded()
+            if case .updateAvailable(let info) = result {
+                UpdateNotifier.shared.notifyUpdateAvailable(info)
+            }
+            done()
+        }
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         DebugLogger.log("AppDelegate: applicationShouldHandleReopen")
         // Only show settings when explicitly launched from Launchpad/Finder (reopen)
