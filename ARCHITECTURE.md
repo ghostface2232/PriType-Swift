@@ -211,7 +211,6 @@ Caps Lock, 입력 메뉴, 그리고 4단계 통보에 대한 응답이 모두 �
 - `selectPriTypeMode`: 전환 결과를 macOS 입력 소스 표시에 반영한다(위 전환 처리 4단계).
 - `enabledRomanKeyboardLayoutID`: 영문 모드에서 앱에 지정할 로마자 자판을 찾는다.
 - `disableABCKeyboardLayout`: 설정 창의 "ABC 입력 소스 끄기". HIToolbox 설정을 고치고 `TextInputMenuAgent`를 재시작한다. 이 프로세스의 TIS 캐시는 갱신되지 않으므로, 결과는 자기 자신을 `--abc-layout-status`로 새로 실행해 확인한다(`ABCLayoutStatusProbe`, 최대 약 3초 재시도 `ABCRemovalVerification`).
-- `cleanupStaleInputSources`: 오래된 PriType 항목과 중복을 HIToolbox 설정에서 지우는 유지보수 도구다. 세 키의 정리본을 모두 계획한 뒤 함께 쓰고, 되읽기 검증에 실패하면 함께 되돌린다. 시작할 때 자동으로 실행하지 않는다.
 
 ## 설정 창 (`SettingsWindowController`)
 
@@ -296,7 +295,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `HanjaDictionary` | 매핑 한자 사전의 형식, 이진 탐색, 컴파일러 |
 | `HanjaCandidateWindow` | 한자 후보창, 키 처리와 이벤트 탭 라우팅, 배치 |
 | `CursorRectResolver` | 후보창 좌표 전략과 유효성 검증 |
-| `InputSourceManager` | TIS 조회, PriType 모드 선택, ABC 끄기, 유지보수 정리 |
+| `InputSourceManager` | TIS 조회, PriType 모드 선택, ABC 끄기 |
 | `ABCLayoutStatusProbe`, `ABCRemovalVerification` | ABC 끄기 결과를 새 프로세스로 확인 |
 | `ConfigurationManager` | 사용자 설정(`UserDefaults`), 키 바인딩 이관, macOS 설정 읽기(`PolledPreference`). `ConfigurationProviding`으로 테스트에서 대체 가능 |
 | `SettingsWindowController` | 설정 창 |
