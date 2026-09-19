@@ -66,7 +66,7 @@ public final class UpdateChecker: @unchecked Sendable {
     
     // MARK: - Constants
     
-    private let apiURL = "https://api.github.com/repos/Meapri/PriType-Swift/releases?per_page=100"
+    private let apiURL = "https://api.github.com/repos/\(AboutInfo.repository)/releases?per_page=100"
     
     /// Minimum interval between automatic checks (24 hours)
     private let checkInterval: TimeInterval = 24 * 60 * 60

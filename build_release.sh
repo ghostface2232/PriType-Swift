@@ -15,7 +15,17 @@ MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 PKG_OUTPUT="PriTypeV2_Release.pkg"
 COMPONENT_PLIST="PriTypeV2_components.plist"
-KEYCHAIN_PROFILE="${KEYCHAIN_PROFILE:-PriTypeNotary}"
+# Signing is chosen by the caller, not discovered from the keychain:
+#   APP_SIGN_IDENTITY  codesign identity for the app. Defaults to "-" (ad-hoc).
+#                      Any fixed certificate, even a self-signed one, keeps
+#                      Accessibility and Input Monitoring grants across updates;
+#                      ad-hoc signing makes macOS ask for them again every time.
+#   PKG_SIGN_IDENTITY  Developer ID Installer identity. Unset leaves the pkg unsigned.
+#   KEYCHAIN_PROFILE   notarytool profile. Notarizes only with a Developer ID
+#                      app and a signed pkg.
+APP_SIGN_IDENTITY="${APP_SIGN_IDENTITY:--}"
+PKG_SIGN_IDENTITY="${PKG_SIGN_IDENTITY:-}"
+KEYCHAIN_PROFILE="${KEYCHAIN_PROFILE:-}"
 
 cleanup() {
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
@@ -60,21 +70,19 @@ xattr -cr "$PAYLOAD_DIR/$APP_BUNDLE" 2>/dev/null || true
 
 # Code Signing the App
 echo "[3/6] Code Signing the .app bundle..."
-APP_SIGN_IDENTITY=""
-# Try to find Developer ID Application first
-DEV_ID_APP=$(security find-identity -v -p codesigning | grep "Developer ID Application:" | head -n 1 | awk -F'"' '{print $2}')
-if [ -n "$DEV_ID_APP" ]; then
-    APP_SIGN_IDENTITY="$DEV_ID_APP"
+if [ "$APP_SIGN_IDENTITY" = "-" ]; then
+    echo "Using ad-hoc signature"
+    codesign --force --sign - "$PAYLOAD_DIR/$APP_BUNDLE"
+elif [[ "$APP_SIGN_IDENTITY" == "Developer ID Application:"* ]]; then
+    echo "Using App Identity: $APP_SIGN_IDENTITY"
+    codesign --force --options runtime --timestamp --sign "$APP_SIGN_IDENTITY" "$PAYLOAD_DIR/$APP_BUNDLE"
+else
+    # Apple's timestamp service only accepts Apple-issued certificates.
+    echo "Using App Identity: $APP_SIGN_IDENTITY"
+    codesign --force --sign "$APP_SIGN_IDENTITY" "$PAYLOAD_DIR/$APP_BUNDLE"
 fi
-
-if [ -z "$APP_SIGN_IDENTITY" ]; then
-    echo "Error: Developer ID Application certificate is required for release builds." >&2
-    exit 1
-fi
-
-echo "Using App Identity: $APP_SIGN_IDENTITY"
-codesign --force --options runtime --timestamp --sign "$APP_SIGN_IDENTITY" "$PAYLOAD_DIR/$APP_BUNDLE"
 codesign --verify --strict --verbose=2 "$PAYLOAD_DIR/$APP_BUNDLE"
+codesign --display --requirements - "$PAYLOAD_DIR/$APP_BUNDLE" 2>&1 | grep designated || true
 
 # Building the PKG
 APP_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
@@ -88,37 +96,49 @@ pkgbuild --analyze --root "$PAYLOAD_DIR" "$COMPONENT_PLIST"
 # Use plutil to change BundleIsRelocatable to false for the first item
 plutil -replace 0.BundleIsRelocatable -bool NO "$COMPONENT_PLIST"
 
-PKG_SIGN_IDENTITY=""
-# Try to find Developer ID Installer first
-DEV_ID_INSTALLER=$(security find-identity -v | grep "Developer ID Installer:" | head -n 1 | awk -F'"' '{print $2}')
-if [ -n "$DEV_ID_INSTALLER" ]; then
-    PKG_SIGN_IDENTITY="$DEV_ID_INSTALLER"
+# The identifier predates the fork. Keep it so installs of earlier releases upgrade in place.
+PKG_SIGN_ARGS=()
+if [ -n "$PKG_SIGN_IDENTITY" ]; then
+    echo "Using Installer Identity: $PKG_SIGN_IDENTITY"
+    PKG_SIGN_ARGS=(--sign "$PKG_SIGN_IDENTITY")
+else
+    echo "Leaving the PKG unsigned"
 fi
-
-if [ -z "$PKG_SIGN_IDENTITY" ]; then
-    echo "Error: Developer ID Installer certificate is required for release packages." >&2
-    exit 1
-fi
-
-echo "Using Installer Identity: $PKG_SIGN_IDENTITY"
 pkgbuild --root "$PAYLOAD_DIR" \
          --component-plist "$COMPONENT_PLIST" \
          --install-location "$INSTALL_DIR" \
          --scripts "Packaging/scripts" \
          --identifier "com.meapri.PriTypeV2" \
          --version "$PKG_VERSION" \
-         --sign "$PKG_SIGN_IDENTITY" \
+         "${PKG_SIGN_ARGS[@]}" \
          "$PKG_OUTPUT"
 
-echo "[5/6] Submitting for Notarization..."
-xcrun notarytool submit "$PKG_OUTPUT" --keychain-profile "$KEYCHAIN_PROFILE" --wait
-echo "Stapling Notarization Ticket..."
-xcrun stapler staple "$PKG_OUTPUT"
+if [ -n "$KEYCHAIN_PROFILE" ]; then
+    if [ -z "$PKG_SIGN_IDENTITY" ] || [[ "$APP_SIGN_IDENTITY" != "Developer ID Application:"* ]]; then
+        echo "Error: notarization needs a Developer ID Application identity and a signed PKG." >&2
+        exit 1
+    fi
+    echo "[5/6] Submitting for Notarization..."
+    xcrun notarytool submit "$PKG_OUTPUT" --keychain-profile "$KEYCHAIN_PROFILE" --wait
+    echo "Stapling Notarization Ticket..."
+    xcrun stapler staple "$PKG_OUTPUT"
+else
+    echo "[5/6] Skipping notarization (KEYCHAIN_PROFILE not set)"
+fi
 
-echo "[6/6] Validating signed and notarized package..."
-xcrun stapler validate "$PKG_OUTPUT"
-pkgutil --check-signature "$PKG_OUTPUT"
-spctl -a -vv -t install "$PKG_OUTPUT"
+echo "[6/6] Validating the package..."
+if ! pkgutil --payload-files "$PKG_OUTPUT" | grep -q "PriTypeV2.app/Contents/MacOS/PriTypeV2$"; then
+    echo "Error: the PKG payload is missing the app executable." >&2
+    exit 1
+fi
+if [ -n "$PKG_SIGN_IDENTITY" ]; then
+    pkgutil --check-signature "$PKG_OUTPUT"
+fi
+if [ -n "$KEYCHAIN_PROFILE" ]; then
+    xcrun stapler validate "$PKG_OUTPUT"
+    spctl -a -vv -t install "$PKG_OUTPUT"
+fi
+shasum -a 256 "$PKG_OUTPUT"
 
 echo "=========================================="
 echo "    Done! PKG created: $PKG_OUTPUT"

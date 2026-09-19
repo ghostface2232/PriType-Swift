@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 미출시 (Stable 예정)
+
+### 배포
+- 이 버전부터 [ghostface2232/PriType-Swift](https://github.com/ghostface2232/PriType-Swift) 포크에서 배포합니다. 업데이트 확인과 설정의 "최신 릴리스" 링크가 포크의 GitHub Releases를 봅니다. 원본 저장소의 릴리스는 더 이상 알리지 않습니다.
+- 릴리스 PKG를 GitHub의 macOS VM(Xcode 27)에서 빌드합니다. Apple 개발자 계정 없이 배포하므로 앱은 ad-hoc으로 서명하고 PKG는 서명·공증하지 않습니다. 처음 설치할 때 `시스템 설정 > 개인정보 보호 및 보안`에서 한 번 허용해야 합니다. 저장소 시크릿에 고정 인증서(자체 서명도 가능)를 넣으면 그 인증서로 서명해, 업데이트 뒤에도 손쉬운 사용·입력 모니터링 권한이 유지됩니다. 서명 전용 self-hosted 러너는 더 쓰지 않습니다.
+- `build_release.sh`는 키체인에서 Developer ID를 찾지 않고 `APP_SIGN_IDENTITY`·`PKG_SIGN_IDENTITY`·`KEYCHAIN_PROFILE`로 서명과 공증을 정합니다. 셋 다 주면 이전처럼 Developer ID 서명과 공증을 합니다.
+- 버전을 `2.8.0`, 빌드를 `51`로 올렸습니다. 원본 v2.7.4(빌드 50, 커밋 `45b68fb`) 이후의 변경입니다.
+
 ### 수정 (표준 두벌식과 다른 조합과 백스페이스 — 2026-09-20)
 - 모음만 조합 중일 때 자음을 치면 그 자음이 앞 모음과 합쳐지던 문제를 수정했습니다. 예를 들어 ㅏ 다음에 ㄴ, ㅏ를 치면 "ㅏ나"가 아니라 "나ㅏ"가 됐습니다. libhangul-swift가 모음을 먼저 쳐도 뒤의 자음과 합치는 모아치기를 기본으로 켜 두기 때문이었습니다. 이제 표준 두벌식처럼 모음을 확정하고 자음부터 새 글자를 시작합니다.
 - 표준 두벌식에 없는 조합을 하지 않습니다. libhangul-swift는 ㅏ ㅑ ㅓ ㅕ + ㅣ를 ㅐ ㅒ ㅔ ㅖ로, 받침 ㄱ + ㄱ과 ㅅ + ㅅ을 ㄲ과 ㅆ으로 합쳐서 "아" + ㅣ가 "애", "각" + ㄱ이 "갂", "갓" + ㅅ이 "갔"이 됐습니다. 이제 각각 "아ㅣ", "각ㄱ", "갓ㅅ"이 됩니다. ㅐ ㅒ ㅔ ㅖ ㄲ ㅆ은 제 키(Shift 포함)로만 입력됩니다.
@@ -167,6 +175,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 포커스 상실 안전망(NSWorkspace 비활성 옵저버)을 세션 소유로 옮기고, `deactivateServer`에서 반드시 disarm하도록 했습니다. 이전 구조에서는 stale 옵저버가 늦게 발화하면 공유 composer의 새 조합을 이전 앱 클라이언트로 흘릴 수 있는 cross-app commit-leak 가능성이 있었습니다.
 - `deactivateServer` 이후 같은 클라이언트 객체로 `handle()`이 먼저 도착하는 경우(컨텍스트 stale — 같은 앱의 다른 필드로 포커스 이동 가능) 컨텍스트를 재분석한 뒤 처리하도록 명시했습니다.
 
+## [2.7.4] - 2026-06-06 (Stable)
+
+원본 저장소에서 빌드 50으로 배포된 릴리스입니다. 버전 번호는 2026-05-21에 정했고, 그 뒤 6월 초까지의 변경(아래 "변경"부터 첫 "검증"까지)이 이 릴리스에 함께 들어갔습니다.
+
 ### 변경
 - 한글 조합 중 표시되던 밑줄(preedit underline)을 제거하고 평문 marked text로 표시하도록 했습니다.
 - 앱 포커스 상실 시 조합을 강제 커밋하던 호환성 로직(과거 KakaoTalk 대응에서 일반화한 NSWorkspace 비활성 옵저버)을 완전히 제거했습니다. 정상 포커스 전환 commit은 IMK `deactivateServer`가 담당합니다.
@@ -203,7 +215,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `swift run -c debug PriTypeVerify`
 - `swift build -c release --product PriType`
 
-## [2.7.4] - 2026-05-21 (Stable)
 
 ### 수정
 - 시작 시 PriType이 자기 입력 소스를 다시 enable 하던 경로를 제거해, 부팅 후 macOS가 입력 소스 추가/허용 확인창을 띄울 수 있는 부작용을 줄였습니다.

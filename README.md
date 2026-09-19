@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Meapri/PriType-Swift/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Meapri/PriType-Swift?label=release"></a>
+  <a href="https://github.com/ghostface2232/PriType-Swift/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/ghostface2232/PriType-Swift?label=release"></a>
   <img alt="macOS" src="https://img.shields.io/badge/macOS-14.0%2B-111111">
   <img alt="Swift" src="https://img.shields.io/badge/Swift-6.2-F05138">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
@@ -34,13 +34,13 @@ PriType은 Swift와 InputMethodKit으로 만든 macOS용 한글 입력기입니�
 - **macOS 설정 연동**
   스페이스 두 번으로 마침표 입력은 PriType 별도 설정이 아니라 macOS 텍스트 입력 설정을 따릅니다.
 
-- **공증된 설치 패키지**
-  릴리즈 PKG는 Developer ID 서명, Apple 공증, Gatekeeper 검증을 거쳐 배포합니다.
+- **GitHub에서 빌드한 설치 패키지**
+  릴리즈 PKG는 GitHub Actions의 깨끗한 macOS VM에서 태그 기준으로 빌드합니다. Apple 공증은 받지 않았으므로 처음 설치할 때 한 번 허용이 필요합니다.
 
 ## 설치
 
-1. [최신 릴리즈](https://github.com/Meapri/PriType-Swift/releases/latest)에서 `PriTypeV2_Release.pkg`를 다운로드합니다.
-2. PKG를 실행해 설치합니다.
+1. [최신 릴리즈](https://github.com/ghostface2232/PriType-Swift/releases/latest)에서 `PriTypeV2_Release.pkg`를 다운로드합니다.
+2. PKG를 실행해 설치합니다. macOS가 "Apple이 확인할 수 없음"이라며 막으면, `시스템 설정 > 개인정보 보호 및 보안` 아래쪽의 **그래도 열기**를 누른 뒤 다시 실행합니다.
 3. `시스템 설정 > 키보드 > 텍스트 입력 > 입력 소스`에서 PriType `한글` 입력 소스를 추가합니다.
 4. PriType 내부의 한/영 모드는 사용자 지정 전환키로 즉시 전환됩니다.
 
@@ -84,8 +84,11 @@ Caps Lock 입력 소스 전환을 쓰지 않는다면 PriType 설정에서 한/�
 # 개발 빌드
 swift build
 
-# 릴리즈 PKG 생성, 서명, 공증, Gatekeeper 검증
+# 릴리즈 PKG 생성 (기본은 ad-hoc 서명, 서명 방식은 스크립트 상단 참고)
 ./build_release.sh
+
+# 고정 인증서로 서명 (손쉬운 사용·입력 모니터링 권한이 업데이트 뒤에도 유지됨)
+APP_SIGN_IDENTITY=PriTypeDev ./build_release.sh
 ```
 
 ## 문제 해결
