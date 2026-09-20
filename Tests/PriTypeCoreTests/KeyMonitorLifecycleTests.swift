@@ -197,11 +197,19 @@ struct EventTapThreadTests {
 struct PendingToggleTests {
     /// Record toggles from a real thread (GCD `sync` may run the block on main
     /// itself). Waiting blocks main, so the hop to main cannot drain them first.
-    private func requestOffMain(at times: [TimeInterval]) {
+    /// Wait for one turn of the main queue: everything already queued on it has run.
+    private func mainQueueTurn() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
+    private func requestOffMain(at times: [TimeInterval],
+                                on coordinator: InputModeCoordinator = .shared) {
         let done = DispatchSemaphore(value: 0)
         Thread {
             for time in times {
-                InputModeCoordinator.shared.requestToggle(source: .customKey, eventTime: time)
+                coordinator.requestToggle(source: .customKey, eventTime: time)
             }
             done.signal()
         }.start()
@@ -232,6 +240,52 @@ struct PendingToggleTests {
         #expect(coordinator.pendingActionCount == 1)
         coordinator.applyPendingKeyActions(before: 31)
         #expect(coordinator.pendingActionCount == 0)
+    }
+
+    @Test("A toggle already run by a keystroke does not drag a later one in with it")
+    func aDrainedActionLeavesNoTimerThatRunsTheNextOne() async {
+        // Its own coordinator: this test has to suspend to watch a timer, and the
+        // shared one is drained by every other suite running alongside it.
+        // A wait far longer than the shipping 30 ms, so the moments this has to
+        // tell apart are not scheduling noise on a machine running other suites.
+        let grace: TimeInterval = 0.5
+        let coordinator = InputModeCoordinator(inFlightKeyGrace: grace)
+        var performed: [InputModeCoordinator.KeyAction] = []
+        coordinator.performOverride = { performed.append($0) }
+
+        let now = ProcessInfo.processInfo.systemUptime
+
+        // Toggle A reaches main with no keystroke handled yet, so it starts its
+        // wait for keys that might still be in flight, and arms a timer to end it.
+        // Waiting for a turn of the main queue, rather than for a duration, is what
+        // makes "its hop has run" a fact instead of a guess.
+        requestOffMain(at: [now + 10], on: coordinator)
+        await mainQueueTurn()
+        #expect(performed.isEmpty, "A waits for keys pressed before it")
+
+        // A key pressed just after A arrives and runs A itself. A's wait is over —
+        // but its timer is still armed, with nothing left of A to run.
+        coordinator.applyPendingKeyActions(before: now + 11)
+        #expect(performed == [.toggle(.customKey)])
+
+        // Toggle B is pressed late enough that A's orphaned timer will fire during
+        // B's own wait, not after it. A timer that drained the whole queue would
+        // take B with it, giving B none of the wait — the reordering this exists
+        // to prevent, arrived at from the other side.
+        try? await Task.sleep(for: .seconds(grace * 0.8))
+        requestOffMain(at: [now + 60], on: coordinator)
+        try? await Task.sleep(for: .seconds(grace * 0.4))
+        #expect(performed == [.toggle(.customKey)],
+                "B ran early, carried by the earlier toggle's timer")
+
+        // B's own wait still ends, so nothing is stuck.
+        var drained = false
+        for _ in 0..<40 where !drained {
+            try? await Task.sleep(for: .milliseconds(50))
+            drained = coordinator.pendingActionCount == 0
+        }
+        #expect(drained)
+        #expect(performed == [.toggle(.customKey), .toggle(.customKey)])
     }
 
     @Test("A toggle no keystroke follows does not stay pending")

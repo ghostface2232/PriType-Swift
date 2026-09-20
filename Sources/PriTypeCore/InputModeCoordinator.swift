@@ -54,7 +54,13 @@ public final class InputModeCoordinator: @unchecked Sendable {
     /// to each other: Hanja then toggle must look up in the mode it was pressed in.
     private let pendingActions = OSAllocatedUnfairLock<[PendingAction]>(initialState: [])
 
-    private init() {}
+    /// The app has exactly one of these — `shared`. Tests make their own, because
+    /// the ordering this class implements is about timers and threads, and a test
+    /// that has to suspend to observe a timer cannot also share its queue with
+    /// every other suite running alongside it.
+    init(inFlightKeyGrace: TimeInterval = InputModeCoordinator.defaultInFlightKeyGrace) {
+        self.inFlightKeyGrace = inFlightKeyGrace
+    }
 
     /// Request a toggle. Callable from any thread: off main it records the toggle
     /// and applies it on main, or earlier if a later keystroke reaches `handle()`
@@ -124,22 +130,36 @@ public final class InputModeCoordinator: @unchecked Sendable {
     ///
     /// The bound is what keeps a host that never forwards a key to IMK (a shortcut
     /// field, a non-text view) from leaving the toggle pending forever.
-    static let inFlightKeyGrace: TimeInterval = 0.03
+    static let defaultInFlightKeyGrace: TimeInterval = 0.03
+
+    /// This coordinator's wait. Only a test changes it, to make the margins it has
+    /// to observe larger than the scheduling noise of a busy machine.
+    let inFlightKeyGrace: TimeInterval
 
     /// The press time of the newest keystroke that has reached `handle()`.
     /// Main thread only, like everything it is compared against.
     private var lastHandledKeyTime: TimeInterval = -.infinity
 
-    /// An action has reached main from the key-monitor thread. Run the queue now if
-    /// every key pressed before it has already been handled; otherwise give those
-    /// keys the bounded moment above to arrive on their own.
+    /// An action has reached main from the key-monitor thread. Run it now if every
+    /// key pressed before it has already been handled; otherwise give those keys
+    /// the bounded moment above to arrive on their own.
+    ///
+    /// Either way the drain reaches only as far as THIS action. A drain that ran
+    /// the whole queue would carry later actions with it, and those are the ones
+    /// with keys still in flight: an action already run by a keystroke leaves its
+    /// timer armed, and that timer firing would apply an action pressed after it
+    /// with none of the wait this exists to give — the reordering it was meant to
+    /// prevent, arrived at from the other side.
     private func drainAfterKeyMonitorHop(pressedAt eventTime: TimeInterval) {
-        if lastHandledKeyTime >= eventTime {
-            applyPendingKeyActions()
+        // `runPendingActions(before:)` runs what was pressed strictly earlier, and
+        // this action is the one being waited on, so the bound includes it.
+        let throughThisAction = eventTime.nextUp
+        guard lastHandledKeyTime < eventTime else {
+            runPendingActions(before: throughThisAction)
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.inFlightKeyGrace) {
-            self.applyPendingKeyActions()
+        DispatchQueue.main.asyncAfter(deadline: .now() + inFlightKeyGrace) {
+            self.runPendingActions(before: throughThisAction)
         }
     }
 
@@ -150,7 +170,16 @@ public final class InputModeCoordinator: @unchecked Sendable {
     ///   handled. Only actions pressed before it run; later ones stay pending for
     ///   their own hop. `nil` runs everything.
     public func applyPendingKeyActions(before keyTime: TimeInterval? = nil) {
+        // Only a real keystroke moves this: it is the evidence that everything
+        // pressed before it has arrived. An action's own drain bound must not count,
+        // or one toggle reaching main would tell the next one that the keys between
+        // them are all in.
         if let keyTime { lastHandledKeyTime = max(lastHandledKeyTime, keyTime) }
+        runPendingActions(before: keyTime)
+    }
+
+    /// Run the due prefix of the queue without recording anything about keystrokes.
+    private func runPendingActions(before keyTime: TimeInterval?) {
         let due = pendingActions.withLock { pending -> [PendingAction] in
             guard let keyTime else {
                 defer { pending.removeAll() }
