@@ -294,6 +294,23 @@ struct IMKIntegrationTests {
         #expect(field.client.selectionQueries == 4, "Selections move, so none of them is a fixed answer")
     }
 
+    @Test("Clearing a field to the start does not switch the rewrite off")
+    func backspaceToDocumentStartKeepsRewriting() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("ab", replacementRange: NSRange(location: NSNotFound, length: 0))
+        for _ in 0..<6 {                      // empties the field, then keeps going
+            #expect(!harness.press(.backspace))
+        }
+        #expect(field.client.text.isEmpty)
+
+        // A caret at the start is a real answer, not a host refusing to answer.
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls == [.insert("각"), .host("delete(각)")])
+    }
+
     @Test("Escape drops the composition and is consumed")
     func escapeCancels() {
         let (harness, field) = start()

@@ -148,13 +148,12 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
     /// lagged for a moment gets its allowance back on the next focus change.
     private var unappliedRewrites = 0
 
-    /// The unusable caret report this host keeps repeating, and how many times in
-    /// a row. Google Docs answers every query with "one character selected at
-    /// offset 0" and an empty document, whatever the real caret is: it draws its
-    /// own text and shows the input method an empty shell. Asking it again can
-    /// never help, so the identical answer, repeated, ends the questions for this
-    /// field. A real selection being deleted looks nothing like this — its range
-    /// moves with the text.
+    /// The refusal this host keeps repeating, and how many times in a row. Google
+    /// Docs answers every query with "one character selected at offset 0" and an
+    /// empty document, whatever the real caret is: it draws its own text and shows
+    /// the input method an empty shell. Asking it again can never help, so the
+    /// identical refusal, repeated, ends the questions for this field. Selections
+    /// being deleted move with the text, so ordinary editing never looks like it.
     private var repeatedUnusableSelection: (range: NSRange, count: Int)?
 
     /// Whether the rewrite has given up on this field.
@@ -231,8 +230,8 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         lastPrecomposed = nil
     }
 
-    /// Count an unusable caret report, and say so once when the host is written off.
-    private func noteUnusableSelection(_ selRange: NSRange) {
+    /// Count a refusal, and say so once when the host is written off.
+    private func noteRefusedCaret(_ selRange: NSRange) {
         if let repeated = repeatedUnusableSelection, repeated.range == selRange {
             repeatedUnusableSelection = (selRange, repeated.count + 1)
         } else {
@@ -254,14 +253,23 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
             return
         }
 
-        // A selection is deleted whole; only a caret deletes by character.
         let selRange = client.selectedRange()
-        guard selRange.location != NSNotFound, selRange.location < 10000000,
-              selRange.length == 0, selRange.location >= 2 else {
-            noteUnusableSelection(selRange)
+
+        // A host that cannot answer says so the same way every time. A caret that
+        // is merely too close to the start of the document, or a selection being
+        // deleted, is a real answer — counting those would switch the rewrite off
+        // in a healthy host, for instance while holding Backspace to clear a field.
+        let isRefusal = selRange.location == NSNotFound
+            || selRange.location >= DirectInsertionPlanner.maxReasonableLocation
+            || selRange.length > 0
+        if isRefusal {
+            noteRefusedCaret(selRange)
             return
         }
         repeatedUnusableSelection = nil
+
+        // A selection is deleted whole; only a caret deletes by character.
+        guard selRange.location >= 2 else { return }
 
         // Four units: a syllable of three jamo and the one before it.
         let start = max(0, selRange.location - 4)
