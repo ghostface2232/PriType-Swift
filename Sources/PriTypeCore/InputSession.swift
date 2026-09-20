@@ -74,6 +74,8 @@ final class InputSession: @unchecked Sendable {
         context = newContext
         contextNeedsRefresh = false
         ensureAdapterMatchesPolicy()
+        // A different field may take the rewrite the previous one refused.
+        adapter.resumePrecomposing()
         if focusLossObserver != nil, newContext.bundleId != oldBundleId {
             armFocusLossFinalizer()
         }

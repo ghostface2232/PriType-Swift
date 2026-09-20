@@ -115,7 +115,7 @@ struct IMKIntegrationTests {
         #expect(field.client.calls == [.insert("각"), .host("delete(각)")])
     }
 
-    @Test("A host that ignores the replacement range is not asked twice")
+    @Test("A host that ignores the replacement range gets its Backspaces back")
     func backspaceInHostIgnoringReplacementRange() {
         let (harness, field) = start()
         defer { harness.finish() }
@@ -124,15 +124,18 @@ struct IMKIntegrationTests {
         field.client.insertText(syllable, replacementRange: NSRange(location: NSNotFound, length: 0))
         field.client.clearLog()
 
-        // The host inserts 각 at the caret and then deletes it again: nothing moves.
-        #expect(!harness.press(.backspace))
-        #expect(field.client.text == syllable)
-        // So the next Backspace must reach the host instead of inserting again.
-        #expect(!harness.press(.backspace))
-        #expect(field.client.text == "\u{1100}\u{1161}", "The host took a jamo off")
-        #expect(field.client.calls == [
-            .insert("각"), .host("delete(각)"), .host("delete(\u{11A8})"),
-        ])
+        // Such a host inserts the syllable at the caret and deletes it again:
+        // nothing moves and that Backspace is lost. Two of those are enough to
+        // stop trying, and every Backspace after that takes a jamo off, exactly
+        // as it did before this feature existed.
+        var lengths: [Int] = []
+        for _ in 0..<6 {
+            #expect(!harness.press(.backspace))
+            lengths.append(field.client.text.utf16.count)
+        }
+        #expect(lengths == [3, 2, 2, 1, 0, 0], "Got \(lengths)")
+        #expect(field.client.calls.filter { $0.description.hasPrefix("insert") }.count == 2,
+                "Two wasted rewrites at most, then it leaves the host alone")
     }
 
     @Test("A caret that comes back to the same offset still gets its rewrite")

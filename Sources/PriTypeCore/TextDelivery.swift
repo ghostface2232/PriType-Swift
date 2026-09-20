@@ -140,6 +140,20 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
     /// that merely comes back to the same offset still gets its rewrite.
     private var lastPrecomposed: (caret: Int, syllable: String)?
 
+    /// How many rewrites this host has been seen not to apply. A host that ignores
+    /// replacement ranges edits at the caret instead and then deletes what it just
+    /// inserted, so every rewrite is wasted AND swallows its Backspace. After a few
+    /// of those the rewrite stops for this field: Backspace goes straight to the
+    /// host, exactly as it did before this feature existed. A host that merely
+    /// lagged for a moment gets its allowance back on the next focus change.
+    private var unappliedRewrites = 0
+
+    /// Whether the rewrite has given up on this field.
+    private var precomposeIsHopeless: Bool { unappliedRewrites >= Self.unappliedRewriteLimit }
+
+    /// Two are a pattern; one can be a single slow moment in a healthy host.
+    private static let unappliedRewriteLimit = 2
+
     init(client: IMKTextInput, bundleId: String) {
         self.client = client
         self.bundleId = bundleId
@@ -185,7 +199,14 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         lastPrecomposed = nil
     }
 
+    /// Give this host's rewrites another chance (called when the field changes).
+    func resumePrecomposing() {
+        unappliedRewrites = 0
+        lastPrecomposed = nil
+    }
+
     func precomposeSyllableBeforeCursor(followsBackspace: Bool) {
+        guard !precomposeIsHopeless else { return }
         let previous = lastPrecomposed
         lastPrecomposed = nil
 
@@ -208,6 +229,10 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         // re-inserting, at a stale range, text the host has already deleted.
         if followsBackspace, previous?.caret == selRange.location, previous?.syllable == syllable {
             lastPrecomposed = previous
+            unappliedRewrites += 1
+            if precomposeIsHopeless {
+                DebugLogger.log("Precompose: \(bundleId) kept none of its rewrites; leaving Backspace alone")
+            }
             return
         }
 
