@@ -36,7 +36,7 @@ import Foundation
 enum DuplicateKeyProbe {
     #if DEBUG
     /// Read once, like the signpost switch, so an ordinary run pays one `Bool`.
-    static let isRecording = UserDefaults.standard.bool(forKey: "com.pritype.dedupProbe")
+    static let isRecording = PreferencesDomain.defaults.bool(forKey: "com.pritype.dedupProbe")
 
     static func record(_ event: KeyDownSnapshot, previous: KeyDownSnapshot?,
                        duplicate: Bool, bundleId: String) {

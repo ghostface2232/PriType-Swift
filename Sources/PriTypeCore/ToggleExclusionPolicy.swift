@@ -22,14 +22,24 @@ import Cocoa
 /// The same policy is consulted by `IOKitManager` (the hardware fallback) and by
 /// the async toggle callbacks, so a user's exclusion cannot be bypassed by
 /// whichever monitor happens to own the keyboard.
-public final class ToggleExclusionPolicy: @unchecked Sendable {
+public final class ToggleExclusionPolicy: Sendable {
 
     public static let shared = ToggleExclusionPolicy()
 
-    private let lock = NSLock()
-    private var frontmostBundleID: String?
-    private var excludedBundleIDs: Set<String> = []
-    private var observer: NSObjectProtocol?
+    /// Everything mutable here, including the workspace observer.
+    ///
+    /// The observer used to sit outside the lock, on a class that promised to be
+    /// `Sendable` anyway, with a comment saying the promise did not extend to it.
+    /// That is the shape of hole this file is here to not have: `stop()` cleared
+    /// it from main while nothing stopped another thread from reading it. It is
+    /// cheap to put it under the same lock as the snapshot, so it is under it.
+    private final class State {
+        var frontmostBundleID: String?
+        var excludedBundleIDs: Set<String> = []
+        var observer: NSObjectProtocol?
+    }
+
+    private let state = Guarded(State())
 
     private init() {}
 
@@ -39,17 +49,20 @@ public final class ToggleExclusionPolicy: @unchecked Sendable {
     ///
     /// Safe to call more than once; later calls only refresh the snapshot.
     ///
-    /// - Important: Main thread only. `isTogglePaused` and the snapshot setters are
-    ///   lock-protected and callable from the event-tap thread, but `observer` is
-    ///   not — the class is `@unchecked Sendable` for the hot-path read, which does
-    ///   not extend to lifecycle.
+    /// - Important: Main thread only — `NSWorkspace` requires it. Thread safety
+    ///   no longer rests on that: every field this touches is lock-protected.
     public func start(configuration: ConfigurationProviding = ConfigurationManager.shared) {
         dispatchPrecondition(condition: .onQueue(.main))
         refreshExcludedBundleIDs(from: configuration)
         updateFrontmostBundleID(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
 
-        guard observer == nil else { return }
-        observer = NSWorkspace.shared.notificationCenter.addObserver(
+        guard state.withLock({ $0.observer == nil }) else { return }
+        // Registering goes to the workspace's notification centre, which is not
+        // this class's to make promises about. The tap thread waits on this lock
+        // for every keystroke on the system, so nothing that can block belongs
+        // inside it — the same rule `refreshExcludedBundleIDs` follows. Main-only
+        // by precondition, so no second `start()` can be racing this one.
+        let observer = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
@@ -57,6 +70,7 @@ public final class ToggleExclusionPolicy: @unchecked Sendable {
             let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             self?.updateFrontmostBundleID(app?.bundleIdentifier)
         }
+        state.withLock { $0.observer = observer }
     }
 
     /// Stop tracking. Clears both halves of the snapshot so no stale value can keep
@@ -65,17 +79,27 @@ public final class ToggleExclusionPolicy: @unchecked Sendable {
     /// - Important: Main thread only, for the same reason as `start()`.
     public func stop() {
         dispatchPrecondition(condition: .onQueue(.main))
+        // Clear the snapshot under the lock, unregister outside it: the removal
+        // can synchronize against notification delivery already in flight, and a
+        // keystroke must never wait on that.
+        let observer = state.withLock { state -> NSObjectProtocol? in
+            defer {
+                state.observer = nil
+                state.frontmostBundleID = nil
+                state.excludedBundleIDs = []
+            }
+            return state.observer
+        }
         if let observer {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
-        observer = nil
-        lock.lock()
-        frontmostBundleID = nil
-        excludedBundleIDs = []
-        lock.unlock()
     }
 
     deinit {
+        let observer = state.withLock { state -> NSObjectProtocol? in
+            defer { state.observer = nil }
+            return state.observer
+        }
         if let observer {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
@@ -85,18 +109,16 @@ public final class ToggleExclusionPolicy: @unchecked Sendable {
 
     /// Re-read the user's exclusion list. Call after the settings UI changes it.
     public func refreshExcludedBundleIDs(from configuration: ConfigurationProviding = ConfigurationManager.shared) {
+        // Read the configuration outside the lock: it can go to the preferences
+        // system, and the tap thread may be waiting on this lock for a keystroke.
         let normalized = Set(configuration.toggleExcludedBundleIDs.map(Self.normalize))
-        lock.lock()
-        excludedBundleIDs = normalized
-        lock.unlock()
+        state.withLock { $0.excludedBundleIDs = normalized }
     }
 
     /// Record the frontmost app. Internal so tests can drive it without a workspace.
     func updateFrontmostBundleID(_ bundleID: String?) {
         let normalized = bundleID.map(Self.normalize)
-        lock.lock()
-        frontmostBundleID = normalized
-        lock.unlock()
+        state.withLock { $0.frontmostBundleID = normalized }
     }
 
     // MARK: - Hot Path
@@ -106,17 +128,17 @@ public final class ToggleExclusionPolicy: @unchecked Sendable {
     /// Read from the CGEventTap callback: a lock-protected set lookup, no AX or
     /// workspace query.
     public var isTogglePaused: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let frontmostBundleID, !excludedBundleIDs.isEmpty else { return false }
-        return excludedBundleIDs.contains(frontmostBundleID)
+        state.withLock { state in
+            guard let frontmost = state.frontmostBundleID, !state.excludedBundleIDs.isEmpty else {
+                return false
+            }
+            return state.excludedBundleIDs.contains(frontmost)
+        }
     }
 
     /// The bundle ID currently treated as frontmost (for diagnostics and tests).
     var currentFrontmostBundleID: String? {
-        lock.lock()
-        defer { lock.unlock() }
-        return frontmostBundleID
+        state.withLock { $0.frontmostBundleID }
     }
 
     // MARK: - Pure Policy

@@ -26,8 +26,8 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     // Two PriType input modes registered in Info.plist ComponentInputModeDict.
     // Korean composes; English is a pure pass-through (ABC layout override).
     // macOS Caps Lock / input-source switching moves between these two modes.
-    private static let priTypeInputSourceID = "com.pritype.inputmethod.v2"          // Korean mode (== bundle id)
-    private static let priTypeEnglishInputModeID = "com.pritype.inputmethod.v2.english"
+    private static let priTypeInputSourceID = PreferencesDomain.priTypeSuiteName    // Korean mode (== bundle id)
+    private static let priTypeEnglishInputModeID = PreferencesDomain.priTypeSuiteName + ".english"
     // MARK: - Shared State
     //
     // THREAD SAFETY INVARIANTS:
@@ -522,7 +522,11 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     private func shouldPassThroughSecureInput(client: IMKTextInput, context: ClientContext) -> Bool {
         let bundleId = context.bundleId
         let isSystemSecureClient = SecureInputPolicy.isSystemSecureClient(bundleId)
-        let hasGlobalSecureInput = IsSecureEventInputEnabled()
+        // A client that answers this itself does; everyone else gets macOS's
+        // answer. See `GlobalSecureInputReporting` for why the seam is on the
+        // client rather than on a global.
+        let hasGlobalSecureInput = (client as? GlobalSecureInputReporting)?.reportsGlobalSecureInput
+            ?? IsSecureEventInputEnabled()
 
         // selectedRange is synchronous client IPC. Probe only when it can change the
         // decision: a global secure-input warning. System

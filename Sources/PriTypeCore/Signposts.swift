@@ -66,7 +66,7 @@ enum Signposts {
     }
 
     /// Whether this run emits intervals at all. Read once — see **Cost, measured**.
-    static let isRecording = UserDefaults.standard.bool(forKey: "com.pritype.signposts")
+    static let isRecording = PreferencesDomain.defaults.bool(forKey: "com.pritype.signposts")
 
     /// Time `body` as an interval when this run is recording.
     ///

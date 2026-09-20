@@ -22,14 +22,14 @@ public final class InputSourceManager: @unchecked Sendable {
     /// Keyboard Layout ID for ABC (252)
     static let abcKeyboardLayoutID = 252
 
-    private static let priTypeBundleID = "com.pritype.inputmethod.v2"
+    private static let priTypeBundleID = PreferencesDomain.priTypeSuiteName
     
     // MARK: - Mode Selection
 
     /// Tell macOS which PriType mode is now active, so the menu-bar input source
     /// matches `HangulComposer.inputMode`.
     ///
-    /// `Docs/UnifiedInputArchitecture.md` forbids driving a custom toggle *with*
+    /// ARCHITECTURE.md ("한/영 전환") forbids driving a custom toggle *with*
     /// `TISSelectInputSource`, and that invariant stands: in 2.7.x the selection
     /// WAS the switch, and its asynchrony is what ate the first character after a
     /// toggle. This is the opposite order. The composer has already switched

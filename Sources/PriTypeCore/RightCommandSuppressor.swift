@@ -38,21 +38,60 @@ import ApplicationServices
 /// event. It is recursive because the callback itself can call `stop()` when it
 /// hands off to IOKit. Nothing holding it waits on the tap thread, so it cannot
 /// deadlock against the callback.
-public final class RightCommandSuppressor: @unchecked Sendable {
+public final class RightCommandSuppressor: Sendable {
     
     // Singleton - accessed from CGEventTap callback context
     public static let shared = RightCommandSuppressor()
-    
-    private let lock = NSRecursiveLock()
 
-    private var eventTap: CFMachPort?
-    private var tapThread: EventTapThread?
-    
+    /// Everything mutable in the tap path, behind one lock.
+    ///
+    /// This is a class rather than a struct because the callback re-enters the
+    /// lock: handing a toggle over to IOKit calls `stop()` from inside the event
+    /// it is handling. A re-entrant `withLock` on a struct would be a second
+    /// `inout` view of one value, which is an exclusivity violation; on a class
+    /// it is the same object, which is what the code already assumed.
+    private final class State {
+        var eventTap: CFMachPort?
+        var tapThread: EventTapThread?
+
+        /// Called on the event-tap thread at the moment the key is seen.
+        var onToggle: (@Sendable (_ eventTime: TimeInterval) -> Void)?
+        var onHanjaLookup: (@Sendable (_ eventTime: TimeInterval) -> Void)?
+        /// Delivered on the main queue.
+        var onTapFailed: (@Sendable () -> Void)?
+        /// Delivered on the main queue.
+        var onKeyRecorded: (@Sendable (_ keyCode: Int64, _ modifiers: UInt64) -> Void)?
+
+        /// Track toggle modifier state
+        var toggleModifierIsDown = false
+        /// In tap mode, whether the current toggle-modifier press can still be a tap.
+        var toggleTap = ModifierTapDetector()
+        /// Track hanja modifier state
+        var hanjaModifierIsDown = false
+        /// Debounce timer for Hanja trigger to prevent double-fire
+        var lastHanjaTriggerTime: DispatchTime = .init(uptimeNanoseconds: 0)
+        /// Track Control state for Control+Space
+        var controlIsDown = false
+        /// Tracks recovery and makes the CGEventTap -> IOKit handoff exactly-once.
+        var failureTracker = EventTapFailureTracker()
+
+        /// Whether recording mode is active (for Key Recorder in settings)
+        var isRecordingKey = false
+        var recordingState = KeyRecordingState()
+
+        var lastToggleProvenance: ToggleProvenance?
+
+        /// Whether the tap exists and the system still has it enabled.
+        var isRunning: Bool { eventTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
+    }
+
+    private let state = Guarded(State())
+
     /// Whether the event tap is currently running
     public var isRunning: Bool {
-        lock.withLock { eventTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
+        state.withLock { $0.isRunning }
     }
-    
+
     /// Callback for toggle. Called on the event-tap thread at the moment the key is
     /// seen, so it must be thread-safe and must not block.
     /// `InputModeCoordinator.requestToggle` is both.
@@ -61,78 +100,65 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     /// `NSEvent.timestamp` (seconds of uptime), so the owner can tell keystrokes
     /// typed before the toggle from those typed after it.
     public var onToggle: (@Sendable (_ eventTime: TimeInterval) -> Void)? {
-        get { lock.withLock { _onToggle } }
-        set { lock.withLock { _onToggle = newValue } }
+        get { state.withLock { $0.onToggle } }
+        set { state.withLock { $0.onToggle = newValue } }
     }
-    private var _onToggle: (@Sendable (_ eventTime: TimeInterval) -> Void)?
-    
+
     /// Callback for Hanja lookup. Called on the event-tap thread with the key's
     /// time, like `onToggle`, so it must be thread-safe and must not block.
     /// `InputModeCoordinator.requestHanjaLookup` is both.
     public var onHanjaLookup: (@Sendable (_ eventTime: TimeInterval) -> Void)? {
-        get { lock.withLock { _onHanjaLookup } }
-        set { lock.withLock { _onHanjaLookup = newValue } }
+        get { state.withLock { $0.onHanjaLookup } }
+        set { state.withLock { $0.onHanjaLookup = newValue } }
     }
-    private var _onHanjaLookup: (@Sendable (_ eventTime: TimeInterval) -> Void)?
-    
-    /// Track toggle modifier state
-    private var toggleModifierIsDown = false
 
-    /// In tap mode, whether the current toggle-modifier press can still be a tap.
-    private var toggleTap = ModifierTapDetector()
-    
-    /// Track hanja modifier state
-    private var hanjaModifierIsDown = false
-    
-    /// Debounce timer for Hanja trigger to prevent double-fire
-    private var lastHanjaTriggerTime: DispatchTime = .init(uptimeNanoseconds: 0)
-
-    /// Track Control state for Control+Space
-    private var controlIsDown = false
-    
-    /// Tracks recovery and makes the CGEventTap → IOKit handoff exactly-once.
-    private var failureTracker = EventTapFailureTracker()
-    
     /// Callback for when CGEventTap permanently fails and IOKit should take over.
     /// Delivered on the main queue.
     public var onTapFailed: (@Sendable () -> Void)? {
-        get { lock.withLock { _onTapFailed } }
-        set { lock.withLock { _onTapFailed = newValue } }
+        get { state.withLock { $0.onTapFailed } }
+        set { state.withLock { $0.onTapFailed = newValue } }
     }
-    private var _onTapFailed: (@Sendable () -> Void)?
-    
+
     /// Whether recording mode is active (for Key Recorder in settings)
     public var isRecordingKey: Bool {
-        get { lock.withLock { _isRecordingKey } }
+        get { state.withLock { $0.isRecordingKey } }
         set {
-            lock.withLock {
-                _isRecordingKey = newValue
-                recordingState = KeyRecordingState()
+            state.withLock { state in
+                state.isRecordingKey = newValue
+                state.recordingState = KeyRecordingState()
             }
         }
     }
-    private var _isRecordingKey = false
-    private var recordingState = KeyRecordingState()
-    
+
     /// Callback for key recording (settings UI). Delivered on the main queue.
-    public var onKeyRecorded: ((_ keyCode: Int64, _ modifiers: UInt64) -> Void)? {
-        get { lock.withLock { _onKeyRecorded } }
-        set { lock.withLock { _onKeyRecorded = newValue } }
+    ///
+    /// `@Sendable` because it is handed to `DispatchQueue.main.async` from the
+    /// tap thread — which it always was, without the annotation that says so.
+    public var onKeyRecorded: (@Sendable (_ keyCode: Int64, _ modifiers: UInt64) -> Void)? {
+        get { state.withLock { $0.onKeyRecorded } }
+        set { state.withLock { $0.onKeyRecorded = newValue } }
     }
-    private var _onKeyRecorded: ((_ keyCode: Int64, _ modifiers: UInt64) -> Void)?
     
     init() {}
-    
+
     // MARK: - Start/Stop
     
     /// Start monitoring toggle keys
     /// - Returns: `true` if CGEventTap was created successfully, `false` otherwise
     @discardableResult
     public func start() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        if eventTap != nil && !isRunning { stop() }
-        guard eventTap == nil else {
+        state.withLock { startLocked($0) }
+    }
+
+    /// The body of `start()`, with the lock already held.
+    ///
+    /// The public entry points take the lock and call these; the internal paths
+    /// call these directly. Splitting them is what lets one non-recursive
+    /// acquisition cover a whole event, and it makes the re-entrant call sites
+    /// visible instead of implicit in the lock's type.
+    private func startLocked(_ state: State) -> Bool {
+        if state.eventTap != nil && !state.isRunning { stopLocked(state) }
+        guard state.eventTap == nil else {
             // Enforce single ownership even if another caller redundantly starts the
             // primary monitor after an IOKit fallback was active.
             IOKitManager.shared.stop()
@@ -154,7 +180,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         }
         
         // Create event tap
-        eventTap = CGEvent.tapCreate(
+        state.eventTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,
@@ -167,34 +193,34 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         )
         
-        guard let eventTap = eventTap else {
+        guard let tap = state.eventTap else {
             DebugLogger.log("RightCommandSuppressor: Failed to create event tap")
             return false
         }
 
-        failureTracker.reset()
+        state.failureTracker.reset()
         
         // Service the tap from its own thread, never the main run loop.
-        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0) else {
+        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
             DebugLogger.log("RightCommandSuppressor: Failed to create run loop source")
-            CGEvent.tapEnable(tap: eventTap, enable: false)
-            self.eventTap = nil
+            CGEvent.tapEnable(tap: tap, enable: false)
+            state.eventTap = nil
             return false
         }
         let thread = EventTapThread(source: source)
         guard thread.startAndWait() else {
             DebugLogger.log("RightCommandSuppressor: Event tap thread did not start")
             thread.stopRunLoop()
-            CGEvent.tapEnable(tap: eventTap, enable: false)
-            self.eventTap = nil
+            CGEvent.tapEnable(tap: tap, enable: false)
+            state.eventTap = nil
             return false
         }
-        tapThread = thread
+        state.tapThread = thread
 
         // CGEventTap now owns keyboard monitoring. Stop a prior hardware fallback
         // before enabling the tap so a physical press has only one active producer.
         IOKitManager.shared.stop()
-        CGEvent.tapEnable(tap: eventTap, enable: true)
+        CGEvent.tapEnable(tap: tap, enable: true)
         
         let config = ConfigurationManager.shared
         DebugLogger.log("RightCommandSuppressor: Started (toggle=\(config.toggleKeyBinding.displayName), hanja=\(config.hanjaKeyBinding.displayName))")
@@ -204,29 +230,32 @@ public final class RightCommandSuppressor: @unchecked Sendable {
     /// Recreate a running tap so its event mask matches the current toggle
     /// trigger (clicks are watched only in tap mode). Main thread.
     public func restartForTriggerChange() {
-        lock.lock()
-        defer { lock.unlock() }
-        guard eventTap != nil else { return }
-        stop()
-        start()
+        state.withLock { state in
+            guard state.eventTap != nil else { return }
+            stopLocked(state)
+            _ = startLocked(state)
+        }
     }
 
     /// Stop monitoring. Callable from main or from the tap callback itself.
     public func stop() {
-        lock.lock()
-        defer { lock.unlock() }
-        if let eventTap = eventTap {
+        state.withLock { stopLocked($0) }
+    }
+
+    /// The body of `stop()`, with the lock already held.
+    private func stopLocked(_ state: State) {
+        if let eventTap = state.eventTap {
             CGEvent.tapEnable(tap: eventTap, enable: false)
         }
         // Never waits for the thread: the callback may be the caller, and a waiting
-        // main thread would hold `lock` against a callback that needs it.
-        tapThread?.stopRunLoop()
-        tapThread = nil
-        eventTap = nil
-        toggleModifierIsDown = false
-        toggleTap.interrupt()
-        hanjaModifierIsDown = false
-        controlIsDown = false
+        // main thread would hold the lock against a callback that needs it.
+        state.tapThread?.stopRunLoop()
+        state.tapThread = nil
+        state.eventTap = nil
+        state.toggleModifierIsDown = false
+        state.toggleTap.interrupt()
+        state.hanjaModifierIsDown = false
+        state.controlIsDown = false
         DebugLogger.log("RightCommandSuppressor: Stopped")
     }
     
@@ -238,28 +267,41 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                      toggleEnabled: Bool? = nil, hanjaEnabled: Bool? = nil,
                      trigger: ToggleTrigger? = nil, recoveryFlags: UInt64? = nil,
                      excludedOverride: Bool? = nil) -> Unmanaged<CGEvent>? {
-        lock.lock()
-        defer { lock.unlock() }
+        state.withLock { state in
+            handleEventLocked(state, type: type, event: event,
+                              toggle: toggle, hanja: hanja,
+                              toggleEnabled: toggleEnabled, hanjaEnabled: hanjaEnabled,
+                              trigger: trigger, recoveryFlags: recoveryFlags,
+                              excludedOverride: excludedOverride)
+        }
+    }
+
+    // swiftlint:disable:next function_parameter_count cyclomatic_complexity function_body_length
+    private func handleEventLocked(_ state: State, type: CGEventType, event: CGEvent,
+                                   toggle: KeyBinding?, hanja: KeyBinding?,
+                                   toggleEnabled: Bool?, hanjaEnabled: Bool?,
+                                   trigger: ToggleTrigger?, recoveryFlags: UInt64?,
+                                   excludedOverride: Bool?) -> Unmanaged<CGEvent>? {
         // Re-enable tap if disabled by system
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            switch failureTracker.recordDisable(at: CFAbsoluteTimeGetCurrent()) {
+            switch state.failureTracker.recordDisable(at: CFAbsoluteTimeGetCurrent()) {
             case .handoffToIOKit:
                 // Stop/remove the tap before notifying the owner. The callback starts
                 // IOKit on the main queue, so there is never an overlap window.
                 DebugLogger.log("RightCommandSuppressor: Tap repeatedly disabled; stopping before IOKit handoff")
-                let callback = _onTapFailed
-                stop()
+                let callback = state.onTapFailed
+                stopLocked(state)
                 DispatchQueue.main.async {
                     callback?()
                 }
             case .reenable(let attempt):
-                DebugLogger.log("RightCommandSuppressor: Tap disabled (\(attempt)/\(failureTracker.maxRetries)), re-enabling")
+                DebugLogger.log("RightCommandSuppressor: Tap disabled (\(attempt)/\(state.failureTracker.maxRetries)), re-enabling")
                 let flags = recoveryFlags ?? CGEventSource.flagsState(.combinedSessionState).rawValue
-                toggleModifierIsDown = ModifierKeyState.isDown((toggle ?? ConfigurationManager.shared.toggleKeyBinding).keyCode, flags: flags)
+                state.toggleModifierIsDown = ModifierKeyState.isDown((toggle ?? ConfigurationManager.shared.toggleKeyBinding).keyCode, flags: flags)
                 // A press that began while the tap was off was never seen whole.
-                toggleTap.interrupt()
-                hanjaModifierIsDown = ModifierKeyState.isDown((hanja ?? ConfigurationManager.shared.hanjaKeyBinding).keyCode, flags: flags)
-                if let tap = eventTap {
+                state.toggleTap.interrupt()
+                state.hanjaModifierIsDown = ModifierKeyState.isDown((hanja ?? ConfigurationManager.shared.hanjaKeyBinding).keyCode, flags: flags)
+                if let tap = state.eventTap {
                     CGEvent.tapEnable(tap: tap, enable: true)
                 }
             case .ignore:
@@ -270,7 +312,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         
         // A click while the toggle modifier is down makes it a ⌘-click, not a tap.
         if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown {
-            toggleTap.interrupt()
+            state.toggleTap.interrupt()
             return Unmanaged.passUnretained(event)
         }
 
@@ -284,14 +326,14 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         let excluded = excludedOverride ?? ToggleExclusionPolicy.shared.isTogglePaused
         let priTypeToggleEnabled = (toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled) && !excluded
         if !priTypeToggleEnabled {
-            toggleModifierIsDown = false
-            toggleTap.interrupt()
+            state.toggleModifierIsDown = false
+            state.toggleTap.interrupt()
         }
         let toggleTrigger = trigger ?? config.toggleTrigger
         // Hanja conversion turned off: its key is an ordinary key again.
         let priTypeHanjaEnabled = hanjaEnabled ?? config.hanjaEnabled
         if !priTypeHanjaEnabled {
-            hanjaModifierIsDown = false
+            state.hanjaModifierIsDown = false
         }
         // Exclusion is enforced by this single early return, NOT by per-branch
         // guards below. Keep it that way: with two mechanisms, removing this return
@@ -299,18 +341,18 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         // Recording still needs the key; everything else — including modifier
         // stripping — must leave the event exactly as the app expects it.
         if excluded {
-            hanjaModifierIsDown = false
-            if !_isRecordingKey {
+            state.hanjaModifierIsDown = false
+            if !state.isRecordingKey {
                 return Unmanaged.passUnretained(event)
             }
         }
         
         // Wait for modifier release or a regular key before deciding the binding.
-        if _isRecordingKey {
+        if state.isRecordingKey {
             if type == .flagsChanged || type == .keyDown {
-                if let recorded = recordingState.consume(keyCode: keyCode, flags: event.flags.rawValue,
+                if let recorded = state.recordingState.consume(keyCode: keyCode, flags: event.flags.rawValue,
                                                          isModifierChange: type == .flagsChanged) {
-                    let callback = _onKeyRecorded
+                    let callback = state.onKeyRecorded
                     DispatchQueue.main.async { callback?(recorded.keyCode, recorded.modifiers) }
                 }
                 return nil
@@ -323,7 +365,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             let flags = event.flags
             
             // Track Control key state (for Control+Space combo)
-            controlIsDown = flags.contains(.maskControl)
+            state.controlIsDown = flags.contains(.maskControl)
 
             if keyCode == 57 {
                 return Unmanaged.passUnretained(event)
@@ -335,28 +377,28 @@ public final class RightCommandSuppressor: @unchecked Sendable {
 
                 if toggleTrigger == .tapAlone {
                     // The modifier stays a modifier, so both edges reach the app.
-                    if isPressed && !toggleModifierIsDown {
-                        toggleModifierIsDown = true
-                        toggleTap.press(at: Self.eventTime(of: event))
-                    } else if !isPressed && toggleModifierIsDown {
-                        toggleModifierIsDown = false
-                        if toggleTap.release(at: Self.eventTime(of: event)) {
+                    if isPressed && !state.toggleModifierIsDown {
+                        state.toggleModifierIsDown = true
+                        state.toggleTap.press(at: Self.eventTime(of: event))
+                    } else if !isPressed && state.toggleModifierIsDown {
+                        state.toggleModifierIsDown = false
+                        if state.toggleTap.release(at: Self.eventTime(of: event)) {
                             DebugLogger.log("RightCommandSuppressor: Toggle key tapped alone (\(toggleBinding.displayName)) - TOGGLE")
-                            triggerToggle(event)
+                            triggerToggle(state, event)
                         }
                     }
                     return Unmanaged.passUnretained(event)
                 }
 
-                if isPressed && !toggleModifierIsDown {
+                if isPressed && !state.toggleModifierIsDown {
                     // Toggle modifier pressed - toggle immediately!
-                    toggleModifierIsDown = true
+                    state.toggleModifierIsDown = true
                     DebugLogger.log("RightCommandSuppressor: Toggle key DOWN (\(toggleBinding.displayName)) - TOGGLE (instant)")
-                    triggerToggle(event)
+                    triggerToggle(state, event)
                     return nil  // Suppress the modifier event
-                } else if !isPressed && toggleModifierIsDown {
+                } else if !isPressed && state.toggleModifierIsDown {
                     // Toggle modifier released
-                    toggleModifierIsDown = false
+                    state.toggleModifierIsDown = false
                     DebugLogger.log("RightCommandSuppressor: Toggle key UP (\(toggleBinding.displayName))")
                     return nil  // Suppress release
                 }
@@ -367,25 +409,25 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                 && keyCode == hanjaBinding.keyCode && keyCode != toggleBinding.keyCode {
                 let isPressed = ModifierKeyState.isDown(keyCode, flags: flags.rawValue)
                 
-                if isPressed && !hanjaModifierIsDown {
-                    hanjaModifierIsDown = true
-                    toggleTap.interrupt()
+                if isPressed && !state.hanjaModifierIsDown {
+                    state.hanjaModifierIsDown = true
+                    state.toggleTap.interrupt()
                     
                     // Debounce: ignore if last trigger was within 500ms
                     let now = DispatchTime.now()
-                    let elapsed = now.uptimeNanoseconds - lastHanjaTriggerTime.uptimeNanoseconds
+                    let elapsed = now.uptimeNanoseconds - state.lastHanjaTriggerTime.uptimeNanoseconds
                     let elapsedMs = elapsed / 1_000_000
                     if elapsedMs < 500 {
                         DebugLogger.log("RightCommandSuppressor: Hanja key DEBOUNCED (\(elapsedMs)ms)")
                         return nil
                     }
-                    lastHanjaTriggerTime = now
+                    state.lastHanjaTriggerTime = now
                     
                     DebugLogger.log("RightCommandSuppressor: Hanja key DOWN (\(hanjaBinding.displayName)) - HANJA")
-                    triggerHanjaLookup(event)
+                    triggerHanjaLookup(state, event)
                     return nil  // Suppress
-                } else if !isPressed && hanjaModifierIsDown {
-                    hanjaModifierIsDown = false
+                } else if !isPressed && state.hanjaModifierIsDown {
+                    state.hanjaModifierIsDown = false
                     DebugLogger.log("RightCommandSuppressor: Hanja key UP (\(hanjaBinding.displayName))")
                     return nil  // Suppress release
                 }
@@ -397,10 +439,10 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         // Handle keyDown
         if type == .keyDown {
             // Any key while the toggle modifier is down makes it a shortcut, not a tap.
-            toggleTap.interrupt()
+            state.toggleTap.interrupt()
             // Reconcile on every key: a release may have been lost while disabled.
-            toggleModifierIsDown = ModifierKeyState.isDown(toggleBinding.keyCode, flags: event.flags.rawValue)
-            hanjaModifierIsDown = priTypeHanjaEnabled
+            state.toggleModifierIsDown = ModifierKeyState.isDown(toggleBinding.keyCode, flags: event.flags.rawValue)
+            state.hanjaModifierIsDown = priTypeHanjaEnabled
                 && ModifierKeyState.isDown(hanjaBinding.keyCode, flags: event.flags.rawValue)
             // The window server keeps generating keyDown while an ordinary key is
             // held, so acting on every one flaps the input source for as long as
@@ -415,7 +457,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                     if isAutorepeat { return nil }
                     // Single regular key as toggle (e.g., F13, Caps Lock via keyDown)
                     DebugLogger.log("RightCommandSuppressor: Regular key toggle (\(toggleBinding.displayName)) - TOGGLE")
-                    triggerToggle(event)
+                    triggerToggle(state, event)
                     return nil
                 } else {
                     // Combo toggle (e.g., Control+Space, Option+G)
@@ -423,7 +465,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                     if Self.hasRequiredModifiers(flags: event.flags, required: requiredFlags) {
                         if isAutorepeat { return nil }
                         DebugLogger.log("RightCommandSuppressor: Combo toggle (\(toggleBinding.displayName)) - TOGGLE triggered")
-                        triggerToggle(event)
+                        triggerToggle(state, event)
                         return nil
                     }
                 }
@@ -436,7 +478,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
                 if hanjaBinding.isModifierOnly || Self.hasRequiredModifiers(flags: event.flags, required: CGEventFlags(rawValue: hanjaBinding.modifiers)) {
                     if isAutorepeat { return nil }
                     DebugLogger.log("RightCommandSuppressor: Regular key hanja (\(hanjaBinding.displayName)) - HANJA")
-                    triggerHanjaLookup(event)
+                    triggerHanjaLookup(state, event)
                     return nil
                 }
             }
@@ -465,7 +507,7 @@ public final class RightCommandSuppressor: @unchecked Sendable {
 
             // When toggle modifier is held, strip its modifier from key events
             // This makes keys act as regular character input, not shortcuts
-            if priTypeToggleEnabled && toggleTrigger == .press && toggleModifierIsDown && toggleBinding.isModifierKey {
+            if priTypeToggleEnabled && toggleTrigger == .press && state.toggleModifierIsDown && toggleBinding.isModifierKey {
                 let modifierMask = Self.modifierMask(for: toggleBinding.keyCode)
                 var newFlags = event.flags
                 newFlags.remove(CGEventFlags(rawValue: ModifierKeyState.mask(for: toggleBinding.keyCode)))
@@ -500,13 +542,43 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         return flags.intersection(required) == required
     }
 
-    private func triggerToggle(_ event: CGEvent) {
+    /// Where the most recent toggle came from.
+    ///
+    /// Exists for the on-device verification run, which has to tell a key a
+    /// person pressed from one a script posted. Both reach this callback — that
+    /// is what a session tap is — so a run driven by `osascript` would otherwise
+    /// report the toggle key working when nothing about the hardware path had
+    /// been exercised. The window server stamps a posted event with the posting
+    /// process; a key the hardware produced carries 0.
+    ///
+    /// One field read per toggle, which a person performs a few times a minute.
+    public struct ToggleProvenance: Sendable, Equatable {
+        public let eventTime: TimeInterval
+        /// The process that posted the event, or 0 for hardware.
+        public let sourcePID: Int64
+        public var isHardware: Bool { sourcePID == 0 }
+
+        public init(eventTime: TimeInterval, sourcePID: Int64) {
+            self.eventTime = eventTime
+            self.sourcePID = sourcePID
+        }
+    }
+
+    /// The most recent toggle's provenance, or nil if none has been seen.
+    public var lastToggleProvenance: ToggleProvenance? {
+        state.withLock { $0.lastToggleProvenance }
+    }
+
+    private func triggerToggle(_ state: State, _ event: CGEvent) {
+        state.lastToggleProvenance = ToggleProvenance(
+            eventTime: Self.eventTime(of: event),
+            sourcePID: event.getIntegerValueField(.eventSourceUnixProcessID))
         // Hand the toggle over right here, on the tap thread. The owner records it
         // with the key's time and applies it on main (`InputModeCoordinator
         // .requestToggle`), so the keystroke typed next cannot overtake it. IMK
         // commit and keyboard-override work still stay off this callback, which
         // protects against `kCGEventTapDisabledByTimeout`.
-        _onToggle?(Self.eventTime(of: event))
+        state.onToggle?(Self.eventTime(of: event))
     }
 
     /// The event's time on `NSEvent.timestamp`'s clock. AppKit reads a CGEvent
@@ -518,12 +590,12 @@ public final class RightCommandSuppressor: @unchecked Sendable {
             : TimeInterval(event.timestamp) / 1_000_000_000
     }
     
-    private func triggerHanjaLookup(_ event: CGEvent) {
+    private func triggerHanjaLookup(_ state: State, _ event: CGEvent) {
         // A Hanja key while the toggle modifier is down is not a lone tap of it.
-        toggleTap.interrupt()
+        state.toggleTap.interrupt()
         // Same hand-over as the toggle, so the two keep their relative order and a
         // key typed after the Hanja key reaches the candidate window.
-        _onHanjaLookup?(Self.eventTime(of: event))
+        state.onHanjaLookup?(Self.eventTime(of: event))
     }
 }
 
@@ -531,31 +603,52 @@ public final class RightCommandSuppressor: @unchecked Sendable {
 ///
 /// The run loop exits when `stopRunLoop()` removes the source, which ends the
 /// thread. One instance serves one `start()`; a restart creates a new thread.
-final class EventTapThread: Thread, @unchecked Sendable {
-    private let source: CFRunLoopSource
-    private let started = DispatchSemaphore(value: 0)
-    private let loopLock = NSLock()
-    private var runLoop: CFRunLoop?
+///
+/// It owns a `Thread` rather than being one. `Thread` is not `Sendable`, so a
+/// subclass could only ever be `@unchecked`, while the body of a thread created
+/// from a closure captures nothing but `Sendable` values — the guarded state and
+/// a semaphore — and the compiler checks that for itself.
+final class EventTapThread: Sendable {
+    private final class State {
+        let source: CFRunLoopSource
+        var runLoop: CFRunLoop?
+        /// Set by a `stopRunLoop()` that arrives before the body attaches, so the
+        /// body knows not to attach at all.
+        var cancelled = false
+        var finished = false
 
-    init(source: CFRunLoopSource) {
-        self.source = source
-        super.init()
-        name = "com.pritype.eventtap"
-        // Every keystroke on the system waits on this thread.
-        qualityOfService = .userInteractive
+        init(source: CFRunLoopSource) {
+            self.source = source
+        }
     }
 
-    override func main() {
+    private let state: Guarded<State>
+    private let started = DispatchSemaphore(value: 0)
+
+    init(source: CFRunLoopSource) {
+        state = Guarded(State(source: source))
+    }
+
+    /// Whether the thread's body has returned. Nothing in the app waits on this;
+    /// a test does, to see that a stop really ends the thread.
+    var isFinished: Bool {
+        state.withLock { $0.finished }
+    }
+
+    /// The body the thread runs. Internal so a test can drive the cancelled
+    /// branch without starting a thread that would never return.
+    func runBody() {
         let loop = CFRunLoopGetCurrent()
         // Attaching the source and publishing the loop happen under the same lock
         // that `stopRunLoop()` takes, so a stop can never fall between them.
-        let attached = loopLock.withLock { () -> Bool in
-            guard !isCancelled else { return false }
-            CFRunLoopAddSource(loop, source, .commonModes)
-            runLoop = loop
+        let attached = state.withLock { state -> Bool in
+            guard !state.cancelled else { return false }
+            CFRunLoopAddSource(loop, state.source, .commonModes)
+            state.runLoop = loop
             return true
         }
         started.signal()
+        defer { state.withLock { $0.finished = true } }
         guard attached else { return }
         // Returns once `stopRunLoop()` has removed the only source.
         CFRunLoopRun()
@@ -563,29 +656,34 @@ final class EventTapThread: Thread, @unchecked Sendable {
 
     /// Start the thread and wait until its run loop owns the tap source.
     func startAndWait(timeout: DispatchTimeInterval = .seconds(2)) -> Bool {
-        start()
-        return started.wait(timeout: .now() + timeout) == .success && !isCancelled
+        let thread = Thread { [self] in runBody() }
+        thread.name = "com.pritype.eventtap"
+        // Every keystroke on the system waits on this thread.
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        guard started.wait(timeout: .now() + timeout) == .success else { return false }
+        return !state.withLock { $0.cancelled }
     }
 
     /// Wake the run loop so a signalled version-0 source is serviced (for tests;
     /// a mach-port source such as the tap wakes the loop on its own).
     func wake() {
-        loopLock.withLock { runLoop.map(CFRunLoopWakeUp) }
+        state.withLock { $0.runLoop.map(CFRunLoopWakeUp) }
     }
 
     /// Detach the source and let the run loop exit. Safe from any thread,
     /// including this one, and before the thread has attached the source.
     func stopRunLoop() {
-        loopLock.withLock {
-            guard let loop = runLoop else {
-                // Not attached yet: `main()` sees this and never attaches.
-                cancel()
+        state.withLock { state in
+            guard let loop = state.runLoop else {
+                // Not attached yet: the body sees this and never attaches.
+                state.cancelled = true
                 return
             }
-            CFRunLoopRemoveSource(loop, source, .commonModes)
+            CFRunLoopRemoveSource(loop, state.source, .commonModes)
             CFRunLoopStop(loop)
             CFRunLoopWakeUp(loop)
-            runLoop = nil
+            state.runLoop = nil
         }
     }
 }

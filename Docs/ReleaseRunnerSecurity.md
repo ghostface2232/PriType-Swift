@@ -2,7 +2,7 @@
 
 PriType의 CI와 릴리스는 모두 GitHub-hosted macOS VM에서 실행한다. job마다 새 VM이 뜨고 끝나면 버려지므로, 이전 job이 남긴 파일이나 키체인이 다음 job에 남지 않는다.
 
-- `.github/workflows/ci.yml`은 push와 PR마다 `macos-15` VM에서 빌드, 테스트, SwiftLint를 돌린다. 시크릿을 쓰지 않는다.
+- `.github/workflows/ci.yml`은 push와 PR마다 빌드와 테스트를 **두 툴체인에서** 돌린다 — 릴리스가 쓰는 `xcode-27`(Xcode 27)과 하한선인 `macos-15`(Xcode 26.3). 앞의 것이 없으면 태그를 붙이는 순간이 릴리스 툴체인이 이 트리를 처음 컴파일하는 순간이 된다. SwiftLint는 `macos-15`에서 한 번 돌린다. 어느 job도 시크릿을 쓰지 않는다.
 - `.github/workflows/release.yml`은 `v*` 태그 push에서만 `xcode-27` VM(Xcode 27, macOS 27 SDK)으로 실행한다. 앱이 어떤 AppKit 디자인과 동작을 받는지는 빌드한 SDK 버전이 정하므로, 로컬 빌드와 같은 SDK를 쓴다. GitHub가 이 이미지를 아직 베타로 표시하므로 macOS 27 정식 라벨이 생기면 옮긴다. 포크에서 온 PR은 이 workflow를 실행할 수 없고 저장소 시크릿도 받지 못한다.
 
 ## 서명

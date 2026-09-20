@@ -147,7 +147,7 @@ struct EventTapThreadTests {
         return CFRunLoopSourceCreate(kCFAllocatorDefault, 0, &context)
     }
 
-    private func waitUntilFinished(_ thread: Thread) -> Bool {
+    private func waitUntilFinished(_ thread: EventTapThread) -> Bool {
         let deadline = Date().addingTimeInterval(2)
         while !thread.isFinished && Date() < deadline { usleep(1_000) }
         return thread.isFinished
@@ -178,7 +178,7 @@ struct EventTapThreadTests {
         // Had it attached the source, CFRunLoopRun would never return.
         let returned = DispatchSemaphore(value: 0)
         Thread {
-            thread.main()
+            thread.runBody()
             returned.signal()
         }.start()
         #expect(returned.wait(timeout: .now() + 2) == .success)

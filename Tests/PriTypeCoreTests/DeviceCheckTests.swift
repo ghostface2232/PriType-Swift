@@ -1,0 +1,412 @@
+import Testing
+import Foundation
+@testable import PriTypeCore
+@testable import PriTypeDeviceCheck
+
+// The on-device checks themselves cannot run here — that is the whole point of
+// them. What is tested here is the machinery that decides what a run means: the
+// runner's selection rules, the exit status, and the argument parsing. Those are
+// the parts that, wrong, turn a run that verified nothing into a green one.
+//
+// `PriTypeVerify` is the reason this file exists. It was removed because its own
+// checks were never tested: two of them printed a warning and returned success
+// either way, and nothing noticed for as long as it shipped.
+
+/// A check that reports whatever it was built with, and records that it ran.
+private struct StubCheck: DeviceCheck {
+    let id: String
+    let title: String
+    var requiresOperator = false
+    var mutatesSystemState = false
+    let finding: DeviceCheckFinding
+    let ran: Ran
+
+    final class Ran: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        var value: Int { lock.withLock { count } }
+        func record() { lock.withLock { count += 1 } }
+    }
+
+    init(id: String, title: String = "stub", requiresOperator: Bool = false,
+         mutatesSystemState: Bool = false, finding: DeviceCheckFinding = .passed("stub")) {
+        self.id = id
+        self.title = title
+        self.requiresOperator = requiresOperator
+        self.mutatesSystemState = mutatesSystemState
+        self.finding = finding
+        self.ran = Ran()
+    }
+
+    func run() -> DeviceCheckFinding {
+        ran.record()
+        return finding
+    }
+}
+
+@Suite("Device check report")
+struct DeviceCheckReportTests {
+
+    @Test("A skipped check is not a passed one")
+    func skipIsNotPass() {
+        let report = DeviceCheckReport(results: [
+            DeviceCheckResult(id: "a", title: "a", outcome: .passed),
+            DeviceCheckResult(id: "b", title: "b", outcome: .skipped("no keyboard")),
+        ])
+        #expect(report.passed.count == 1)
+        #expect(report.skipped.count == 1)
+        #expect(report.exitStatus == .someSkipped)
+    }
+
+    @Test("A failure outranks a skip, and a skip outranks success")
+    func statusPrecedence() {
+        let pass = DeviceCheckResult(id: "a", title: "a", outcome: .passed)
+        let skip = DeviceCheckResult(id: "b", title: "b", outcome: .skipped("unmet"))
+        let fail = DeviceCheckResult(id: "c", title: "c", outcome: .failed("broken"))
+
+        #expect(DeviceCheckReport(results: [pass]).exitStatus == .allPassed)
+        #expect(DeviceCheckReport(results: [pass, skip]).exitStatus == .someSkipped)
+        #expect(DeviceCheckReport(results: [pass, skip, fail]).exitStatus == .someFailed)
+        #expect(DeviceCheckReport(results: [pass, fail]).exitStatus == .someFailed)
+    }
+
+    @Test("A run with no checks in it has proven nothing")
+    func emptyRunIsNotSuccess() {
+        // A selection that matched nothing must not read as a green run — that is
+        // how a typo becomes a passing verification.
+        #expect(DeviceCheckReport(results: []).exitStatus == .nothingRan)
+        #expect(DeviceCheckReport(results: []).exitStatus.rawValue != 0)
+    }
+
+    @Test("The rendered report names the unmet precondition and the evidence")
+    func renderCarriesReasons() {
+        let report = DeviceCheckReport(results: [
+            DeviceCheckResult(id: "hid-open", title: "opens keyboards",
+                              outcome: .skipped("another process owns the keyboards"),
+                              evidence: "IOReturn -536870203"),
+        ])
+        let rendered = report.render()
+        #expect(rendered.contains("SKIP"))
+        #expect(rendered.contains("another process owns the keyboards"))
+        #expect(rendered.contains("IOReturn -536870203"))
+        #expect(rendered.contains("verified nothing"))
+    }
+
+    @Test("A passing check still shows what was observed")
+    func passCarriesEvidence() {
+        let report = DeviceCheckReport(results: [
+            DeviceCheckResult(id: "event-tap", title: "tap comes up",
+                              outcome: .passed, evidence: "tap created and enabled"),
+        ])
+        #expect(report.render().contains("tap created and enabled"))
+    }
+}
+
+@Suite("Device check runner")
+struct DeviceCheckRunnerTests {
+
+    @Test("An interactive check is left out of an unattended run")
+    func interactiveExcludedByDefault() {
+        let interactive = StubCheck(id: "physical", requiresOperator: true)
+        let report = DeviceCheckRunner.run([interactive])
+        #expect(report.results.isEmpty)
+        #expect(interactive.ran.value == 0)
+    }
+
+    @Test("An interactive check named explicitly, without --interactive, is skipped rather than run")
+    func interactiveNamedButNotEnabled() {
+        // Naming a check is asking for it, so silence would be wrong; running it
+        // would block on a key press nobody was told to make.
+        let interactive = StubCheck(id: "physical", requiresOperator: true)
+        let report = DeviceCheckRunner.run([interactive],
+                                           selection: DeviceCheckSelection(ids: ["physical"]))
+        #expect(interactive.ran.value == 0)
+        #expect(report.results.count == 1)
+        #expect(report.results[0].outcome.isSkipped)
+        #expect(report.exitStatus == .someSkipped)
+    }
+
+    @Test("--interactive runs the checks that need a person")
+    func interactiveRunsWhenAsked() {
+        let interactive = StubCheck(id: "physical", requiresOperator: true)
+        let report = DeviceCheckRunner.run(
+            [interactive], selection: DeviceCheckSelection(includeInteractive: true))
+        #expect(interactive.ran.value == 1)
+        #expect(report.exitStatus == .allPassed)
+    }
+
+    @Test("A check that would change the machine does not run unless allowed")
+    func mutationRequiresConsent() {
+        let mutating = StubCheck(id: "rewrites-defaults", mutatesSystemState: true)
+        let guarded = DeviceCheckRunner.run([mutating])
+        #expect(mutating.ran.value == 0)
+        #expect(guarded.results[0].outcome.isSkipped)
+
+        let allowed = DeviceCheckRunner.run([mutating],
+                                            selection: DeviceCheckSelection(allowMutation: true))
+        #expect(mutating.ran.value == 1)
+        #expect(allowed.exitStatus == .allPassed)
+    }
+
+    @Test("--only runs the named checks and nothing else")
+    func onlyFiltersByID() {
+        let wanted = StubCheck(id: "wanted")
+        let other = StubCheck(id: "other")
+        let report = DeviceCheckRunner.run([wanted, other],
+                                           selection: DeviceCheckSelection(ids: ["wanted"]))
+        #expect(wanted.ran.value == 1)
+        #expect(other.ran.value == 0)
+        #expect(report.results.map(\.id) == ["wanted"])
+    }
+
+    @Test("An id that names no check is reported rather than silently dropped")
+    func unknownIDsAreVisible() {
+        let checks: [any DeviceCheck] = [StubCheck(id: "event-tap")]
+        let selection = DeviceCheckSelection(ids: ["event-tap", "evnet-tap"])
+        #expect(DeviceCheckRunner.unknownIDs(in: selection, among: checks) == ["evnet-tap"])
+    }
+
+    @Test("Checks run in the order given, and each one's outcome is carried through")
+    func outcomesAreCarried() {
+        let report = DeviceCheckRunner.run([
+            StubCheck(id: "one", finding: .passed("fine")),
+            StubCheck(id: "two", finding: .failed("broke", evidence: "IOReturn -1")),
+            StubCheck(id: "three", finding: .skipped("unmet")),
+        ])
+        #expect(report.results.map(\.id) == ["one", "two", "three"])
+        #expect(report.results[1].outcome == .failed("broke"))
+        #expect(report.results[1].evidence == "IOReturn -1")
+        #expect(report.exitStatus == .someFailed)
+    }
+}
+
+@Suite("Device check arguments")
+struct DeviceCheckArgumentsTests {
+
+    @Test("An empty command line runs the unattended checks only")
+    func defaults() throws {
+        let parsed = try DeviceCheckArguments.parse([])
+        #expect(!parsed.selection.includeInteractive)
+        #expect(!parsed.selection.allowMutation)
+        #expect(parsed.selection.ids.isEmpty)
+        #expect(parsed.timeout == nil)
+    }
+
+    @Test("--only splits on commas and ignores the spaces around them")
+    func onlyParsing() throws {
+        let parsed = try DeviceCheckArguments.parse(["--only", "hid-open, event-tap ,"])
+        #expect(parsed.selection.ids == ["hid-open", "event-tap"])
+    }
+
+    @Test("Flags combine")
+    func flagsCombine() throws {
+        let parsed = try DeviceCheckArguments.parse(["--interactive", "--timeout", "30", "--list"])
+        #expect(parsed.selection.includeInteractive)
+        #expect(parsed.timeout == 30)
+        #expect(parsed.wantsList)
+    }
+
+    @Test("An --only that names no check is an error, not a request for everything")
+    func emptyOnlyIsRejected() {
+        // The runner reads an empty id set as "no filter". So a value that trims
+        // away to nothing would run every unattended check and could exit 0,
+        // having verified a different set than the caller named — the shape this
+        // takes in practice is `--only "$CHECKS"` with the variable unset.
+        for value in ["", "   ", ",", ",, ", " , , "] {
+            #expect(throws: DeviceCheckArguments.ParseError.emptySelection(value)) {
+                try DeviceCheckArguments.parse(["--only", value])
+            }
+        }
+    }
+
+    @Test("A second --only that names nothing is rejected even after a good one")
+    func emptyOnlyAfterAGoodOne() {
+        // Otherwise the bad value is absorbed into the set the first one built,
+        // and the mistake disappears.
+        #expect(throws: DeviceCheckArguments.ParseError.emptySelection(",")) {
+            try DeviceCheckArguments.parse(["--only", "event-tap", "--only", ","])
+        }
+    }
+
+    @Test("An unrecognized argument is an error, not an ignored word")
+    func unrecognized() {
+        #expect(throws: DeviceCheckArguments.ParseError.unrecognized("--intercative")) {
+            try DeviceCheckArguments.parse(["--intercative"])
+        }
+    }
+
+    @Test("A flag with nothing after it is an error")
+    func missingValue() {
+        #expect(throws: DeviceCheckArguments.ParseError.missingValue("--timeout")) {
+            try DeviceCheckArguments.parse(["--timeout"])
+        }
+        #expect(throws: DeviceCheckArguments.ParseError.missingValue("--only")) {
+            try DeviceCheckArguments.parse(["--only"])
+        }
+    }
+
+    @Test("A timeout that is not a positive number of seconds is an error")
+    func unusableTimeout() {
+        #expect(throws: DeviceCheckArguments.ParseError.unusableTimeout("soon")) {
+            try DeviceCheckArguments.parse(["--timeout", "soon"])
+        }
+        // Zero would make every interactive check fail instantly and look like a
+        // real finding.
+        #expect(throws: DeviceCheckArguments.ParseError.unusableTimeout("0")) {
+            try DeviceCheckArguments.parse(["--timeout", "0"])
+        }
+    }
+}
+
+@Suite("Shipped device checks")
+struct ShippedDeviceCheckTests {
+
+    @Test("Every shipped check has a unique id")
+    func uniqueIDs() {
+        let checks = unattendedChecks + interactiveChecks()
+        let ids = checks.map(\.id)
+        #expect(Set(ids).count == ids.count)
+    }
+
+    @Test("No shipped check changes the machine it is measuring")
+    func nothingMutates() {
+        // The runner's guard is only as good as this staying true: a check that
+        // starts writing preferences has to say so, and then a run needs
+        // --allow-mutation before it happens.
+        let checks = unattendedChecks + interactiveChecks()
+        #expect(checks.allSatisfy { !$0.mutatesSystemState })
+    }
+
+    @Test("The checks that need hardware are the ones marked interactive")
+    func interactiveSetIsExplicit() {
+        #expect(unattendedChecks.allSatisfy { !$0.requiresOperator })
+        #expect(interactiveChecks().allSatisfy { $0.requiresOperator })
+        #expect(Set(interactiveChecks().map(\.id)) == ["physical-toggle-tap", "physical-toggle-hid"])
+    }
+}
+
+// `PreferencesDomain.use` writes state that every other test in this process
+// reads through `ConfigurationManager`, and swift-testing runs suites in
+// parallel — redirecting it here made unrelated IMK tests fail, because they
+// started reading a domain where `experimentalDirectInsertion` was absent. So
+// the redirection itself is exercised by `pritype-device-check`'s own
+// `preferences-domain` check, against a real install, and what is tested here is
+// the part that opens a domain without making it anyone's.
+@Suite("Input source registration rule")
+struct InputSourceRegistrationRuleTests {
+
+    @Test("Only the English pass-through mode enabled is not a working install")
+    func englishOnlyIsNotEnough() {
+        // The state this exists to catch: PriType shows up as enabled, and
+        // Korean typing produces nothing.
+        #expect(!InputSourceRegistrationCheck.composingModeIsEnabled(
+            among: ["com.pritype.inputmethod.v2.english"]))
+        #expect(!InputSourceRegistrationCheck.composingModeIsEnabled(
+            among: ["com.pritype.inputmethod.v2.v2.english"]))
+        #expect(!InputSourceRegistrationCheck.composingModeIsEnabled(among: []))
+    }
+
+    @Test("A composing mode enabled, whatever the installed build calls it")
+    func composingModeCounts() {
+        // The installed build's ids need not match this tree's; only the
+        // pass-through suffix is stable.
+        #expect(InputSourceRegistrationCheck.composingModeIsEnabled(
+            among: ["com.pritype.inputmethod.v2"]))
+        #expect(InputSourceRegistrationCheck.composingModeIsEnabled(
+            among: ["com.pritype.inputmethod.v2.v2", "com.pritype.inputmethod.v2.v2.english"]))
+    }
+}
+
+@Suite("Preferences domain")
+struct PreferencesDomainTests {
+
+    @Test("A name that does not address a separable store is refused")
+    func refusesUnusableNames() {
+        // Falling back to this binary's own defaults would be the silent failure
+        // the device check exists to catch, so these return nil rather than
+        // something usable.
+        #expect(PreferencesDomain.resolve(suiteName: "") == nil)
+        #expect(PreferencesDomain.resolve(suiteName: "   ") == nil)
+        if let own = Bundle.main.bundleIdentifier {
+            #expect(PreferencesDomain.resolve(suiteName: own) == nil)
+        }
+    }
+
+    @Test("A resolved domain is a store of its own, separate from this process's")
+    func resolvesASeparateStore() throws {
+        let suite = "com.pritype.tests.\(UUID().uuidString)"
+        let defaults = try #require(PreferencesDomain.resolve(suiteName: suite))
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+        defaults.set("written", forKey: "com.pritype.tests.marker")
+        #expect(defaults.string(forKey: "com.pritype.tests.marker") == "written")
+        // The point of the whole mechanism: what PriType wrote is not what a
+        // bare command-line binary reads.
+        #expect(UserDefaults.standard.string(forKey: "com.pritype.tests.marker") == nil)
+    }
+
+    @Test("The domain the CLI redirects to is the bundle the app actually registers")
+    func suiteNameMatchesTheBundle() throws {
+        // Comparing the constant against a copy of itself would prove nothing.
+        // The drift that matters is `Info.plist` changing identifier without this
+        // following, which would leave the verification tool reading an empty
+        // domain and cheerfully reporting on built-in defaults — so read the
+        // plist the build copies into the bundle.
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // PriTypeCoreTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // repo root
+        let data = try Data(contentsOf: repoRoot.appendingPathComponent("Info.plist"))
+        let info = try #require(PropertyListSerialization
+            .propertyList(from: data, options: [], format: nil) as? [String: Any])
+        #expect(info["CFBundleIdentifier"] as? String == PreferencesDomain.priTypeSuiteName)
+    }
+}
+
+@Suite("Keyboard owner advice")
+struct KeyboardOwnerTests {
+
+    @Test("Names only what is actually running")
+    func matchesRunningProcesses() {
+        let running = [
+            "/Library/Input Methods/PriTypeV2.app/Contents/MacOS/PriTypeV2",
+            "/Library/Application Support/org.pqrs/Karabiner-Elements/Karabiner-Core-Service.app/Contents/MacOS/Karabiner-Core-Service",
+            "/usr/libexec/keyboardservicesd",
+        ]
+        let owners = KeyboardOwners.plausibleOwners(in: running)
+        #expect(owners.contains("PriTypeV2 (the installed input method)"))
+        #expect(owners.contains("Karabiner-Elements"))
+        #expect(!owners.contains("Hammerspoon"))
+    }
+
+    @Test("One process matching twice is named once")
+    func noDuplicates() {
+        let running = [
+            "/Library/Application Support/org.pqrs/Karabiner-Elements/Karabiner-Core-Service.app/Contents/MacOS/Karabiner-Core-Service",
+            "/Library/Application Support/org.pqrs/Karabiner-Elements/Karabiner-Console-User-Server.app/Contents/MacOS/Karabiner-Console-User-Server",
+        ]
+        #expect(KeyboardOwners.plausibleOwners(in: running) == ["Karabiner-Elements"])
+    }
+
+    @Test("An executable path carries no arguments to be confused by")
+    func executablePathsOnly() {
+        // Why the list is read as `ps -Ao comm`. With `command` it carries
+        // arguments, this process's own shell is in it, and a run started from a
+        // script that so much as names a remapper reports it as the owner — which
+        // is how this was found: the command that wrote this file listed four,
+        // and the check named all four as running.
+        #expect(KeyboardOwners.plausibleOwners(in: ["/bin/zsh"]).isEmpty)
+        #expect(KeyboardOwners.plausibleOwners(in: ["/usr/libexec/keyboardservicesd"]).isEmpty)
+        // The form `command` would have produced, which must not be how it reads.
+        let withArguments = ["/bin/zsh -c ./check # Karabiner-Elements Hammerspoon"]
+        #expect(KeyboardOwners.plausibleOwners(in: withArguments).count == 2,
+                "this is the false positive; the fix is the input, not the matcher")
+    }
+
+    @Test("Recognizing nobody says so rather than blaming someone")
+    func unknownOwner() {
+        let advice = KeyboardOwners.advice(owners: [])
+        #expect(advice.contains("nothing this check recognizes"))
+        #expect(!advice.contains("PriTypeV2"))
+    }
+}

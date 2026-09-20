@@ -105,7 +105,8 @@ APP_SIGN_IDENTITY="PriType Release" ./build_release.sh
 ## 문서
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): 내부 구조, 입력 처리 흐름, 주요 모듈
-- [Docs/InputArchitectureHybridRollbackPlan.md](Docs/InputArchitectureHybridRollbackPlan.md): 2.6.5 기반 통합 입력 방식과 2.7.2 입력 소스 구조의 하이브리드 재설계 계획
+- [Docs/History.md](Docs/History.md): 지금의 구조가 왜 이렇게 됐는지에 대한 결정 기록
+- [Docs/DeviceVerification.md](Docs/DeviceVerification.md): 설치본을 실제 머신에 대고 검증하는 방법
 - [BENCHMARK.md](BENCHMARK.md): 성능 측정 결과
 - [CHANGELOG.md](CHANGELOG.md): 버전별 변경 사항
 
