@@ -175,6 +175,12 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
     /// not be asked at all — which covers the most common Backspace of all, the one
     /// that undoes what was just typed. One Backspace consumes it: what stands
     /// before the deleted character is unknown again.
+    ///
+    /// Every write goes through `noteOwnOutput()`, and everything that moves the
+    /// caret through `forgetLastPrecomposedSyllable()` — a key the composer sees, a
+    /// click, a focus change. A caret moved with none of those (dropped text, a
+    /// paste from the menu bar, a host moving its own caret) leaves this set, and
+    /// costs that one Backspace its rewrite; the next one behaves again.
     private var caretFollowsOwnOutput = false
 
     init(client: IMKTextInput, bundleId: String) {
@@ -190,8 +196,7 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         // what native hosts (e.g. KakaoTalk) expect. Passing an explicit marked
         // range here desynced KakaoTalk's composition (stranded marked text +
         // missing commit on focus loss).
-        lastPrecomposed = nil
-        caretFollowsOwnOutput = true
+        noteOwnOutput()
         client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
     }
 
@@ -216,7 +221,15 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         guard selRange.location != NSNotFound, selRange.location < 10000000, selRange.location >= length else { return }
 
         let replacementRange = NSRange(location: selRange.location - length, length: length)
+        noteOwnOutput()
         client.insertText(text, replacementRange: replacementRange)
+    }
+
+    /// Record that the caret now follows text this input method just wrote.
+    /// EVERY write to the client from an adapter goes through here.
+    func noteOwnOutput() {
+        lastPrecomposed = nil
+        caretFollowsOwnOutput = true
     }
 
     func forgetLastPrecomposedSyllable() {
@@ -465,6 +478,7 @@ final class DirectInsertionAdapter: BaseClientAdapter {
         }
 
         let tBeforeInsert = CFAbsoluteTimeGetCurrent()
+        noteOwnOutput()
         client.insertText(text, replacementRange: replacementRange)
         let tEnd = CFAbsoluteTimeGetCurrent()
 

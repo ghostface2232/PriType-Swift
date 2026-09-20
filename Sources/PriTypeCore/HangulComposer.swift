@@ -425,8 +425,9 @@ public class HangulComposer: @unchecked Sendable {
         let followsBackspace = previousKeyWasBackspace
         // Only a plain Backspace counts: ⌘⌫ and ⌥⌫ delete a line or a word, so the
         // key after them is not continuing anything the rewrite guard cares about.
-        previousKeyWasBackspace = keyCode == KeyCode.backspace
+        let isPlainBackspace = keyCode == KeyCode.backspace
             && event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+        previousKeyWasBackspace = isPlainBackspace
         if keyCode == KeyCode.leftArrow || keyCode == KeyCode.rightArrow ||
            keyCode == KeyCode.upArrow || keyCode == KeyCode.downArrow ||
            keyCode == KeyCode.tab || keyCode == KeyCode.return || keyCode == KeyCode.numpadEnter {
@@ -449,9 +450,14 @@ public class HangulComposer: @unchecked Sendable {
                 delegate.setMarkedText("")
             }
             localTextBuffer = ""
-            if !wasComposing, keyCode == KeyCode.backspace,
-               event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
-                delegate.precomposeSyllableBeforeCursor(followsBackspace: followsBackspace)
+            if isPlainBackspace {
+                if !wasComposing {
+                    delegate.precomposeSyllableBeforeCursor(followsBackspace: followsBackspace)
+                }
+            } else {
+                // Every other key types, moves the caret or runs a shortcut, and
+                // the paths below that would say so are past this early return.
+                delegate.forgetLastPrecomposedSyllable()
             }
             return false
         }

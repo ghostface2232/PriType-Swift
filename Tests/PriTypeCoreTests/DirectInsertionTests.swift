@@ -2,6 +2,7 @@ import Testing
 import Cocoa
 import InputMethodKit
 @testable import PriTypeCore
+import PriTypeIMKHarness
 
 // MARK: - Direct Insertion (Phase 3, experimental) Tests
 //
@@ -565,5 +566,40 @@ struct LegacyClientFocusRecoveryTests {
             session.finalize(reason: .deactivateServer)
         }
         #expect(client.document == "가가가")
+    }
+}
+
+// MARK: - Direct insertion and the decomposed-syllable rewrite
+
+@Suite("Direct insertion meets the syllable rewrite")
+struct DirectInsertionPrecomposeTests {
+
+    @Test("Real-text composition counts as this IME's own output")
+    func liveTextIsOwnOutput() {
+        let client = FakeTextClient()
+        let adapter = DirectInsertionAdapter(client: client, bundleId: "com.pritype.test")
+        adapter.setMarkedText("가")          // written as real text, not marked
+        adapter.insertText("가")             // and committed in place
+        #expect(client.text == "가")
+        client.resetQueryCounts()
+
+        adapter.precomposeSyllableBeforeCursor(followsBackspace: false)
+        #expect(client.selectionQueries == 0, "Everything it writes is precomposed")
+        #expect(client.calls.filter { $0.description.hasPrefix("insert") }.count == 2)
+    }
+
+    @Test("A rewrite is forgotten once real-text composition writes over the caret")
+    func liveTextForgetsTheRewrite() {
+        let client = FakeTextClient()
+        let adapter = DirectInsertionAdapter(client: client, bundleId: "com.pritype.test")
+        client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        adapter.precomposeSyllableBeforeCursor(followsBackspace: false)
+        #expect(client.text == "각", "The pasted syllable is rewritten whole")
+
+        // Typing moves on; the remembered rewrite must not outlive it.
+        adapter.setMarkedText("나")
+        client.clearLog()
+        adapter.precomposeSyllableBeforeCursor(followsBackspace: true)
+        #expect(client.calls.isEmpty, "Nothing to rewrite after our own output")
     }
 }
