@@ -203,7 +203,11 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
 
         // The same syllable still ending at the same caret, one Backspace later:
         // the host took neither the rewrite nor the delete, so leave this one to it.
+        // The memory stays armed: a host whose report lags by several events would
+        // otherwise look untouched again on the NEXT Backspace and be rewritten —
+        // re-inserting, at a stale range, text the host has already deleted.
         if followsBackspace, previous?.caret == selRange.location, previous?.syllable == syllable {
+            lastPrecomposed = previous
             return
         }
 

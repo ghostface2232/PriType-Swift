@@ -169,6 +169,25 @@ struct IMKIntegrationTests {
         #expect(field.client.calls.first == .insert("각"), "The caret may have moved; try again")
     }
 
+    @Test("A host whose report is stuck does not get its deleted text back")
+    func backspaceInLaggingHost() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.insertText(String(repeating: syllable, count: 2),
+                                replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.freezeReports = true   // every query answers "6 units, 각각"
+
+        var lengths: [Int] = []
+        for _ in 0..<4 {
+            #expect(!harness.press(.backspace))
+            lengths.append(field.client.text.utf16.count)
+        }
+        #expect(lengths == lengths.sorted(by: >), "The document only shrinks: \(lengths)")
+        #expect(field.client.calls.filter { $0 == .insert("각") }.count == 1,
+                "One rewrite while the report never moves")
+    }
+
     @Test("Escape drops the composition and is consumed")
     func escapeCancels() {
         let (harness, field) = start()
