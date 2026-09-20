@@ -13,6 +13,7 @@ enum CompositionFinalizeReason: String {
     case mouseCommit            // IMK commitComposition (click outside the composition)
     case modeTransition         // PriType custom toggle key (한/영)
     case systemModeSwitch       // macOS selected the other PriType mode (Caps Lock / menu)
+    case deliveryModeChange     // The resolved delivery policy no longer matches the adapter
 }
 
 // MARK: - InputSession
@@ -89,9 +90,19 @@ final class InputSession: @unchecked Sendable {
     /// Rebuild the adapter if the delivery policy no longer matches it (e.g. the
     /// experimental direct-insertion flag flipped mid-session). Cheap — two enum
     /// compares on the hot path.
+    ///
+    /// The swap is a composition boundary, not a substitution. Where the syllable
+    /// being composed lives is the adapter's business: direct insertion has already
+    /// written it into the document as real text, marked text has not written it at
+    /// all. Installing the other adapter over a live composition asks it to render a
+    /// syllable it did not write — a marked-text adapter taking over from direct
+    /// insertion re-inserts the `가` that is already in the document, giving `가가ㅗ`
+    /// for `가ㅗ`. So the OLD adapter finishes what it started first, through the one
+    /// finalize path, and the new one is installed against an empty engine.
     func ensureAdapterMatchesPolicy() {
         let resolved = TextDeliveryPolicy.mode(for: context)
         guard adapter.deliveryMode != resolved else { return }
+        finalize(reason: .deliveryModeChange)
         adapter = TextDeliveryPolicy.makeAdapter(for: client, context: context)
     }
 

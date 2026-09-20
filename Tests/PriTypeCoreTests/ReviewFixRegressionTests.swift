@@ -122,4 +122,74 @@ struct ReviewFixRegressionTests {
         #expect(adapter.replaceTextBeforeCursor(length: 1, with: ". ", verifying: "가 ") == .issued)
         #expect(client.text == "가. ")
     }
+    // MARK: 5 — Changing the delivery mode ends the composition it was rendering
+
+    private func makeSession(_ client: FakeTextClient, _ composer: HangulComposer) -> InputSession {
+        let context = ClientContext(bundleId: client.bundleID, hasTextInputCapability: true,
+                                    isLikelyDesktopArea: false, documentAccessSafe: true)
+        return InputSession(client: client, context: context, composer: composer)
+    }
+
+    private func key(_ code: UInt16, _ characters: String,
+                     _ composer: HangulComposer, _ session: InputSession) {
+        let event = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 1,
+            windowNumber: 0, context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+        _ = composer.handle(event, delegate: session.adapter)
+    }
+
+    @Test("Turning direct insertion OFF mid-syllable does not re-insert what is already there")
+    func directToMarkedWhileComposing() {
+        let config = ConfigurationManager.shared
+        let saved = config.experimentalDirectInsertion
+        defer { config.experimentalDirectInsertion = saved }
+        config.experimentalDirectInsertion = true
+
+        let composer = HangulComposer()
+        let client = FakeTextClient()
+        let session = makeSession(client, composer)
+        key(15, "r", composer, session)
+        key(40, "k", composer, session)
+        #expect(client.text == "가", "direct insertion writes it as real text")
+
+        config.experimentalDirectInsertion = false
+        session.ensureAdapterMatchesPolicy()
+        key(4, "h", composer, session)
+        #expect(client.text == "가ㅗ")
+    }
+
+    @Test("Turning direct insertion ON mid-syllable commits the marked text first")
+    func markedToDirectWhileComposing() {
+        let config = ConfigurationManager.shared
+        let saved = config.experimentalDirectInsertion
+        defer { config.experimentalDirectInsertion = saved }
+        config.experimentalDirectInsertion = false
+
+        let composer = HangulComposer()
+        let client = FakeTextClient()
+        let session = makeSession(client, composer)
+        key(15, "r", composer, session)
+        key(40, "k", composer, session)
+        #expect(client.markedText == "가")
+
+        config.experimentalDirectInsertion = true
+        session.ensureAdapterMatchesPolicy()
+        #expect(client.markedText == nil, "the marked composition was committed, not abandoned")
+        #expect(client.text == "가")
+        key(4, "h", composer, session)
+        #expect(client.text == "가ㅗ")
+    }
+
+    @Test("A delivery mode that did not change leaves the composition alone")
+    func unchangedPolicyKeepsComposing() {
+        let composer = HangulComposer()
+        let client = FakeTextClient()
+        let session = makeSession(client, composer)
+        key(15, "r", composer, session)
+        session.ensureAdapterMatchesPolicy()
+        key(40, "k", composer, session)
+        #expect(client.markedText == "가", "one syllable, still composing")
+        #expect(client.text == "가")
+    }
 }
