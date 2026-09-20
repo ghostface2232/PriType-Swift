@@ -49,12 +49,9 @@ public protocol HangulComposerDelegate: AnyObject {
 
     /// Forget which rewrite was last attempted. Called when something other than a
     /// keystroke (a click, focus loss) may have moved the caret.
+    /// (No default: a delivery path that silently ignored these would lose the
+    /// rewrite, or keep a stale one, with nothing to show for it.)
     func forgetLastPrecomposedSyllable()
-}
-
-public extension HangulComposerDelegate {
-    func precomposeSyllableBeforeCursor(followsBackspace: Bool) {}
-    func forgetLastPrecomposedSyllable() {}
 }
 
 // MARK: - InputMode Enum

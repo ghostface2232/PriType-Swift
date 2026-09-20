@@ -423,7 +423,10 @@ public class HangulComposer: @unchecked Sendable {
         // because the cursor has likely moved, changing the text before it.
         let keyCode = event.keyCode
         let followsBackspace = previousKeyWasBackspace
+        // Only a plain Backspace counts: ⌘⌫ and ⌥⌫ delete a line or a word, so the
+        // key after them is not continuing anything the rewrite guard cares about.
         previousKeyWasBackspace = keyCode == KeyCode.backspace
+            && event.modifierFlags.intersection([.command, .control, .option]).isEmpty
         if keyCode == KeyCode.leftArrow || keyCode == KeyCode.rightArrow ||
            keyCode == KeyCode.upArrow || keyCode == KeyCode.downArrow ||
            keyCode == KeyCode.tab || keyCode == KeyCode.return || keyCode == KeyCode.numpadEnter {
