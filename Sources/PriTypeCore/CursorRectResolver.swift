@@ -140,9 +140,89 @@ public enum CursorRectResolver {
 
     /// Per call. Not measured against a real slow app: chosen to leave room for
     /// one that is merely slow (Chromium turns its accessibility support on at
-    /// the first query) while a hung app costs at most about 3s — the six calls
-    /// of one lookup — instead of freezing typing for over half a minute.
-    private static let accessibilityTimeout: Float = 0.5
+    /// the first query) rather than freezing typing for over half a minute at the
+    /// framework's own six-second default.
+    static let accessibilityTimeout: Float = 0.5
+
+    /// What the whole chain may spend, across every call it makes.
+    ///
+    /// A per-call limit alone bounds nothing anyone would accept: the chain makes
+    /// up to seven calls, so it bounded the total at seven times the limit — about
+    /// three and a half seconds of the main thread that every app's typing runs
+    /// through. A host has to be hung or wedged for that, which is why it has not
+    /// been reproduced, but the caret it would eventually give up on is decoration
+    /// on a candidate window that has a fallback either way.
+    ///
+    /// Neither number is measured against a real slow host. This one is twice the
+    /// per-call limit so a slow first query — the one that turns Chromium's
+    /// accessibility support on — still leaves room for the rest of the chain,
+    /// while the worst case stops being seconds.
+    static let accessibilityBudget: TimeInterval = 1.0
+
+    /// The time left to the Accessibility chain.
+    ///
+    /// Every call takes its timeout from here rather than from the per-call limit
+    /// alone, so a chain of slow calls cannot add up past the budget.
+    struct AXDeadline {
+        private let expiresAt: TimeInterval
+
+        init(budget: TimeInterval, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+            expiresAt = now + budget
+        }
+
+        /// The timeout for the next call: what is left, capped at the per-call
+        /// limit. `nil` when there is not enough left to be worth a call.
+        ///
+        /// The floor matters: `AXUIElementSetMessagingTimeout` reads 0 as "use the
+        /// default", which is about six seconds, so a budget that rounded down to
+        /// zero would hand the last call the very timeout this exists to avoid.
+        func nextTimeout(perCall: Float = CursorRectResolver.accessibilityTimeout,
+                         now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Float? {
+            let remaining = expiresAt - now
+            guard remaining >= Double(Self.minimumTimeout) else { return nil }
+            return min(perCall, Float(remaining))
+        }
+
+        /// Below this, a call is not worth making and cannot be given a timeout
+        /// that the framework will not read as "no timeout".
+        static let minimumTimeout: Float = 0.01
+    }
+
+    /// Copy an attribute under the chain's remaining time, or give up.
+    private static func copyAttribute(_ element: AXUIElement, _ attribute: String,
+                                      within deadline: AXDeadline) -> AnyObject? {
+        guard let timeout = deadline.nextTimeout() else {
+            DebugLogger.log("Hanja AX: time budget spent, skipping \(attribute)")
+            return nil
+        }
+        AXUIElementSetMessagingTimeout(element, timeout)
+        var value: AnyObject?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard result == .success else {
+            DebugLogger.log("Hanja AX: \(attribute) failed (\(result.rawValue))")
+            return nil
+        }
+        return value
+    }
+
+    /// Copy a parameterized attribute under the chain's remaining time.
+    private static func copyParameterizedAttribute(_ element: AXUIElement, _ attribute: String,
+                                                   parameter: AnyObject,
+                                                   within deadline: AXDeadline) -> AnyObject? {
+        guard let timeout = deadline.nextTimeout() else {
+            DebugLogger.log("Hanja AX: time budget spent, skipping \(attribute)")
+            return nil
+        }
+        AXUIElementSetMessagingTimeout(element, timeout)
+        var value: AnyObject?
+        let result = AXUIElementCopyParameterizedAttributeValue(
+            element, attribute as CFString, parameter, &value)
+        guard result == .success else {
+            DebugLogger.log("Hanja AX: \(attribute) failed (\(result.rawValue))")
+            return nil
+        }
+        return value
+    }
 
     /// Get cursor position via macOS Accessibility API
     /// Chromium/Electron apps have broken IMK firstRect but properly implement AX text attributes.
@@ -152,32 +232,35 @@ public enum CursorRectResolver {
     private static func getCursorRectViaAccessibility() -> NSRect? {
         let systemWide = AXUIElementCreateSystemWide()
         // Every call below is a synchronous round trip to the focused app, on the
-        // main thread that all of PriType's typing runs on. The default timeout is
-        // about six seconds per call, so a busy app could freeze input everywhere
-        // for tens of seconds. On the system-wide element this sets the timeout for
-        // every element the process creates; a caret is useless that late anyway,
-        // and the mouse position is the next fallback.
+        // main thread that all of PriType's typing runs on. The framework's default
+        // timeout is about six seconds PER CALL, so a busy app could freeze input
+        // everywhere for tens of seconds. Each call is capped, and the chain as a
+        // whole is capped too, because a cap that only applies per call multiplies
+        // by however many calls the chain makes. Setting it on the system-wide
+        // element covers every element the process creates; each call sets it again
+        // on its own element with whatever time is actually left.
         AXUIElementSetMessagingTimeout(systemWide, accessibilityTimeout)
+        let deadline = AXDeadline(budget: accessibilityBudget)
 
         // Get the currently focused UI element
-        var focusedElement: AnyObject?
-        var focusResult = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedElement)
+        var focusedElement = copyAttribute(systemWide, kAXFocusedUIElementAttribute as String,
+                                           within: deadline)
 
         // Fallback: If system-wide focused element fails (common in Chromium intermittently),
         // try going through the focused application instead
-        if focusResult != .success || focusedElement == nil {
-            DebugLogger.log("Hanja AX: systemWide focusedElement failed (\(focusResult.rawValue)), trying app path")
+        if focusedElement == nil {
+            DebugLogger.log("Hanja AX: systemWide focusedElement failed, trying app path")
 
-            var focusedApp: AnyObject?
-            if AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &focusedApp) == .success,
-               let appElement = validatedAXElement(focusedApp) {
-                focusResult = AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedElement)
-                if focusResult != .success {
-                    DebugLogger.log("Hanja AX: app focusedElement also failed (\(focusResult.rawValue))")
-                    return nil
-                }
-            } else {
+            let focusedApp = copyAttribute(systemWide, kAXFocusedApplicationAttribute as String,
+                                           within: deadline)
+            guard let appElement = validatedAXElement(focusedApp) else {
                 DebugLogger.log("Hanja AX: focusedApplication also failed")
+                return nil
+            }
+            focusedElement = copyAttribute(appElement, kAXFocusedUIElementAttribute as String,
+                                           within: deadline)
+            guard focusedElement != nil else {
+                DebugLogger.log("Hanja AX: app focusedElement also failed")
                 return nil
             }
         }
@@ -188,13 +271,13 @@ public enum CursorRectResolver {
         }
 
         // Strategy 1: AXSelectedTextRange → AXBoundsForRange
-        if let rect = getBoundsForSelectedText(axElement) {
+        if let rect = getBoundsForSelectedText(axElement, within: deadline) {
             return rect
         }
 
         // Strategy 2: Use element's AXPosition + AXSize as approximation
         // The focused element itself (e.g. text area) gives us a reasonable position
-        if let rect = getElementCaretPosition(axElement) {
+        if let rect = getElementCaretPosition(axElement, within: deadline) {
             return rect
         }
 
@@ -203,12 +286,13 @@ public enum CursorRectResolver {
     }
 
     /// Try to get caret bounds via AXBoundsForRange
-    private static func getBoundsForSelectedText(_ axElement: AXUIElement) -> NSRect? {
+    private static func getBoundsForSelectedText(_ axElement: AXUIElement,
+                                                 within deadline: AXDeadline) -> NSRect? {
         // Get the selected text range (caret position)
-        var selectedRangeValue: AnyObject?
-        let rangeResult = AXUIElementCopyAttributeValue(axElement, kAXSelectedTextRangeAttribute as CFString, &selectedRangeValue)
-        guard rangeResult == .success, let rangeVal = validatedAXValue(selectedRangeValue) else {
-            DebugLogger.log("Hanja AX: selectedTextRange failed (\(rangeResult.rawValue))")
+        let selectedRangeValue = copyAttribute(axElement, kAXSelectedTextRangeAttribute as String,
+                                               within: deadline)
+        guard let rangeVal = validatedAXValue(selectedRangeValue) else {
+            DebugLogger.log("Hanja AX: selectedTextRange unusable")
             return nil
         }
 
@@ -236,15 +320,11 @@ public enum CursorRectResolver {
         }
 
         // Get the bounds for this text range
-        var boundsValue: AnyObject?
-        let boundsResult = AXUIElementCopyParameterizedAttributeValue(
-            axElement,
-            kAXBoundsForRangeParameterizedAttribute as CFString,
-            queryRange,
-            &boundsValue
-        )
-        guard boundsResult == .success, let boundsVal = validatedAXValue(boundsValue) else {
-            DebugLogger.log("Hanja AX: boundsForRange failed (\(boundsResult.rawValue))")
+        let boundsValue = copyParameterizedAttribute(
+            axElement, kAXBoundsForRangeParameterizedAttribute as String,
+            parameter: queryRange, within: deadline)
+        guard let boundsVal = validatedAXValue(boundsValue) else {
+            DebugLogger.log("Hanja AX: boundsForRange unusable")
             return nil
         }
 
@@ -261,9 +341,8 @@ public enum CursorRectResolver {
         // Chrome returns (0, y, 0, 0) — only y is valid. Supplement x from the
         // element's position.
         if bounds.size.width == 0 && bounds.size.height == 0 {
-            var posValue: AnyObject?
-            if AXUIElementCopyAttributeValue(axElement, kAXPositionAttribute as CFString, &posValue) == .success,
-               let pv = validatedAXValue(posValue) {
+            let posValue = copyAttribute(axElement, kAXPositionAttribute as String, within: deadline)
+            if let pv = validatedAXValue(posValue) {
                 var pos = CGPoint.zero
                 guard AXValueGetValue(pv, .cgPoint, &pos) else {
                     DebugLogger.log("Hanja AX: element position was not a CGPoint")
@@ -288,13 +367,12 @@ public enum CursorRectResolver {
     }
 
     /// Fallback: use element's AXPosition to approximate caret location
-    private static func getElementCaretPosition(_ axElement: AXUIElement) -> NSRect? {
-        var posValue: AnyObject?
-        var sizeValue: AnyObject?
+    private static func getElementCaretPosition(_ axElement: AXUIElement,
+                                                within deadline: AXDeadline) -> NSRect? {
+        let posValue = copyAttribute(axElement, kAXPositionAttribute as String, within: deadline)
+        let sizeValue = copyAttribute(axElement, kAXSizeAttribute as String, within: deadline)
 
-        guard AXUIElementCopyAttributeValue(axElement, kAXPositionAttribute as CFString, &posValue) == .success,
-              AXUIElementCopyAttributeValue(axElement, kAXSizeAttribute as CFString, &sizeValue) == .success,
-              let pv = validatedAXValue(posValue), let sv = validatedAXValue(sizeValue) else {
+        guard let pv = validatedAXValue(posValue), let sv = validatedAXValue(sizeValue) else {
             DebugLogger.log("Hanja AX: element position/size unavailable")
             return nil
         }
