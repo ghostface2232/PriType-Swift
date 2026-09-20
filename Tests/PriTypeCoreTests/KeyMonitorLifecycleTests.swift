@@ -244,48 +244,47 @@ struct PendingToggleTests {
 
     @Test("A toggle already run by a keystroke does not drag a later one in with it")
     func aDrainedActionLeavesNoTimerThatRunsTheNextOne() async {
-        // Its own coordinator: this test has to suspend to watch a timer, and the
-        // shared one is drained by every other suite running alongside it.
-        // A wait far longer than the shipping 30 ms, so the moments this has to
-        // tell apart are not scheduling noise on a machine running other suites.
-        let grace: TimeInterval = 0.5
-        let coordinator = InputModeCoordinator(inFlightKeyGrace: grace)
+        // Its own coordinator, and its waits fired by hand. What a deferred drain
+        // reaches is the behaviour here; how long it waited first is not, and a
+        // test that waits out a real timer reports on the machine it runs on.
+        let coordinator = InputModeCoordinator()
         var performed: [InputModeCoordinator.KeyAction] = []
         coordinator.performOverride = { performed.append($0) }
+        var waits: [() -> Void] = []
+        coordinator.deferDrainOverride = { waits.append($0) }
 
         let now = ProcessInfo.processInfo.systemUptime
 
-        // Toggle A reaches main with no keystroke handled yet, so it starts its
-        // wait for keys that might still be in flight, and arms a timer to end it.
-        // Waiting for a turn of the main queue, rather than for a duration, is what
-        // makes "its hop has run" a fact instead of a guess.
+        // Toggle A reaches main with no keystroke handled yet, so rather than run
+        // it waits for keys that might still be in flight.
         requestOffMain(at: [now + 10], on: coordinator)
         await mainQueueTurn()
         #expect(performed.isEmpty, "A waits for keys pressed before it")
+        #expect(waits.count == 1, "and its wait is the one now pending")
 
         // A key pressed just after A arrives and runs A itself. A's wait is over —
-        // but its timer is still armed, with nothing left of A to run.
+        // but the wait is still pending, with nothing left of A to run.
         coordinator.applyPendingKeyActions(before: now + 11)
         #expect(performed == [.toggle(.customKey)])
 
-        // Toggle B is pressed late enough that A's orphaned timer will fire during
-        // B's own wait, not after it. A timer that drained the whole queue would
-        // take B with it, giving B none of the wait — the reordering this exists
-        // to prevent, arrived at from the other side.
-        try? await Task.sleep(for: .seconds(grace * 0.8))
+        // Toggle B is pressed while a key pressed BEFORE it is still on its way to
+        // IMK, so B starts a wait of its own.
         requestOffMain(at: [now + 60], on: coordinator)
-        try? await Task.sleep(for: .seconds(grace * 0.4))
-        #expect(performed == [.toggle(.customKey)],
-                "B ran early, carried by the earlier toggle's timer")
+        await mainQueueTurn()
+        #expect(waits.count == 2)
+        #expect(performed == [.toggle(.customKey)], "B waits too")
 
-        // B's own wait still ends, so nothing is stuck.
-        var drained = false
-        for _ in 0..<40 where !drained {
-            try? await Task.sleep(for: .milliseconds(50))
-            drained = coordinator.pendingActionCount == 0
-        }
-        #expect(drained)
+        // A's orphaned wait ends. A wait that drained the whole queue would take B
+        // with it, giving B none of its own — the reordering this exists to
+        // prevent, arrived at from the other side.
+        waits[0]()
+        #expect(performed == [.toggle(.customKey)],
+                "B ran early, carried by the earlier toggle's wait")
+
+        // B's own wait ends, and only then does B run.
+        waits[1]()
         #expect(performed == [.toggle(.customKey), .toggle(.customKey)])
+        #expect(coordinator.pendingActionCount == 0, "nothing is stuck")
     }
 
     @Test("A toggle no keystroke follows does not stay pending")
