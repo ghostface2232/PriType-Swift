@@ -269,10 +269,9 @@ struct IMKIntegrationTests {
         #expect(field.client.selectionQueries == 3, "Three identical answers are enough")
         #expect(field.client.substringQueries == 0, "It never got as far as reading text")
 
-        // A new field may be an ordinary one, so the questions start again.
-        harness.blur()
-        harness.focus(field)
-        field.client.select(NSRange(location: 0, length: 1))
+        // A click may land in a different field of the same client, which may be
+        // an ordinary one, so the questions start again — on this same adapter.
+        harness.click()
         field.client.resetQueryCounts()
         #expect(!harness.press(.backspace))
         #expect(field.client.selectionQueries == 1)
@@ -355,6 +354,28 @@ struct IMKIntegrationTests {
         #expect(field.client.selectionQueries == 4, "And stops asking the host anything")
         // 6 syllables = 18 units; of the 12 presses, 2 were swallowed and 10 took a jamo.
         #expect(field.client.text.utf16.count == 8, "Only the two swallowed presses are lost")
+    }
+
+    @Test("Tab to the next field tries the rewrite again")
+    func tabResumesAfterAHostRefused() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("가나다", replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.select(NSRange(location: 0, length: 1))   // what Google Docs answers
+        field.client.freezeReports = true
+        for _ in 0..<3 {
+            #expect(!harness.press(.backspace))                // three of these end the questions
+        }
+
+        // Tab moves within the same client — every web field in a window shares one.
+        #expect(!harness.press(.tab))
+        field.client.freezeReports = false
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.clearLog()
+
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls == [.insert("각"), .host("delete(각)")],
+                "The next field gets its own chance: \(field.client.calls)")
     }
 
     @Test("Escape drops the composition and is consumed")

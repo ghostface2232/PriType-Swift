@@ -241,7 +241,10 @@ public class HangulComposer: @unchecked Sendable {
         if keyCode == KeyCode.tab {
             commitComposition(delegate: delegate)
             localTextBuffer = ""
-            delegate.forgetLastPrecomposedSyllable()
+            // Tab moves to the next field, which is a fresh start for the rewrite
+            // even when the client object stays the same (every web field in a
+            // Chromium window shares one).
+            delegate.resumePrecomposing()
             return false
         }
         

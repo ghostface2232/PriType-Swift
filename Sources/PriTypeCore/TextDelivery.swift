@@ -237,11 +237,13 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         caretFollowsOwnOutput = false
     }
 
-    /// Give this host's rewrites another chance (called when the field changes).
+    /// Give this host's rewrites another chance, and forget where the caret was.
+    /// Called whenever the field may have changed: a click, a focus change, a
+    /// composition finalized from outside the keystroke path.
     func resumePrecomposing() {
         unappliedRewrites = 0
         repeatedUnusableSelection = nil
-        lastPrecomposed = nil
+        forgetLastPrecomposedSyllable()
     }
 
     /// Count a refusal, and say so once when the host is written off.

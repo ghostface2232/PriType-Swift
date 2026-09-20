@@ -473,6 +473,7 @@ final class FakeDirectInsertionClient: HangulComposerDelegate {
     func textBeforeCursor(length: Int) -> String? { nil }
     func precomposeSyllableBeforeCursor(followsBackspace: Bool) {}
     func forgetLastPrecomposedSyllable() {}
+    func resumePrecomposing() {}
     func replaceTextBeforeCursor(length: Int, with text: String) {
         livePreeditLength = 0
         var units = Array(document.utf16)

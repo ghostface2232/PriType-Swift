@@ -52,6 +52,11 @@ public protocol HangulComposerDelegate: AnyObject {
     /// (No default: a delivery path that silently ignored these would lose the
     /// rewrite, or keep a stale one, with nothing to show for it.)
     func forgetLastPrecomposedSyllable()
+
+    /// Called when the keystroke moves to another field of the same client, which
+    /// may answer where the last one refused. Gives up what was remembered and
+    /// lets a host the rewrite had written off be tried again.
+    func resumePrecomposing()
 }
 
 // MARK: - InputMode Enum

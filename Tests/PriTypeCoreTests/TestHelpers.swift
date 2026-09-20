@@ -24,6 +24,7 @@ final class MockComposerDelegate: HangulComposerDelegate {
     /// Ordered record of the decomposed-syllable rewrite requests.
     var precomposeRequests: [Bool] = []
     var forgetPrecomposedCount = 0
+    var resumePrecomposingCount = 0
     var backspaceCompositionUpdateDepth = 0
     var backspaceCompositionUpdateCallCount = 0
     var markedTextDuringBackspaceUpdates: [String] = []
@@ -71,6 +72,11 @@ final class MockComposerDelegate: HangulComposerDelegate {
         forgetPrecomposedCount += 1
     }
 
+    func resumePrecomposing() {
+        forgetPrecomposedCount += 1
+        resumePrecomposingCount += 1
+    }
+
     func textBeforeCursor(length: Int) -> String? {
         if fullText.isEmpty { return "" }
         let count = fullText.count
@@ -98,6 +104,7 @@ final class MockComposerDelegate: HangulComposerDelegate {
         passThroughBackspaceAfterClearingCompositionCallCount = 0
         precomposeRequests = []
         forgetPrecomposedCount = 0
+        resumePrecomposingCount = 0
     }
 }
 
