@@ -87,6 +87,12 @@ public class HangulComposer: @unchecked Sendable {
 
     /// A 두벌식 syllable takes at most five keys (괅 = ㄱ ㅗ ㅏ ㄹ ㄱ).
     private static let maxSyllableKeys = 5
+
+    /// Whether the key handled before the current one was a Backspace. The
+    /// decomposed-syllable rewrite needs it to tell a host that ignored the last
+    /// rewrite from a caret that simply came back to the same offset.
+    private var previousKeyWasBackspace = false
+    private var currentKeyFollowsBackspace = false
     
     /// Text convenience handler (double-space period)
     /// Owns all state for text convenience features
@@ -259,7 +265,7 @@ public class HangulComposer: @unchecked Sendable {
                 return true
             }
             if !localTextBuffer.isEmpty { localTextBuffer.removeLast() }
-            delegate.precomposeSyllableBeforeCursor()
+            delegate.precomposeSyllableBeforeCursor(followsBackspace: currentKeyFollowsBackspace)
             return false
         }
         
@@ -408,6 +414,8 @@ public class HangulComposer: @unchecked Sendable {
         // Any navigation or confirmation key (Arrow, Tab, Return) invalidates our local text context
         // because the cursor has likely moved, changing the text before it.
         let keyCode = event.keyCode
+        currentKeyFollowsBackspace = previousKeyWasBackspace
+        previousKeyWasBackspace = keyCode == KeyCode.backspace
         if keyCode == KeyCode.leftArrow || keyCode == KeyCode.rightArrow ||
            keyCode == KeyCode.upArrow || keyCode == KeyCode.downArrow ||
            keyCode == KeyCode.tab || keyCode == KeyCode.return || keyCode == KeyCode.numpadEnter {
@@ -428,7 +436,7 @@ public class HangulComposer: @unchecked Sendable {
             localTextBuffer = ""
             if keyCode == KeyCode.backspace,
                event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
-                delegate.precomposeSyllableBeforeCursor()
+                delegate.precomposeSyllableBeforeCursor(followsBackspace: currentKeyFollowsBackspace)
             }
             return false
         }

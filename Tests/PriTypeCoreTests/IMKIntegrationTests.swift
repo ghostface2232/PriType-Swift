@@ -135,6 +135,40 @@ struct IMKIntegrationTests {
         ])
     }
 
+    @Test("A caret that comes back to the same offset still gets its rewrite")
+    func backspaceAfterCaretReturnsToSameOffset() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.insertText(syllable, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text.isEmpty)
+
+        // Paste another decomposed 각, which ends at the offset the rewrite used.
+        #expect(!harness.keyDown(keyCode: 9, characters: "v", modifiers: .command))
+        field.client.insertText(syllable, replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text.isEmpty, "An unrelated edit is not a lagging host")
+        #expect(field.client.calls == [.insert("각"), .host("delete(각)")])
+    }
+
+    @Test("A click between two Backspaces forgets the last rewrite")
+    func backspaceAfterClick() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.ignoresReplacementRange = true
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.insertText(syllable, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text == syllable, "The host undid the rewrite itself")
+
+        harness.click()
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls.first == .insert("각"), "The caret may have moved; try again")
+    }
+
     @Test("Escape drops the composition and is consumed")
     func escapeCancels() {
         let (harness, field) = start()

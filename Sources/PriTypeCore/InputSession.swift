@@ -164,6 +164,8 @@ final class InputSession: @unchecked Sendable {
     /// every session-ending event can call it unconditionally.
     @discardableResult
     func finalize(reason: CompositionFinalizeReason) -> Bool {
+        // A click or a focus change can move the caret with no keystroke in between.
+        adapter.forgetLastPrecomposedSyllable()
         guard composer.hasActiveComposition else {
             // Nothing to commit, but the session-ending event (e.g. a mouse click)
             // likely moved the caret — stale direct-insertion tracking must never
@@ -215,6 +217,7 @@ final class InputSession: @unchecked Sendable {
     /// host warning beeps in password fields), and clear direct-insertion tracking so
     /// a stale live-preedit length can never delete real text on the next keystroke.
     func discardForSecureInput() {
+        adapter.forgetLastPrecomposedSyllable()
         composer.discardCompositionForPassThrough()
         (adapter as? DirectInsertionAdapter)?.resetPreeditTracking()
     }
