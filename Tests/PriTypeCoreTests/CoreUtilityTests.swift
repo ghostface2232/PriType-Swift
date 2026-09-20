@@ -5,6 +5,26 @@ import Testing
 
 @Suite("CompositionHelpers")
 struct CompositionHelpersTests {
+
+    @Test("A decomposed syllable before the caret is found with its precomposed form")
+    func decomposedSyllableSuffix() {
+        let find = CompositionHelpers.decomposedSyllableSuffix(of:)
+        #expect(find("a\u{1100}\u{1161}\u{11A8}")! == (3, "각"))
+        #expect(find("\u{1100}\u{1161}")! == (2, "가"))
+        #expect(find("\u{1100}\u{1161}\u{11A8}\u{1100}\u{1161}")! == (2, "가"))
+        #expect(find("가\u{11A8}")! == (2, "각"), "Precomposed LV + final")
+        #expect(find("각") == nil, "Already precomposed")
+        #expect(find("ab") == nil)
+        #expect(find("\u{1161}\u{11A8}") == nil, "No initial")
+        #expect(find("\u{1100}\u{1100}\u{1161}") == nil, "Old Hangul cluster")
+        #expect(find("\u{1100}\u{119E}") == nil, "Arae-a has no precomposed form")
+        #expect(find("\u{1100}\u{1100}\u{1161}\u{11A8}") == nil, "Old Hangul cluster, with a final")
+        #expect(find("\u{1100}\u{1161}\u{11C3}") == nil, "Old final")
+        #expect(find("\u{1100}\u{1161}\u{11A8}\u{11A8}") == nil, "Double final")
+        #expect(find("") == nil)
+        #expect(find("\u{11A8}") == nil, "A final alone")
+        #expect(find("😀\u{1100}\u{1161}")! == (2, "가"), "An astral character before the syllable")
+    }
     
     @Test("Convert empty array returns empty string")
     func convertEmptyArray() {

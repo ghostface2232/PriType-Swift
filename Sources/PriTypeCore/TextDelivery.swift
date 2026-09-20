@@ -127,6 +127,62 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
     /// experimental flag flipped mid-session) and the adapter must be rebuilt.
     var deliveryMode: InputDeliveryMode { .markedText }
 
+    /// The last decomposed-syllable rewrite: where it happened and what it wrote.
+    /// The NEXT Backspace finding that same syllable still ending at that same
+    /// caret means the host applied neither the rewrite nor the delete that
+    /// followed it: either its selection report lags (Chromium/Electron) or it
+    /// ignored the replacement range and undid our insert itself. Rewriting again
+    /// would re-insert text the host just deleted, so that Backspace is left to
+    /// the host, which deletes a jamo as before.
+    ///
+    /// Only an immediately consecutive Backspace may be suppressed this way, and
+    /// anything that moves the caret without a keystroke clears this, so a caret
+    /// that merely comes back to the same offset still gets its rewrite.
+    private var lastPrecomposed: (caret: Int, syllable: String)?
+
+    /// How many rewrites in a row this host has been seen not to apply. A host
+    /// that ignores replacement ranges edits at the caret instead and then deletes
+    /// what it just inserted, so every rewrite is wasted AND swallows its
+    /// Backspace. Two in a row stop the rewrite for this field: Backspace goes
+    /// straight to the host, exactly as it did before this feature existed. A
+    /// rewrite the host did apply clears the count, so a host that lagged once in
+    /// a long editing session keeps its rewrites.
+    private var unappliedRewrites = 0
+
+    /// The refusal this host keeps repeating, and how many times in a row. Google
+    /// Docs answers every query with "one character selected at offset 0" and an
+    /// empty document, whatever the real caret is: it draws its own text and shows
+    /// the input method an empty shell. Asking it again can never help, so the
+    /// identical refusal, repeated, ends the questions for this field. Selections
+    /// being deleted move with the text, so ordinary editing never looks like it.
+    private var repeatedUnusableSelection: (range: NSRange, count: Int)?
+
+    /// Whether the rewrite has given up on this field.
+    private var precomposeIsHopeless: Bool {
+        unappliedRewrites >= Self.unappliedRewriteLimit
+            || (repeatedUnusableSelection?.count ?? 0) >= Self.unusableSelectionLimit
+    }
+
+    /// Two in a row are a pattern; one is a single slow moment in a healthy host.
+    private static let unappliedRewriteLimit = 2
+
+    /// The same unusable caret three times running is the host's fixed answer.
+    private static let unusableSelectionLimit = 3
+
+    /// Whether the caret sits right after text this input method wrote. Everything
+    /// it writes is precomposed (`CompositionHelpers.convertAndNormalize`), so the
+    /// character before the caret cannot be a decomposed syllable and the host need
+    /// not be asked at all — which covers the most common Backspace of all, the one
+    /// that undoes what was just typed. One Backspace consumes it: what stands
+    /// before the deleted character is unknown again.
+    ///
+    /// Every write goes through `noteOwnOutput()`, and everything that moves the
+    /// caret through `forgetLastPrecomposedSyllable()` — a key the composer sees, a
+    /// click, a focus change. A caret moved with none of those (dropped text, a
+    /// paste from the menu bar, a host moving its own caret) leaves this set, and
+    /// costs that one Backspace its rewrite; the next one behaves again.
+    private var caretFollowsOwnOutput = false
+
     init(client: IMKTextInput, bundleId: String) {
         self.client = client
         self.bundleId = bundleId
@@ -140,6 +196,7 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         // what native hosts (e.g. KakaoTalk) expect. Passing an explicit marked
         // range here desynced KakaoTalk's composition (stranded marked text +
         // missing commit on focus loss).
+        noteOwnOutput()
         client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
     }
 
@@ -164,7 +221,102 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         guard selRange.location != NSNotFound, selRange.location < 10000000, selRange.location >= length else { return }
 
         let replacementRange = NSRange(location: selRange.location - length, length: length)
+        noteOwnOutput()
         client.insertText(text, replacementRange: replacementRange)
+    }
+
+    /// Record that the caret now follows text this input method just wrote.
+    /// EVERY write to the client from an adapter goes through here.
+    func noteOwnOutput() {
+        lastPrecomposed = nil
+        caretFollowsOwnOutput = true
+    }
+
+    func forgetLastPrecomposedSyllable() {
+        lastPrecomposed = nil
+        caretFollowsOwnOutput = false
+    }
+
+    /// Give this host's rewrites another chance, and forget where the caret was.
+    /// Called whenever the field may have changed: a click, a focus change, a
+    /// composition finalized from outside the keystroke path.
+    func resumePrecomposing() {
+        unappliedRewrites = 0
+        repeatedUnusableSelection = nil
+        forgetLastPrecomposedSyllable()
+    }
+
+    /// Count a refusal, and say so once when the host is written off.
+    private func noteRefusedCaret(_ selRange: NSRange) {
+        if let repeated = repeatedUnusableSelection, repeated.range == selRange {
+            repeatedUnusableSelection = (selRange, repeated.count + 1)
+        } else {
+            repeatedUnusableSelection = (selRange, 1)
+        }
+        if precomposeIsHopeless {
+            DebugLogger.log("Precompose: \(bundleId) reports no usable caret; asking it no more")
+        }
+    }
+
+    func precomposeSyllableBeforeCursor(followsBackspace: Bool) {
+        guard !precomposeIsHopeless else { return }
+        let previous = lastPrecomposed
+        lastPrecomposed = nil
+
+        // Deleting this input method's own output needs no questions asked.
+        if caretFollowsOwnOutput {
+            caretFollowsOwnOutput = false
+            return
+        }
+
+        let selRange = client.selectedRange()
+
+        // A host that cannot answer says so the same way every time. A caret that
+        // is merely too close to the start of the document, or a selection being
+        // deleted, is a real answer — counting those would switch the rewrite off
+        // in a healthy host, for instance while holding Backspace to clear a field.
+        let isRefusal = selRange.location == NSNotFound
+            || selRange.location >= DirectInsertionPlanner.maxReasonableLocation
+            || selRange.length > 0
+        if isRefusal {
+            noteRefusedCaret(selRange)
+            return
+        }
+        repeatedUnusableSelection = nil
+
+        // A selection is deleted whole; only a caret deletes by character.
+        guard selRange.location >= 2 else { return }
+
+        // Four units: a syllable of three jamo and the one before it.
+        let start = max(0, selRange.location - 4)
+        let range = NSRange(location: start, length: selRange.location - start)
+        guard let before = client.attributedSubstring(from: range)?.string,
+              before.utf16.count == range.length,
+              let (length, syllable) = CompositionHelpers.decomposedSyllableSuffix(of: before) else { return }
+
+        // The same syllable still ending at the same caret, one Backspace later:
+        // the host took neither the rewrite nor the delete, so leave this one to it.
+        // The memory stays armed: a host whose report lags by several events would
+        // otherwise look untouched again on the NEXT Backspace and be rewritten —
+        // re-inserting, at a stale range, text the host has already deleted.
+        if followsBackspace, previous?.caret == selRange.location, previous?.syllable == syllable {
+            lastPrecomposed = previous
+            unappliedRewrites += 1
+            if precomposeIsHopeless {
+                DebugLogger.log("Precompose: \(bundleId) kept none of its rewrites; leaving Backspace alone")
+            }
+            return
+        }
+
+        // A rewrite the host applied takes the whole syllable with it, so the caret
+        // comes back at least two units earlier. A host that dropped the rewrite and
+        // deleted one jamo instead leaves it exactly one unit earlier, which is no
+        // evidence of anything and must not clear the count.
+        if let previous, selRange.location <= previous.caret - 2 {
+            unappliedRewrites = 0
+        }
+        client.insertText(syllable, replacementRange: NSRange(location: selRange.location - length, length: length))
+        lastPrecomposed = (caret: selRange.location, syllable: syllable)
     }
 }
 
@@ -328,6 +480,7 @@ final class DirectInsertionAdapter: BaseClientAdapter {
         }
 
         let tBeforeInsert = CFAbsoluteTimeGetCurrent()
+        noteOwnOutput()
         client.insertText(text, replacementRange: replacementRange)
         let tEnd = CFAbsoluteTimeGetCurrent()
 
@@ -374,5 +527,12 @@ final class DirectInsertionAdapter: BaseClientAdapter {
         state = .idle
         preparedLiveRange = nil
         super.replaceTextBeforeCursor(length: length, with: text)
+    }
+
+    override func precomposeSyllableBeforeCursor(followsBackspace: Bool) {
+        // Shortening committed text shifts every tracked range after it.
+        state = .idle
+        preparedLiveRange = nil
+        super.precomposeSyllableBeforeCursor(followsBackspace: followsBackspace)
     }
 }

@@ -38,6 +38,25 @@ public protocol HangulComposerDelegate: AnyObject {
     ///   - length: Number of characters to replace (counting backwards from cursor)
     ///   - text: The new text to insert
     func replaceTextBeforeCursor(length: Int, with text: String)
+
+    /// Called just before a Backspace goes to the host with nothing composing.
+    /// Rewrites a decomposed (NFD) syllable before the caret as its precomposed
+    /// form, so the host deletes the syllable instead of its last jamo.
+    /// - Parameter followsBackspace: whether the key before this one was also a
+    ///   Backspace. Only then can an unchanged caret mean the host ignored the
+    ///   previous rewrite rather than the user having moved back there.
+    func precomposeSyllableBeforeCursor(followsBackspace: Bool)
+
+    /// Forget which rewrite was last attempted. Called when something other than a
+    /// keystroke (a click, focus loss) may have moved the caret.
+    /// (No default: a delivery path that silently ignored these would lose the
+    /// rewrite, or keep a stale one, with nothing to show for it.)
+    func forgetLastPrecomposedSyllable()
+
+    /// Called when the keystroke moves to another field of the same client, which
+    /// may answer where the last one refused. Gives up what was remembered and
+    /// lets a host the rewrite had written off be tried again.
+    func resumePrecomposing()
 }
 
 // MARK: - InputMode Enum

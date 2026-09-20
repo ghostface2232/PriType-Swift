@@ -626,6 +626,54 @@ struct HangulComposerTests {
 
     // MARK: - Helper
 
+    @Test("The rewrite is asked for only when a plain Backspace reaches the host")
+    func precomposeRequestGating() {
+        let (composer, delegate) = makeComposer()
+        func backspace(_ modifiers: NSEvent.ModifierFlags = []) {
+            _ = composer.handle(
+                TestEventFactory.keyEvent(char: "\u{8}", keyCode: KeyCode.backspace, modifiers: modifiers)!,
+                delegate: delegate)
+        }
+
+        _ = composer.handle(TestEventFactory.keyEvent(char: "r", keyCode: 15)!, delegate: delegate)
+        _ = composer.handle(TestEventFactory.keyEvent(char: "k", keyCode: 40)!, delegate: delegate)
+        backspace()   // 가 -> ㄱ, still composing
+        #expect(delegate.precomposeRequests.isEmpty, "The composition owns the Backspace")
+
+        backspace()   // commits the last jamo for the host to delete
+        #expect(delegate.precomposeRequests.isEmpty)
+        #expect(delegate.forgetPrecomposedCount == 1, "What the host uncovers is unknown")
+
+        backspace()
+        #expect(delegate.precomposeRequests == [true],
+                "Nothing composing: ask, and the Backspace before this one was one too")
+        backspace()
+        #expect(delegate.precomposeRequests == [true, true], "Still consecutive")
+
+        backspace(.command)
+        #expect(delegate.precomposeRequests == [true, true], "⌘⌫ belongs to the host")
+
+        backspace()
+        #expect(delegate.precomposeRequests == [true, true, false], "⌘⌫ broke the run")
+    }
+
+    @Test("A Backspace in another client does not continue this client's run")
+    func keyHistoryDoesNotCrossClients() {
+        let (composer, delegate) = makeComposer()
+        func backspace() {
+            _ = composer.handle(
+                TestEventFactory.keyEvent(char: "\u{8}", keyCode: KeyCode.backspace)!, delegate: delegate)
+        }
+
+        backspace()
+        backspace()
+        #expect(delegate.precomposeRequests == [false, true])
+
+        composer.forgetKeyHistory()   // another client took the engine over
+        backspace()
+        #expect(delegate.precomposeRequests == [false, true, false])
+    }
+
     private func makeComposer() -> (HangulComposer, MockComposerDelegate) {
         let composer = HangulComposer(configuration: MockConfiguration())
         let delegate = MockComposerDelegate()

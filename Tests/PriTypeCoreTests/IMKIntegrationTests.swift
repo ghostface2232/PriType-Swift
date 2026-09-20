@@ -66,6 +66,349 @@ struct IMKIntegrationTests {
         #expect(field.client.calls == [.mark("ㅇ"), .insert("ㅇ"), .host("delete(ㅇ)")])
     }
 
+    @Test("Backspace after pasted decomposed Hangul deletes the whole syllable")
+    func backspaceAfterDecomposedSyllable() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        let pasted = "\u{1100}\u{1161}\u{11A8}\u{1103}\u{1169}"   // 각도, NFD
+        field.client.insertText(pasted, replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text == "\u{1100}\u{1161}\u{11A8}")
+        #expect(field.client.calls == [.insert("도"), .host("delete(도)")])
+        harness.toggle()
+        #expect(!harness.press(.backspace), "English mode deletes syllables too")
+        #expect(field.client.text.isEmpty)
+    }
+
+    @Test("A selection, a modifier and plain text leave Backspace alone")
+    func backspaceLeavesOtherCasesAlone() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}가나", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        field.client.select(NSRange(location: 0, length: 3))
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls == [.host("delete(\u{1100}\u{1161}\u{11A8})")], "A selection goes whole")
+
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: 0, length: 0))
+        field.client.clearLog()
+        #expect(!harness.press(.backspace, modifiers: .command))
+        #expect(!field.client.calls.contains(.insert("각")), "⌘⌫ deletes a line, not a syllable")
+
+        field.client.placeCaret(at: field.client.text.utf16.count)
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls == [.host("delete(나)")], "Whole syllables need no rewrite")
+    }
+
+    @Test("A decomposed syllable mid-text is rewritten where the caret is")
+    func backspaceMidText() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}\u{1103}\u{1169}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.placeCaret(at: 3)
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text == "\u{1103}\u{1169}", "Only the syllable before the caret goes")
+        #expect(field.client.calls == [.insert("각"), .host("delete(각)")])
+    }
+
+    @Test("A host that ignores the replacement range gets its Backspaces back")
+    func backspaceInHostIgnoringReplacementRange() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.ignoresReplacementRange = true
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.insertText(syllable, replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.clearLog()
+
+        // Such a host inserts the syllable at the caret and deletes it again:
+        // nothing moves and that Backspace is lost. Two of those are enough to
+        // stop trying, and every Backspace after that takes a jamo off, exactly
+        // as it did before this feature existed.
+        var lengths: [Int] = []
+        for _ in 0..<6 {
+            #expect(!harness.press(.backspace))
+            lengths.append(field.client.text.utf16.count)
+        }
+        #expect(lengths == [3, 2, 2, 1, 0, 0], "Got \(lengths)")
+        #expect(field.client.calls.filter { $0.description.hasPrefix("insert") }.count == 2,
+                "Two wasted rewrites at most, then it leaves the host alone")
+    }
+
+    @Test("A caret that comes back to the same offset still gets its rewrite")
+    func backspaceAfterCaretReturnsToSameOffset() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.insertText(syllable, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text.isEmpty)
+
+        // Paste another decomposed 각, which ends at the offset the rewrite used.
+        #expect(!harness.keyDown(keyCode: 9, characters: "v", modifiers: .command))
+        field.client.insertText(syllable, replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text.isEmpty, "An unrelated edit is not a lagging host")
+        #expect(field.client.calls == [.insert("각"), .host("delete(각)")])
+    }
+
+    @Test("A click between two Backspaces forgets the last rewrite")
+    func backspaceAfterClick() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.ignoresReplacementRange = true
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.insertText(syllable, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text == syllable, "The host undid the rewrite itself")
+
+        harness.click()
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls.first == .insert("각"), "The caret may have moved; try again")
+    }
+
+    @Test("A host whose report is stuck does not get its deleted text back")
+    func backspaceInLaggingHost() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.insertText(String(repeating: syllable, count: 2),
+                                replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.freezeReports = true   // every query answers "6 units, 각각"
+
+        var lengths: [Int] = []
+        for _ in 0..<4 {
+            #expect(!harness.press(.backspace))
+            lengths.append(field.client.text.utf16.count)
+        }
+        #expect(lengths == lengths.sorted(by: >), "The document only shrinks: \(lengths)")
+        #expect(field.client.calls.filter { $0 == .insert("각") }.count == 1,
+                "One rewrite while the report never moves")
+    }
+
+    @Test("An arrow key between two Backspaces forgets the last rewrite")
+    func backspaceAfterArrowKey() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.ignoresReplacementRange = true
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.insertText(syllable + syllable, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text.utf16.count == 6, "The host undid the rewrite itself")
+
+        // The caret may be anywhere now, so the next Backspace starts fresh.
+        #expect(!harness.press(.left))
+        field.client.placeCaret(at: 6)
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls.first == .insert("각"), "Tries again after the caret moved")
+    }
+
+    @Test("English mode: ⌘⌫ never rewrites")
+    func englishModeCommandBackspace() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        harness.systemSelects(.english)
+        field.client.clearLog()
+        field.client.resetQueryCounts()
+
+        #expect(!harness.press(.backspace, modifiers: .command))
+        #expect(field.client.selectionQueries == 0, "⌘⌫ deletes a line; the host owns it")
+        #expect(field.client.calls == [.host("shortcut")], "The host keeps the whole shortcut")
+    }
+
+    @Test("Deleting freshly typed Hangul asks the host nothing")
+    func backspaceAfterOwnOutputSkipsQueries() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type("rk")
+        harness.press(.space)                    // commits 가 and a space
+        field.client.resetQueryCounts()
+
+        #expect(!harness.press(.backspace))       // deletes the space
+        #expect(field.client.selectionQueries == 0, "Our own output is precomposed")
+        #expect(field.client.substringQueries == 0)
+
+        // The character before THAT one is unknown, so the next one does ask.
+        #expect(!harness.press(.backspace))
+        #expect(field.client.selectionQueries == 1)
+    }
+
+    @Test("A Backspace that commits the last jamo still lets the next one rewrite")
+    func backspaceAfterLastJamoCommit() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        harness.type("d")                         // ㅇ composing after the pasted 각
+        #expect(!harness.press(.backspace))       // the jamo is committed, the host deletes it
+        field.client.clearLog()
+
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls == [.insert("각"), .host("delete(각)")])
+    }
+
+    @Test("A host with no usable caret, like Google Docs, is asked only a few times")
+    func backspaceInHostWithoutDocumentAccess() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        // What Google Docs answers to every query: one character selected at 0.
+        field.client.select(NSRange(location: 0, length: 1))
+        field.client.freezeReports = true
+        field.client.resetQueryCounts()
+
+        for _ in 0..<8 {
+            #expect(!harness.press(.backspace))
+        }
+        #expect(field.client.selectionQueries == 3, "Three identical answers are enough")
+        #expect(field.client.substringQueries == 0, "It never got as far as reading text")
+
+        // A click may land in a different field of the same client, which may be
+        // an ordinary one, so the questions start again — on this same adapter.
+        harness.click()
+        field.client.resetQueryCounts()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.selectionQueries == 1)
+    }
+
+    @Test("A real selection, deleted again and again, is not mistaken for that")
+    func repeatedSelectionDeletesKeepAsking() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("가나다라마바사", replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.resetQueryCounts()
+
+        for start in [5, 3, 1] {   // different places, and the text keeps shrinking
+            field.client.select(NSRange(location: start, length: 2))
+            #expect(!harness.press(.backspace))
+        }
+        field.client.placeCaret(at: field.client.text.utf16.count)
+        #expect(!harness.press(.backspace))
+        #expect(field.client.selectionQueries == 4, "Selections move, so none of them is a fixed answer")
+    }
+
+    @Test("Clearing a field to the start does not switch the rewrite off")
+    func backspaceToDocumentStartKeepsRewriting() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("ab", replacementRange: NSRange(location: NSNotFound, length: 0))
+        for _ in 0..<6 {                      // empties the field, then keeps going
+            #expect(!harness.press(.backspace))
+        }
+        #expect(field.client.text.isEmpty)
+
+        // A caret at the start is a real answer, not a host refusing to answer.
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls == [.insert("각"), .host("delete(각)")])
+    }
+
+    @Test("Rewrites a host dropped once, twice over, do not cost it the session")
+    func unappliedRewritesFarApartAreForgiven() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.insertText(String(repeating: syllable, count: 9),
+                                replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        // Twice, far apart, the host drops one rewrite the way a moment of lag
+        // would, and otherwise applies every one of them.
+        for _ in 0..<2 {
+            field.client.ignoresReplacementRange = true
+            #expect(!harness.press(.backspace))     // dropped
+            field.client.ignoresReplacementRange = false
+            #expect(!harness.press(.backspace))     // suppressed: that one never landed
+            for _ in 0..<2 {
+                #expect(!harness.press(.backspace)) // applied, whole syllables
+            }
+        }
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls.first == .insert("각"),
+                "A rewrite that lands clears what the dropped one counted: \(field.client.calls)")
+    }
+
+    @Test("A host dropping every rewrite is left alone after two in a row")
+    func twoUnappliedRewritesInARowStopTheFeature() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.ignoresReplacementRange = true
+        field.client.insertText(String(repeating: syllable, count: 6),
+                                replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.clearLog()
+        field.client.resetQueryCounts()
+
+        for _ in 0..<12 {
+            #expect(!harness.press(.backspace))
+        }
+        #expect(field.client.calls.filter { $0.description.hasPrefix("insert") }.count == 2,
+                "Two wasted rewrites, then it stops trying: \(field.client.calls)")
+        #expect(field.client.selectionQueries == 4, "And stops asking the host anything")
+        // 6 syllables = 18 units; of the 12 presses, 2 were swallowed and 10 took a jamo.
+        #expect(field.client.text.utf16.count == 8, "Only the two swallowed presses are lost")
+    }
+
+    @Test("Tab to the next field tries the rewrite again")
+    func tabResumesAfterAHostRefused() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("가나다", replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.select(NSRange(location: 0, length: 1))   // what Google Docs answers
+        field.client.freezeReports = true
+        for _ in 0..<3 {
+            #expect(!harness.press(.backspace))                // three of these end the questions
+        }
+
+        // Tab moves within the same client — every web field in a window shares one.
+        #expect(!harness.press(.tab))
+        field.client.freezeReports = false
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.clearLog()
+
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls == [.insert("각"), .host("delete(각)")],
+                "The next field gets its own chance: \(field.client.calls)")
+    }
+
+    @Test("Keys that move the caret give up what the rewrite knew")
+    func caretMovingKeysForgetOwnOutput() {
+        // Typing leaves the caret after this IME's own output, which lets the next
+        // Backspace skip its questions. Any key that can move the caret has to give
+        // that up, or a Backspace elsewhere would skip a rewrite it owed.
+        func afterTyping(_ move: (IMKHarness) -> Void) -> [FakeTextClient.Call] {
+            let (harness, field) = start()
+            defer { harness.finish() }
+            field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: NSNotFound, length: 0))
+            harness.type("rk")
+            harness.press(.space)                 // commits 가 and a space: our own output
+            move(harness)
+            field.client.placeCaret(at: 3)        // back to just after the pasted 각
+            field.client.clearLog()
+            #expect(!harness.press(.backspace))
+            return field.client.calls
+        }
+
+        #expect(afterTyping { _ = $0.press(.left) }.first == .insert("각"), "arrow")
+        #expect(afterTyping { _ = $0.press(.tab) }.first == .insert("각"), "tab")
+        #expect(afterTyping { _ = $0.press(.return) }.first == .insert("각"), "return")
+        #expect(afterTyping { _ = $0.keyDown(keyCode: 9, characters: "v", modifiers: .command) }.first
+                == .insert("각"), "⌘V")
+        #expect(afterTyping { $0.click() }.first == .insert("각"), "click")
+        // Home: a navigation key the special-key list does not name, caught by the
+        // non-printable filter instead.
+        #expect(afterTyping { _ = $0.keyDown(keyCode: 115, characters: "\u{1}") }.first
+                == .insert("각"), "home")
+        #expect(afterTyping { $0.toggle() }.first == .insert("각"), "한/영 toggle")
+    }
+
     @Test("Escape drops the composition and is consumed")
     func escapeCancels() {
         let (harness, field) = start()

@@ -71,9 +71,42 @@ public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
         return string as? String ?? ""
     }
 
+    /// Some hosts (Qt, custom text views) drop the replacement range and edit at
+    /// the caret instead. Set this to model one.
+    public var ignoresReplacementRange = false
+
+    /// Chromium and Electron answer queries from a snapshot that trails the real
+    /// document. While this is set, every query answers from the state the field
+    /// had when it was set, however many edits have landed since.
+    public var freezeReports = false {
+        didSet { frozen = freezeReports ? (NSString(string: storage as String), selection) : nil }
+    }
+    private var frozen: (text: NSString, selection: NSRange)?
+
+    /// How many times the input method asked for the caret and for text. Query
+    /// count is the IPC cost a host pays for a keystroke.
+    public private(set) var selectionQueries = 0
+    public private(set) var substringQueries = 0
+
+    /// What a query sees: the live state, or the frozen snapshot when lagging.
+    private var reported: (text: NSString, selection: NSRange) {
+        frozen ?? (storage, selection)
+    }
+
+    public func resetQueryCounts() {
+        selectionQueries = 0
+        substringQueries = 0
+    }
+
+    /// Select `range`, as dragging over the text does.
+    public func select(_ range: NSRange) {
+        selection = range
+    }
+
     /// Where an edit lands: the explicit range, else the marked text, else the selection.
     private func target(for replacementRange: NSRange) -> NSRange {
-        if replacementRange.location != NSNotFound,
+        if !ignoresReplacementRange,
+           replacementRange.location != NSNotFound,
            NSMaxRange(replacementRange) <= storage.length {
             return replacementRange
         }
@@ -106,15 +139,20 @@ public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
 
     // MARK: IMKTextInput — queries
 
-    public func selectedRange() -> NSRange { selection }
+    public func selectedRange() -> NSRange {
+        selectionQueries += 1
+        return reported.selection
+    }
 
     public func markedRange() -> NSRange {
         marked ?? NSRange(location: NSNotFound, length: 0)
     }
 
     public func attributedSubstring(from range: NSRange) -> NSAttributedString! {
-        guard range.location != NSNotFound, NSMaxRange(range) <= storage.length else { return nil }
-        return NSAttributedString(string: storage.substring(with: range))
+        substringQueries += 1
+        let text = reported.text
+        guard range.location != NSNotFound, NSMaxRange(range) <= text.length else { return nil }
+        return NSAttributedString(string: text.substring(with: range))
     }
 
     public func string(from range: NSRange, actualRange: NSRangePointer!) -> String! {
@@ -216,6 +254,11 @@ public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
                 return
             }
             range = storage.rangeOfComposedCharacterSequence(at: range.location - 1)
+            // AppKit and Blink take a decomposed syllable apart one jamo at a time.
+            let last = storage.character(at: range.location + range.length - 1)
+            if range.length > 1, (0x1100...0x11FF).contains(last) {
+                range = NSRange(location: NSMaxRange(range) - 1, length: 1)
+            }
         }
         let removed = storage.substring(with: range)
         storage.deleteCharacters(in: range)

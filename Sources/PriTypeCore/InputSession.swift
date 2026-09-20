@@ -74,6 +74,9 @@ final class InputSession: @unchecked Sendable {
         context = newContext
         contextNeedsRefresh = false
         ensureAdapterMatchesPolicy()
+        // A different field may take the rewrite the previous one refused.
+        adapter.resumePrecomposing()
+
         if focusLossObserver != nil, newContext.bundleId != oldBundleId {
             armFocusLossFinalizer()
         }
@@ -164,6 +167,10 @@ final class InputSession: @unchecked Sendable {
     /// every session-ending event can call it unconditionally.
     @discardableResult
     func finalize(reason: CompositionFinalizeReason) -> Bool {
+        // A click or a focus change can move the caret with no keystroke in between,
+        // and it can land in a different field of the same client — one that may
+        // well answer the rewrite's questions where the last one refused.
+        adapter.resumePrecomposing()
         guard composer.hasActiveComposition else {
             // Nothing to commit, but the session-ending event (e.g. a mouse click)
             // likely moved the caret — stale direct-insertion tracking must never
@@ -215,6 +222,7 @@ final class InputSession: @unchecked Sendable {
     /// host warning beeps in password fields), and clear direct-insertion tracking so
     /// a stale live-preedit length can never delete real text on the next keystroke.
     func discardForSecureInput() {
+        adapter.forgetLastPrecomposedSyllable()
         composer.discardCompositionForPassThrough()
         (adapter as? DirectInsertionAdapter)?.resetPreeditTracking()
     }
