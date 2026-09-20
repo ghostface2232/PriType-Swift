@@ -771,7 +771,8 @@ public class HangulComposer: @unchecked Sendable {
             return true // Consume the key but don't open the window
         }
         
-        DebugLogger.log("Hanja: Found \(entries.count) entries for '\(searchKey)'")
+        DebugLogger.logSensitive("Hanja: found \(entries.count) entries",
+                                 sensitiveContent: "'\(searchKey)'")
         
         hanjaMode = true
         
@@ -849,7 +850,8 @@ public class HangulComposer: @unchecked Sendable {
                     ? String(self.localTextBuffer.dropLast(entry.hangul.count)) + entry.hanja
                     : entry.hanja
                 self.hanjaMode = false
-                DebugLogger.log("Hanja: Selected '\(entry.hanja)' (\(entry.meaning))")
+                DebugLogger.logSensitive("Hanja: selected a candidate",
+                                         sensitiveContent: "'\(entry.hanja)' (\(entry.meaning))")
             },
             onDismiss: { [weak self] in
                 self?.hanjaMode = false

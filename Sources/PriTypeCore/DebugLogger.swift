@@ -56,11 +56,18 @@ public final class DebugLogger: @unchecked Sendable {
         return formatter
     }()
     
+    /// Every line this logger emits, handed over before it is written. Exists so a
+    /// test can assert what does NOT appear in the DEFAULT Debug output — whether
+    /// input the user typed reached the log through some path that skipped
+    /// `logSensitive`. DEBUG only, and nil unless a test installs it.
+    nonisolated(unsafe) public static var emittedLineObserver: (@Sendable (String) -> Void)?
+
     /// Log a debug message to file with console fallback
     /// - Parameter msg: The message to log
     /// - Note: Thread-safe. Falls back to system console if file logging fails.
     /// - Important: This function is only available in DEBUG builds.
     public static func log(_ msg: String) {
+        emittedLineObserver?(msg)
         let timestamp = dateFormatter.string(from: Date())
         let logMsg = "[\(timestamp)] \(msg)\n"
         

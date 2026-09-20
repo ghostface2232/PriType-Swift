@@ -59,6 +59,7 @@ struct ReviewFixRegressionTests {
         harness.click()
         #expect(field.client.text == "ㄱ")
     }
+
     // MARK: 2 — A key pressed before a toggle keeps the mode it was pressed in
 
     @Test("A toggle that reaches main first does not claim an older key still in flight")
@@ -76,6 +77,7 @@ struct ReviewFixRegressionTests {
         if !handled { field.client.performHostAction(for: older) }
         #expect(field.client.text == "ㄱ", "It was pressed in Korean mode")
     }
+
     // MARK: 3 — The double-space substitution edits the space it meant to edit
 
     @Test("A space typed after the caret moved back does not eat the character before it")
@@ -97,6 +99,7 @@ struct ReviewFixRegressionTests {
         harness.type("rk  ")
         #expect(field.client.text == "가. ")
     }
+
     // MARK: 4 — A space the substitution cannot make is still a space
 
     @Test("A host that reports no caret gets the space, not nothing")
@@ -139,6 +142,7 @@ struct ReviewFixRegressionTests {
         #expect(adapter.replaceTextBeforeCursor(length: 1, with: ". ", verifying: "가 ") == .issued)
         #expect(client.text == "가. ")
     }
+
     // MARK: 5 — Changing the delivery mode ends the composition it was rendering
 
     private func makeSession(_ client: FakeTextClient, _ composer: HangulComposer) -> InputSession {
@@ -208,5 +212,42 @@ struct ReviewFixRegressionTests {
         key(40, "k", composer, session)
         #expect(client.markedText == "가", "one syllable, still composing")
         #expect(client.text == "가")
+    }
+
+    // MARK: 6 — Input never reaches the default Debug log
+
+    @Test("A Hanja lookup leaves neither the word nor the candidate in the default Debug log")
+    func hanjaLeavesNothingInTheLog() throws {
+        let lines = Lines()
+        DebugLogger.emittedLineObserver = { lines.record($0) }
+        defer { DebugLogger.emittedLineObserver = nil }
+
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "대한민국"))
+        harness.pressHanjaKey()
+        let entry = try #require(harness.candidates.entries.first)
+        harness.candidates.choose(1)
+        #expect(field.client.text == entry.hanja)
+
+        let logged = lines.snapshot.joined(separator: "\n")
+        #expect(!logged.contains("대한민국"), "the word looked up")
+        #expect(!logged.contains(entry.hanja), "the candidate chosen")
+        #expect(!logged.contains(entry.meaning), "what the candidate means")
+        #expect(logged.contains("[REDACTED]"), "the sensitive path is the one that ran")
+    }
+
+    /// Collects log lines from the logger's own queue-free observer callback.
+    private final class Lines: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lines: [String] = []
+        func record(_ line: String) {
+            lock.lock(); defer { lock.unlock() }
+            lines.append(line)
+        }
+        var snapshot: [String] {
+            lock.lock(); defer { lock.unlock() }
+            return lines
+        }
     }
 }
