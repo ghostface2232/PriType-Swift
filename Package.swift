@@ -74,6 +74,11 @@ let package = Package(
                 "PriTypeIMKHarness",
                 "PriTypeDeviceCheck",
                 .product(name: "LibHangul", package: "libhangul-swift")
+            ],
+            // A real signed update manifest, produced by the release workflow.
+            // It is the only way a test can prove the app reads what CI writes.
+            resources: [
+                .copy("Fixtures")
             ]
         ),
         .target(

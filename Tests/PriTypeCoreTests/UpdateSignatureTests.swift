@@ -127,6 +127,28 @@ struct UpdateSignatureTests {
         }
     }
 
+    @Test("The app reads a manifest the release workflow actually produced")
+    func acceptsRealReleaseManifest() throws {
+        // Fixtures from a real run of release.yml, signed with the release
+        // secret. Everything else here signs with a key generated in-process,
+        // which would pass even if the shipping key, the workflow's output
+        // format and the app's reader had drifted apart. Regenerate both files
+        // from a workflow run if the signing key is ever rotated.
+        let fixtures = try #require(Bundle.module.url(forResource: "Fixtures", withExtension: nil))
+        let manifestData = try Data(contentsOf: fixtures.appendingPathComponent("update.json"))
+        let signature = try String(
+            contentsOf: fixtures.appendingPathComponent("update.json.sig"),
+            encoding: .utf8
+        )
+
+        let manifest = try UpdateSignature.verifiedManifest(manifest: manifestData, signatureText: signature)
+
+        #expect(manifest.version == "2.8.0")
+        #expect(manifest.minimumSystemVersion == "14.0")
+        #expect(manifest.size == 5_043_898)
+        #expect(manifest.sha256.count == 64)
+    }
+
     // MARK: - Manifest Rules
 
     private static let sampleManifest = UpdateManifest(
