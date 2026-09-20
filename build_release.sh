@@ -95,6 +95,13 @@ echo "Generating component plist to disable relocation..."
 pkgbuild --analyze --root "$PAYLOAD_DIR" "$COMPONENT_PLIST"
 # Use plutil to change BundleIsRelocatable to false for the first item
 plutil -replace 0.BundleIsRelocatable -bool NO "$COMPONENT_PLIST"
+# The installer skips a bundle whose installed copy reports a newer version,
+# which here can only ever leave the Mac with no input method at all:
+# preinstall has already deleted the old app by the time that decision is
+# made. Reproduced going from an installed 2.8.0 to a 2.7.9 package — the
+# installer reported success and "/Library/Input Methods" was left empty.
+# Downgrades are the realistic case: a beta tester moving back to stable.
+plutil -replace 0.BundleIsVersionChecked -bool NO "$COMPONENT_PLIST"
 
 # The identifier predates the fork. Keep it so installs of earlier releases upgrade in place.
 PKG_SIGN_ARGS=()

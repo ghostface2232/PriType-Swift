@@ -5,6 +5,11 @@ All notable changes to PriType-Swift will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 수정 (설치 후 입력기가 사라짐 — 2026-09-20)
+- 설치된 빌드보다 낮은 버전의 PKG를 설치하면 입력기가 통째로 사라지던 문제를 수정했습니다. macOS 설치 관리자는 설치된 번들이 더 새것이면 페이로드를 건너뛰는데, PriType의 `preinstall`은 그 판단이 내려지기 전에 이미 기존 앱을 지웁니다. 그래서 설치는 "성공"으로 끝나고 `/Library/Input Methods`는 빈 채로 남았습니다. 베타를 쓰다 안정판으로 돌아올 때 실제로 일어납니다. 이제 PKG에서 이 버전 검사를 끕니다. `preinstall`이 어차피 기존 설치를 지우므로 검사가 지켜 주는 것은 없었습니다.
+
 ## [2.8.1] - 2026-09-20 (Stable)
 
 ### 추가 (설정 창에서 바로 업데이트 설치 — 2026-09-20)

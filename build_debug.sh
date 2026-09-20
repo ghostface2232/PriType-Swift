@@ -79,6 +79,13 @@ PKG_VERSION="${APP_VERSION}-debug"
 echo "[4/6] Building the PKG installer..."
 pkgbuild --analyze --root "$PAYLOAD_DIR" "$COMPONENT_PLIST"
 plutil -replace 0.BundleIsRelocatable -bool NO "$COMPONENT_PLIST"
+# The installer skips a bundle whose installed copy reports a newer version,
+# which here can only ever leave the Mac with no input method at all:
+# preinstall has already deleted the old app by the time that decision is
+# made. Reproduced going from an installed 2.8.0 to a 2.7.9 package — the
+# installer reported success and "/Library/Input Methods" was left empty.
+# Downgrades are the realistic case: a beta tester moving back to stable.
+plutil -replace 0.BundleIsVersionChecked -bool NO "$COMPONENT_PLIST"
 
 pkgbuild --root "$PAYLOAD_DIR" \
          --component-plist "$COMPONENT_PLIST" \
