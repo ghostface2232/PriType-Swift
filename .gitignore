@@ -34,3 +34,6 @@ pritype_logs.txt
 scratch_*.swift
 sim*.swift
 setup_github_secrets.sh
+
+# Local notes about signing material and where secrets live
+release_signing_local*
