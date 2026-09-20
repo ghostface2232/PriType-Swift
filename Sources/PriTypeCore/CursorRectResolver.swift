@@ -230,6 +230,15 @@ public enum CursorRectResolver {
     ///
     /// - Returns: NSRect of the caret position in screen coordinates (bottom-left origin), or nil if unavailable
     private static func getCursorRectViaAccessibility() -> NSRect? {
+        // The chain of synchronous round trips the budget below exists to bound.
+        // Timed on its own so a host that makes the input method wait can be named
+        // from an Instruments trace instead of guessed at.
+        let chain = Signposts.isRecording
+            ? Signposts.hanja.beginInterval(Signposts.HanjaStage.accessibilityChain) : nil
+        defer {
+            if let chain { Signposts.hanja.endInterval(Signposts.HanjaStage.accessibilityChain, chain) }
+        }
+
         let systemWide = AXUIElementCreateSystemWide()
         // Every call below is a synchronous round trip to the focused app, on the
         // main thread that all of PriType's typing runs on. The framework's default

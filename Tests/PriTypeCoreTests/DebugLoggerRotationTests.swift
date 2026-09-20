@@ -10,10 +10,20 @@ struct DebugLoggerRotationTests {
 
     /// A temporary log directory, removed afterwards, so no test writes into the
     /// log the user is reading.
-    private func withTemporaryLog(limit: Int, _ body: (URL) throws -> Void) rethrows {
+    /// - Parameter existingContents: what an earlier run left in the log. Written
+    ///   BEFORE the logger is pointed at the file, because replacing a file the
+    ///   logger already holds open leaves it writing into the replaced one — and
+    ///   the logger is global, so any other suite logging in that window is enough
+    ///   to open it.
+    private func withTemporaryLog(limit: Int, existingContents: Data? = nil,
+                                  _ body: (URL) throws -> Void) rethrows {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("pritype-log-\(UUID().uuidString)")
         let url = directory.appendingPathComponent("pritype_debug.log")
+        if let existingContents {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? existingContents.write(to: url)
+        }
         DebugLogger.testOverrides = DebugLogger.TestOverrides(path: url.path, rotationLimit: limit)
         defer {
             DebugLogger.flushPendingWrites()
@@ -56,12 +66,8 @@ struct DebugLoggerRotationTests {
     }
 
     @Test("A log left oversized by an earlier run rotates instead of growing on")
-    func rotatesAFileInheritedFromAnEarlierRun() throws {
-        try withTemporaryLog(limit: 1_000) { url in
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            try Data(repeating: 0x41, count: 5_000).write(to: url)
-
+    func rotatesAFileInheritedFromAnEarlierRun() {
+        withTemporaryLog(limit: 1_000, existingContents: Data(repeating: 0x41, count: 5_000)) { url in
             DebugLogger.log("the first line of a new run")
             DebugLogger.flushPendingWrites()
 
