@@ -374,39 +374,49 @@ struct KeyEventDedupTests {
         #expect(KeyEventDedup.isDuplicate(snap(100.0, 51), previous: snap(100.0, 51)))
     }
 
-    @Test("Re-delivery within the window is a duplicate")
-    func withinWindow() {
-        #expect(KeyEventDedup.isDuplicate(snap(100.02, 51), previous: snap(100.0, 51)))
+    @Test("A different press time is a different press, however close")
+    func fastSecondPressSurvives() {
+        // 30 ms apart: a fast typist, a macro, or a second keyboard. Two stamps,
+        // two presses — nothing here may collapse them into one.
+        #expect(!KeyEventDedup.isDuplicate(snap(100.03, 51), previous: snap(100.0, 51)))
+        // Even a tenth of a millisecond apart is still two events.
+        #expect(!KeyEventDedup.isDuplicate(snap(100.0001, 51), previous: snap(100.0, 51)))
     }
 
-    @Test("Outside the window is NOT a duplicate (human double-tap)")
-    func outsideWindow() {
+    @Test("Far apart is not a duplicate either")
+    func farApart() {
         #expect(!KeyEventDedup.isDuplicate(snap(100.2, 51), previous: snap(100.0, 51)))
     }
 
     @Test("Different keyCode is never a duplicate (fast typing)")
     func differentKey() {
-        #expect(!KeyEventDedup.isDuplicate(snap(100.01, 40), previous: snap(100.0, 51)))
+        #expect(!KeyEventDedup.isDuplicate(snap(100.0, 40), previous: snap(100.0, 51)))
     }
 
     @Test("Auto-repeat events are never treated as duplicates")
     func autoRepeatExempt() {
         // new is a repeat
-        #expect(!KeyEventDedup.isDuplicate(snap(100.01, 51, true), previous: snap(100.0, 51, false)))
+        #expect(!KeyEventDedup.isDuplicate(snap(100.0, 51, true), previous: snap(100.0, 51, false)))
         // previous was a repeat (held key)
-        #expect(!KeyEventDedup.isDuplicate(snap(100.01, 51, false), previous: snap(100.0, 51, true)))
+        #expect(!KeyEventDedup.isDuplicate(snap(100.0, 51, false), previous: snap(100.0, 51, true)))
     }
 
-    @Test("Different characters or modifiers survive the dedup window")
+    @Test("Different characters or modifiers are not the same event")
     func differentInput() {
         let previous = KeyDownSnapshot(timestamp: 100, keyCode: 0, isARepeat: false, characters: "a", modifiers: 0)
-        let shifted = KeyDownSnapshot(timestamp: 100.01, keyCode: 0, isARepeat: false, characters: "A", modifiers: 0x20000)
+        let shifted = KeyDownSnapshot(timestamp: 100, keyCode: 0, isARepeat: false, characters: "A", modifiers: 0x20000)
         #expect(!KeyEventDedup.isDuplicate(shifted, previous: previous))
     }
 
     @Test("No previous event ⇒ not a duplicate")
     func noPrevious() {
         #expect(!KeyEventDedup.isDuplicate(snap(100.0, 51), previous: nil))
+    }
+
+    @Test("A third delivery of the same event is dropped too")
+    func tripleDelivery() {
+        let event = snap(100.0, 51)
+        #expect(KeyEventDedup.isDuplicate(event, previous: event))
     }
 }
 
@@ -474,13 +484,17 @@ final class FakeDirectInsertionClient: HangulComposerDelegate {
     func precomposeSyllableBeforeCursor(followsBackspace: Bool) {}
     func forgetLastPrecomposedSyllable() {}
     func resumePrecomposing() {}
-    func replaceTextBeforeCursor(length: Int, with text: String) {
+    func replaceTextBeforeCursor(length: Int, with text: String, verifying context: String) -> TextReplacementResult {
         livePreeditLength = 0
         var units = Array(document.utf16)
-        guard units.count >= length else { return }
+        guard units.count >= context.utf16.count,
+              String(decoding: units.suffix(context.utf16.count), as: UTF16.self) == context else {
+            return .unavailable
+        }
         units.removeLast(length)
         units.append(contentsOf: Array(text.utf16))
         document = String(decoding: units, as: UTF16.self)
+        return .issued
     }
 }
 

@@ -430,16 +430,31 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             return false
         }
 
+        // One interval per keystroke, with the stages below nested inside it, so a
+        // slow key can be read as which stage was slow rather than as a total. No
+        // part of what was typed is recorded — see `Signposts`.
+        let recording = Signposts.isRecording
+        let signpostID = recording ? Signposts.keystroke.makeSignpostID() : .invalid
+        let keystroke = recording
+            ? Signposts.keystroke.beginInterval(Signposts.Stage.handle, id: signpostID) : nil
+        defer {
+            if let keystroke { Signposts.keystroke.endInterval(Signposts.Stage.handle, keystroke) }
+        }
+
         claimActiveController()
 
         // 1. Resolve the session FIRST — all subsequent logic uses its fresh context.
-        let session = ensureSession(for: client)
+        let session = Signposts.interval(Signposts.keystroke, Signposts.Stage.session, id: signpostID, recording: recording) {
+            ensureSession(for: client)
+        }
 
         // A toggle or Hanja key pressed just before this key may still be waiting
         // for its hop from the key-monitor thread. Run it now so this key lands in
         // the new mode or in the candidate window — but only actions pressed before
         // this key: running a later one would reinterpret a key typed earlier.
-        InputModeCoordinator.shared.applyPendingKeyActions(before: event.timestamp)
+        Signposts.interval(Signposts.keystroke, Signposts.Stage.pendingActions, id: signpostID, recording: recording) {
+            InputModeCoordinator.shared.applyPendingKeyActions(before: event.timestamp)
+        }
 
         // 2. Duplicate-keyDown suppression. Some hosts (observed: KakaoTalk) deliver
         // the same physical keyDown to the IME twice. That double-processes input —
@@ -448,14 +463,23 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // result. Host-event-level, so it applies in every delivery mode.
         let keyDownSnapshot = KeyDownSnapshot(timestamp: event.timestamp, keyCode: event.keyCode, isARepeat: event.isARepeat, characters: event.characters, modifiers: event.modifierFlags.rawValue)
         if session.registerKeyDown(keyDownSnapshot) {
-            DebugLogger.log("PriTypeInputController: dropped duplicate keyDown keyCode=\(event.keyCode)")
+            DebugLogger.logSensitive("PriTypeInputController: dropped duplicate keyDown",
+                                     sensitiveContent: "keyCode=\(event.keyCode)")
             return session.lastHandleResult
         }
 
         #if DEBUG
         if debugHandleLogCount < 200 {
             debugHandleLogCount += 1
-            DebugLogger.log("PriTypeInputController: handle keyCode=\(event.keyCode) repeat=\(event.isARepeat) mode=\(composer.inputMode) modifiers=\(event.modifierFlags.rawValue) bundle=\(session.context.bundleId) lightweight=\(session.context.isLightweight) immediate=\(session.context.shouldUseImmediateMode)")
+            // A key code IS what the user typed — it is the letter, by another
+            // name, and `modifiers` says whether it was shifted. The first two
+            // hundred keystrokes of every Debug session were being written out in
+            // full, which is the leak the Hanja logging was fixed for, at a larger
+            // scale. The state around the key is what this line is read for, so the
+            // key itself goes the way `logSensitive` sends everything else.
+            DebugLogger.logSensitive(
+                "PriTypeInputController: handle repeat=\(event.isARepeat) mode=\(composer.inputMode) bundle=\(session.context.bundleId) lightweight=\(session.context.isLightweight) immediate=\(session.context.shouldUseImmediateMode)",
+                sensitiveContent: "keyCode=\(event.keyCode) modifiers=\(event.modifierFlags.rawValue)")
         }
         #endif
 
@@ -463,7 +487,13 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         composer.markKeystroke(bundleId: session.context.bundleId)
 
         // 4. DYNAMIC CHECK: Secure Input (password fields) — raw pass-through.
-        if shouldPassThroughSecureInput(client: client, context: session.context) {
+        // A client IPC when a global secure-input warning is up, so it is timed
+        // separately from the composition it precedes.
+        let passThrough = Signposts.interval(Signposts.keystroke, Signposts.Stage.secureInputProbe,
+                                            id: signpostID, recording: recording) {
+            shouldPassThroughSecureInput(client: client, context: session.context)
+        }
+        if passThrough {
             session.discardForSecureInput()
             session.recordHandleResult(false)
             return false
@@ -475,10 +505,16 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
 
         // A direct-live preedit has no IMK marked range, so caret/document changes
         // must be detected explicitly before this key mutates the Hangul engine.
-        session.prepareForInput()
+        // One or two synchronous client reads when direct insertion is live.
+        Signposts.interval(Signposts.keystroke, Signposts.Stage.prepareForInput, id: signpostID, recording: recording) {
+            session.prepareForInput()
+        }
 
-        // 6. Compose.
-        let handled = composer.handle(event, delegate: session.adapter)
+        // 6. Compose. The writes to the host happen inside here, so this interval
+        // carries the text APIs' own IPC with it.
+        let handled = Signposts.interval(Signposts.keystroke, Signposts.Stage.compose, id: signpostID, recording: recording) {
+            composer.handle(event, delegate: session.adapter)
+        }
         session.recordHandleResult(handled)
         return handled
     }

@@ -349,8 +349,8 @@ struct IOKitShortcutRoutingTests {
     func managerDispatchesOrdinaryKeyToggle() async {
         let manager = IOKitManager()
         let actions = ShortcutActions()
-        manager.onRightCommandToggle = { actions.record("toggle") }
-        manager.onRightOptionHanja = { actions.record("hanja") }
+        manager.onRightCommandToggle = { _ in actions.record("toggle") }
+        manager.onRightOptionHanja = { _ in actions.record("hanja") }
 
         manager.handleKeyboardEvent(usage: HIDUsage.f13, pressed: true, toggle: f13Binding,
                                     hanja: rightOptionBinding, toggleEnabled: true, paused: false)
@@ -360,5 +360,45 @@ struct IOKitShortcutRoutingTests {
             DispatchQueue.main.async { continuation.resume() }
         }
         #expect(actions.snapshot == ["toggle", "hanja"])
+    }
+
+    @Test("A hardware key is handed over with the time it was pressed")
+    func managerReportsThePressTime() async {
+        let manager = IOKitManager()
+        let times = PressTimes()
+        manager.onRightCommandToggle = { times.record($0) }
+
+        let pressedAt: TimeInterval = 12_345.5
+        manager.handleKeyboardEvent(usage: HIDUsage.f13, pressed: true, eventTime: pressedAt,
+                                    toggle: f13Binding, hanja: rightOptionBinding,
+                                    toggleEnabled: true, paused: false)
+        // The hand-over hops to main, so the toggle is not performed inside the
+        // IOHID value callback.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        #expect(times.snapshot == [pressedAt],
+                "the fallback can only order against a keystroke if it says when the key was pressed")
+    }
+
+    @Test("A HID timestamp converts onto NSEvent's clock")
+    func hidTimestampsAreUptimeSeconds() {
+        // Both are mach absolute time since boot, which is what makes them
+        // comparable with a keystroke's own timestamp.
+        let now = ProcessInfo.processInfo.systemUptime
+        let converted = IOKitManager.uptimeSeconds(fromMachAbsolute: mach_absolute_time())
+        #expect(abs(converted - now) < 1, "converted \(converted) against uptime \(now)")
+
+        // An event with no time of its own is treated as pressed now, not in 1970.
+        let synthetic = IOKitManager.uptimeSeconds(fromMachAbsolute: 0)
+        #expect(abs(synthetic - now) < 1)
+    }
+
+    /// Records the press times a callback was handed.
+    private final class PressTimes: @unchecked Sendable {
+        private let lock = NSLock()
+        private var times: [TimeInterval] = []
+        func record(_ time: TimeInterval) { lock.withLock { times.append(time) } }
+        var snapshot: [TimeInterval] { lock.withLock { times } }
     }
 }

@@ -729,6 +729,16 @@ public class HangulComposer: @unchecked Sendable {
             DebugLogger.log("Hanja: Not in Korean mode, skipping")
             return false
         }
+
+        // The lookup is the one user action that can wait on another app: the
+        // caret-resolution chain below is synchronous Accessibility IPC. Timed as
+        // one interval with the search and the caret nested, and carrying no part
+        // of the word or the candidates — see `Signposts`.
+        let recording = Signposts.isRecording
+        let lookupID = recording ? Signposts.hanja.makeSignpostID() : .invalid
+        let lookup = recording
+            ? Signposts.hanja.beginInterval(Signposts.HanjaStage.lookup, id: lookupID) : nil
+        defer { if let lookup { Signposts.hanja.endInterval(Signposts.HanjaStage.lookup, lookup) } }
         
         // Look up the word ending at the caret. Text comes from OWNED state first
         // (preedit, then localTextBuffer). Reading the host's text is the last
@@ -744,6 +754,8 @@ public class HangulComposer: @unchecked Sendable {
             ?? PriTypeInputController.sharedController?.cachedContext?.bundleId ?? ""
         let buffer = isBufferFromApp(currentBundleId) ? localTextBuffer : ""
 
+        let searchStage = recording
+            ? Signposts.hanja.beginInterval(Signposts.HanjaStage.dictionarySearch, id: lookupID) : nil
         let lookupText: String
         let entries: [HanjaEntry]
         // Whether the looked-up text is the end of localTextBuffer (after the
@@ -763,6 +775,9 @@ public class HangulComposer: @unchecked Sendable {
             }
             entries = HanjaManager.shared.searchWord(endingWith: lookupText)
         }
+        if let searchStage {
+            Signposts.hanja.endInterval(Signposts.HanjaStage.dictionarySearch, searchStage)
+        }
         let searchKey = entries.first?.hangul ?? ""
         DebugLogger.logSensitive("Hanja: lookup", sensitiveContent: "'\(lookupText)' (preedit='\(preeditStr)')")
 
@@ -771,7 +786,8 @@ public class HangulComposer: @unchecked Sendable {
             return true // Consume the key but don't open the window
         }
         
-        DebugLogger.log("Hanja: Found \(entries.count) entries for '\(searchKey)'")
+        DebugLogger.logSensitive("Hanja: found \(entries.count) entries",
+                                 sensitiveContent: "'\(searchKey)'")
         
         hanjaMode = true
         
@@ -780,7 +796,10 @@ public class HangulComposer: @unchecked Sendable {
         // so firstRect() returns garbage values if called after commitComposition().
         // While preedit is active, the cursor is at the marked text position → valid
         // coordinates. The strategy chain lives in CursorRectResolver.
-        let cursorRect = CursorRectResolver.resolve(client: PriTypeInputController.sharedController?.currentClient)
+        let cursorRect = Signposts.interval(Signposts.hanja, Signposts.HanjaStage.resolveCaret,
+                                            id: lookupID, recording: recording) {
+            CursorRectResolver.resolve(client: PriTypeInputController.sharedController?.currentClient)
+        }
 
         // Commit preedit AFTER capturing cursor position
         if hadPreedit {
@@ -849,7 +868,8 @@ public class HangulComposer: @unchecked Sendable {
                     ? String(self.localTextBuffer.dropLast(entry.hangul.count)) + entry.hanja
                     : entry.hanja
                 self.hanjaMode = false
-                DebugLogger.log("Hanja: Selected '\(entry.hanja)' (\(entry.meaning))")
+                DebugLogger.logSensitive("Hanja: selected a candidate",
+                                         sensitiveContent: "'\(entry.hanja)' (\(entry.meaning))")
             },
             onDismiss: { [weak self] in
                 self?.hanjaMode = false

@@ -85,11 +85,20 @@ final class MockComposerDelegate: HangulComposerDelegate {
         return String(fullText[startIndex...])
     }
     
-    func replaceTextBeforeCursor(length: Int, with text: String) {
-        if fullText.count >= length {
-            fullText.removeLast(length)
-            fullText.append(text)
+    /// Set to make the mock stand in for a host that reports no usable caret
+    /// (Google Docs, a terminal): it confirms nothing, so it is never edited.
+    var reportsNoUsableCaret = false
+    /// Ordered record of what each replacement asked the host to confirm.
+    var verifiedContexts: [String] = []
+
+    func replaceTextBeforeCursor(length: Int, with text: String, verifying context: String) -> TextReplacementResult {
+        verifiedContexts.append(context)
+        guard !reportsNoUsableCaret, fullText.hasSuffix(context), fullText.count >= length else {
+            return .unavailable
         }
+        fullText.removeLast(length)
+        fullText.append(text)
+        return .issued
     }
     
     func reset() {
@@ -105,6 +114,8 @@ final class MockComposerDelegate: HangulComposerDelegate {
         precomposeRequests = []
         forgetPrecomposedCount = 0
         resumePrecomposingCount = 0
+        reportsNoUsableCaret = false
+        verifiedContexts = []
     }
 }
 

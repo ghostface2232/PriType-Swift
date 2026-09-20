@@ -32,13 +32,14 @@ public final class IOKitManager: @unchecked Sendable {
     
     private var manager: IOHIDManager?
     
-    /// Callback when toggle key is pressed
-    public var onRightCommandToggle: (@Sendable () -> Void)?
+    /// Callback when toggle key is pressed, with when the key was pressed on
+    /// `NSEvent.timestamp`'s clock.
+    public var onRightCommandToggle: (@Sendable (TimeInterval) -> Void)?
     
     private var shortcutState = HIDShortcutState()
 
-    /// Callback when hanja key is pressed
-    public var onRightOptionHanja: (@Sendable () -> Void)?
+    /// Callback when hanja key is pressed, with its press time.
+    public var onRightOptionHanja: (@Sendable (TimeInterval) -> Void)?
     
     init() {}
     
@@ -182,6 +183,26 @@ public final class IOKitManager: @unchecked Sendable {
         UInt64(UInt(bitPattern: Unmanaged.passUnretained(device).toOpaque()))
     }
 
+    /// The mach timebase, read once. On Apple silicon it is 1/1, but a ratio that
+    /// happens to be the identity today is not one to hard-code.
+    private static let timebase: mach_timebase_info_data_t = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return info
+    }()
+
+    /// A HID event's timestamp on `NSEvent.timestamp`'s clock.
+    ///
+    /// Both are mach absolute time since boot, which is what lets a toggle seen
+    /// here be ordered against a keystroke seen by IMK. A value of 0 means the
+    /// event carries no time of its own (a synthesized one), and now is the
+    /// closest true answer available.
+    static func uptimeSeconds(fromMachAbsolute ticks: UInt64) -> TimeInterval {
+        guard ticks > 0 else { return ProcessInfo.processInfo.systemUptime }
+        let nanoseconds = Double(ticks) * Double(timebase.numer) / Double(timebase.denom)
+        return nanoseconds / 1_000_000_000
+    }
+
     private func handleInputValue(_ value: IOHIDValue) {
         let element = IOHIDValueGetElement(value)
         let usagePage = IOHIDElementGetUsagePage(element)
@@ -197,11 +218,13 @@ public final class IOKitManager: @unchecked Sendable {
         guard usage >= 0x04, usage <= 0xE7 else { return }
         
         handleKeyboardEvent(usage: usage, pressed: pressed,
-                            device: Self.identity(of: IOHIDElementGetDevice(element)))
+                            device: Self.identity(of: IOHIDElementGetDevice(element)),
+                            eventTime: Self.uptimeSeconds(fromMachAbsolute: IOHIDValueGetTimeStamp(value)))
     }
 
     /// Internal entry point for hardware-event tests without opening devices.
     func handleKeyboardEvent(usage: UInt32, pressed: Bool, device: UInt64 = 0,
+                             eventTime: TimeInterval? = nil,
                              toggle: KeyBinding? = nil, hanja: KeyBinding? = nil,
                              toggleEnabled: Bool? = nil, hanjaEnabled: Bool? = nil,
                              trigger: ToggleTrigger? = nil, paused: Bool? = nil) {
@@ -215,12 +238,19 @@ public final class IOKitManager: @unchecked Sendable {
             trigger: trigger ?? config.toggleTrigger,
             paused: paused ?? (ToggleExclusionPolicy.shared.isTogglePaused || RightCommandSuppressor.shared.isRecordingKey)
         )
-        let callback: (@Sendable () -> Void)?
+        let callback: (@Sendable (TimeInterval) -> Void)?
         switch action {
         case .toggle: callback = onRightCommandToggle
         case .hanja: callback = onRightOptionHanja
         case nil: return
         }
-        DispatchQueue.main.async { callback?() }
+        // The press time is what this used to lose, and it is a parameter now, so
+        // it survives the hop. The hop itself stays: this run loop is the main one,
+        // and performing the toggle inline would run a composition finalize
+        // (`insertText` to the host) and `TISSelectInputSource` inside the IOHID
+        // value callback. Those can spin the run loop, which would re-enter this
+        // callback part-way through a mode transition.
+        let pressedAt = eventTime ?? ProcessInfo.processInfo.systemUptime
+        DispatchQueue.main.async { callback?(pressedAt) }
     }
 }

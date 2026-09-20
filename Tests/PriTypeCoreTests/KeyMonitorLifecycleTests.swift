@@ -197,11 +197,19 @@ struct EventTapThreadTests {
 struct PendingToggleTests {
     /// Record toggles from a real thread (GCD `sync` may run the block on main
     /// itself). Waiting blocks main, so the hop to main cannot drain them first.
-    private func requestOffMain(at times: [TimeInterval]) {
+    /// Wait for one turn of the main queue: everything already queued on it has run.
+    private func mainQueueTurn() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
+    private func requestOffMain(at times: [TimeInterval],
+                                on coordinator: InputModeCoordinator = .shared) {
         let done = DispatchSemaphore(value: 0)
         Thread {
             for time in times {
-                InputModeCoordinator.shared.requestToggle(source: .customKey, eventTime: time)
+                coordinator.requestToggle(source: .customKey, eventTime: time)
             }
             done.signal()
         }.start()
@@ -232,6 +240,70 @@ struct PendingToggleTests {
         #expect(coordinator.pendingActionCount == 1)
         coordinator.applyPendingKeyActions(before: 31)
         #expect(coordinator.pendingActionCount == 0)
+    }
+
+    @Test("A toggle already run by a keystroke does not drag a later one in with it")
+    func aDrainedActionLeavesNoTimerThatRunsTheNextOne() async {
+        // Its own coordinator, and its waits fired by hand. What a deferred drain
+        // reaches is the behaviour here; how long it waited first is not, and a
+        // test that waits out a real timer reports on the machine it runs on.
+        let coordinator = InputModeCoordinator()
+        var performed: [InputModeCoordinator.KeyAction] = []
+        coordinator.performOverride = { performed.append($0) }
+        var waits: [() -> Void] = []
+        coordinator.deferDrainOverride = { waits.append($0) }
+
+        let now = ProcessInfo.processInfo.systemUptime
+
+        // Toggle A reaches main with no keystroke handled yet, so rather than run
+        // it waits for keys that might still be in flight.
+        requestOffMain(at: [now + 10], on: coordinator)
+        await mainQueueTurn()
+        #expect(performed.isEmpty, "A waits for keys pressed before it")
+        #expect(waits.count == 1, "and its wait is the one now pending")
+
+        // A key pressed just after A arrives and runs A itself. A's wait is over —
+        // but the wait is still pending, with nothing left of A to run.
+        coordinator.applyPendingKeyActions(before: now + 11)
+        #expect(performed == [.toggle(.customKey)])
+
+        // Toggle B is pressed while a key pressed BEFORE it is still on its way to
+        // IMK, so B starts a wait of its own.
+        requestOffMain(at: [now + 60], on: coordinator)
+        await mainQueueTurn()
+        #expect(waits.count == 2)
+        #expect(performed == [.toggle(.customKey)], "B waits too")
+
+        // A's orphaned wait ends. A wait that drained the whole queue would take B
+        // with it, giving B none of its own — the reordering this exists to
+        // prevent, arrived at from the other side.
+        waits[0]()
+        #expect(performed == [.toggle(.customKey)],
+                "B ran early, carried by the earlier toggle's wait")
+
+        // B's own wait ends, and only then does B run.
+        waits[1]()
+        #expect(performed == [.toggle(.customKey), .toggle(.customKey)])
+        #expect(coordinator.pendingActionCount == 0, "nothing is stuck")
+    }
+
+    @Test("A toggle no keystroke follows does not stay pending")
+    func pendingToggleDrainsWithoutAKeystroke() async {
+        let coordinator = InputModeCoordinator.shared
+        coordinator.applyPendingKeyActions()
+        // Pressed later than any key handled so far, so the queue is waiting for a
+        // key that will never arrive — a shortcut field, a non-text view, a host
+        // that forwards nothing to IMK. That wait has to be bounded, or the toggle
+        // is lost until the user types somewhere else.
+        requestOffMain(at: [ProcessInfo.processInfo.systemUptime + 60])
+        #expect(coordinator.pendingActionCount == 1)
+
+        var drained = false
+        for _ in 0..<40 where !drained {
+            try? await Task.sleep(for: .milliseconds(50))
+            drained = coordinator.pendingActionCount == 0
+        }
+        #expect(drained, "the queue ran on its own, with no keystroke to carry it")
     }
 
     @Test("Hanja and toggle run in the order they were pressed, cut off by the key")

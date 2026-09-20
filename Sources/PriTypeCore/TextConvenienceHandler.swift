@@ -54,22 +54,33 @@ public final class TextConvenienceHandler: @unchecked Sendable {
         lastSpaceTime = now
         
         // Double-space period: Only if enabled, just typed space, AND fast enough
-        if isDoubleSpacePeriodEnabled() && lastWasSpace && isDoubleTap {
-            // Check context to confirm valid double-space condition
-            if buffer.hasSuffix(" ") {
-                let preSpaceChar = buffer.dropLast().last
-                if let lastChar = preSpaceChar {
-                    // Hangul syllables and jamo are letters (Unicode Lo).
-                    if lastChar.isLetter || lastChar.isNumber {
-                        // Valid double-space condition - replace space with period
-                        delegate.replaceTextBeforeCursor(length: 1, with: ". ")
-                        buffer.removeLast()
-                        buffer.append(". ")
-                        lastWasSpace = false
-                        DebugLogger.log("Double-space -> period (Context validated)")
-                        return .convertedToPeriod
-                    }
-                }
+        if isDoubleSpacePeriodEnabled(), lastWasSpace, isDoubleTap,
+           buffer.hasSuffix(" "),
+           // Hangul syllables and jamo are letters (Unicode Lo).
+           let preSpaceChar = buffer.dropLast().last,
+           preSpaceChar.isLetter || preSpaceChar.isNumber {
+            // The buffer says what was typed here, not where the caret is now: with
+            // nothing marked, a click moves the caret and IMK says nothing. So the
+            // space to be replaced, and the character that made it replaceable, must
+            // still be the two characters in front of the caret — the host's answer,
+            // taken now. `가␠` with the caret moved back behind the space is a
+            // different place in the document, and gets an ordinary space instead.
+            let expected = String(preSpaceChar) + " "
+            switch delegate.replaceTextBeforeCursor(length: 1, with: ". ", verifying: expected) {
+            case .issued:
+                buffer.removeLast()
+                buffer.append(". ")
+                lastWasSpace = false
+                DebugLogger.log("Double-space -> period (Context validated)")
+                return .convertedToPeriod
+            case .unavailable:
+                // The host holds something else, or will not say what it holds. The
+                // substitution is off, but the space the user pressed still has to
+                // be typed: the caller inserts it on `.normalSpace`. Anything else
+                // loses a keystroke in hosts that report no caret at all.
+                DebugLogger.log("Double-space -> ordinary space (host could not confirm the target)")
+                // The buffer no longer describes what is in front of the caret.
+                buffer = ""
             }
         }
         

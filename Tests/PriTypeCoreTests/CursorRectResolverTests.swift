@@ -119,3 +119,68 @@ struct CursorRectResolverTests {
             CGRect(x: 10, y: 500, width: 2, height: 20), elementX: 300, primaryHeight: height) == nil)
     }
 }
+
+// MARK: - The Accessibility chain's time budget
+
+/// The caret the Hanja window opens at is resolved through a chain of synchronous
+/// Accessibility round trips, on the main thread every app's typing runs through.
+/// A per-call timeout bounds one call; the chain makes up to seven.
+@Suite("Accessibility time budget")
+struct AXDeadlineTests {
+    private typealias Deadline = CursorRectResolver.AXDeadline
+    private let perCall = CursorRectResolver.accessibilityTimeout
+
+    @Test("A fresh budget gives the first call its full per-call timeout")
+    func fullBudgetGivesThePerCallLimit() {
+        let deadline = Deadline(budget: 1.0, now: 100)
+        #expect(deadline.nextTimeout(perCall: perCall, now: 100) == perCall)
+    }
+
+    @Test("A call late in the chain gets only what is left, not the per-call limit")
+    func lateCallsGetWhatRemains() {
+        let deadline = Deadline(budget: 1.0, now: 100)
+        // 0.8s of the budget already spent by earlier calls.
+        #expect(deadline.nextTimeout(perCall: perCall, now: 100.8) == Float(0.2))
+    }
+
+    @Test("A spent budget makes no further calls")
+    func spentBudgetStopsTheChain() {
+        let deadline = Deadline(budget: 1.0, now: 100)
+        #expect(deadline.nextTimeout(perCall: perCall, now: 101.0) == nil)
+        #expect(deadline.nextTimeout(perCall: perCall, now: 105.0) == nil)
+    }
+
+    @Test("What is left never rounds down to the framework's default")
+    func neverHandsOutZero() {
+        let deadline = Deadline(budget: 1.0, now: 100)
+        // AXUIElementSetMessagingTimeout reads 0 as "use the default" — about six
+        // seconds, the very thing the budget exists to prevent. A sliver of budget
+        // must end the chain rather than buy one unbounded call.
+        #expect(deadline.nextTimeout(perCall: perCall, now: 100.999) == nil)
+        for spent in stride(from: 0.0, through: 1.2, by: 0.001) {
+            if let timeout = deadline.nextTimeout(perCall: perCall, now: 100 + spent) {
+                #expect(timeout >= Deadline.minimumTimeout, "handed out \(timeout) after \(spent)s")
+                #expect(timeout <= perCall)
+            }
+        }
+    }
+
+    @Test("Seven calls at the per-call limit cannot outlast the budget")
+    func theChainCannotAddUpPastTheBudget() {
+        // The chain's longest path: systemWide focus, focused app, its focused
+        // element, selected range, bounds for range, position, size.
+        let deadline = Deadline(budget: CursorRectResolver.accessibilityBudget, now: 100)
+        var now: TimeInterval = 100
+        var spent: TimeInterval = 0
+        var calls = 0
+        while let timeout = deadline.nextTimeout(perCall: perCall, now: now), calls < 7 {
+            // Every call is a host that never answers, so each one costs its timeout.
+            spent += TimeInterval(timeout)
+            now += TimeInterval(timeout)
+            calls += 1
+        }
+        #expect(spent <= CursorRectResolver.accessibilityBudget,
+                "a hung host cost \(spent)s over \(calls) calls")
+        #expect(spent < 7 * TimeInterval(perCall), "which is what per-call limits alone allowed")
+    }
+}

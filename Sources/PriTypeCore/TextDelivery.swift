@@ -216,14 +216,59 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         return client.attributedSubstring(from: charRange)?.string
     }
 
-    func replaceTextBeforeCursor(length: Int, with text: String) {
-        let selRange = client.selectedRange()
-        guard selRange.location != NSNotFound, selRange.location < 10000000, selRange.location >= length else { return }
+    /// Rewrite committed text the host still holds, after confirming it is there.
+    ///
+    /// Committed text carries no marked range, so IMK tells the input method nothing
+    /// when the caret leaves it. The only thing that can stand in for that is the
+    /// host's own answer, taken immediately before the edit: a collapsed caret, and
+    /// the expected `context` still sitting in front of it. A host that answers with
+    /// no caret, or with text that is not the text this edit was computed from, gets
+    /// no edit at all — the caller inserts what the user actually typed instead.
+    @discardableResult
+    func replaceTextBeforeCursor(length: Int, with text: String, verifying context: String) -> TextReplacementResult {
+        let contextLength = context.utf16.count
+        guard length > 0, contextLength >= length else { return .unavailable }
 
+        let selRange = client.selectedRange()
+        guard DirectInsertionPlanner.isUsableCollapsedSelection(selRange),
+              selRange.location >= contextLength else { return .unavailable }
+
+        // The context is measured from what this input method remembers typing,
+        // which is composed (NFC). A host may hold the same text decomposed, where
+        // one Hangul syllable is three UTF-16 units instead of one, so a window the
+        // size of the composed context would read the middle of a syllable and
+        // decide, correctly for what it read, that the text is not the text. Read
+        // wide enough for the decomposed form and compare by content.
+        let windowLength = min(selRange.location, contextLength * Self.maxUTF16UnitsPerCharacter)
+        let windowRange = NSRange(location: selRange.location - windowLength, length: windowLength)
+
+        // Unreadable is not the same as unchanged. A host that cannot show what it
+        // holds cannot authorize an edit to it either.
+        guard let window = client.attributedSubstring(from: windowRange)?.string,
+              window.precomposedStringWithCanonicalMapping
+                  .hasSuffix(context.precomposedStringWithCanonicalMapping) else {
+            return .unavailable
+        }
+
+        // The units actually being replaced have to be the intended ones in the
+        // host's own representation, whatever its normalization did in front of
+        // them. (For the double-space period they are one space, which is one unit
+        // either way — but a caller that replaces something else must not inherit
+        // an assumption that only holds for spaces.)
         let replacementRange = NSRange(location: selRange.location - length, length: length)
+        guard Array(window.utf16).suffix(length)
+                .elementsEqual(Array(context.utf16).suffix(length)) else {
+            return .unavailable
+        }
+
         noteOwnOutput()
         client.insertText(text, replacementRange: replacementRange)
+        return .issued
     }
+
+    /// A decomposed Hangul syllable is three UTF-16 units where the composed form
+    /// is one, and no canonical decomposition in Unicode is longer than four.
+    private static let maxUTF16UnitsPerCharacter = 4
 
     /// Record that the caret now follows text this input method just wrote.
     /// EVERY write to the client from an adapter goes through here.
@@ -522,11 +567,11 @@ final class DirectInsertionAdapter: BaseClientAdapter {
         rewriteLivePreedit(with: text, keepingLive: true)
     }
 
-    override func replaceTextBeforeCursor(length: Int, with text: String) {
+    override func replaceTextBeforeCursor(length: Int, with text: String, verifying context: String) -> TextReplacementResult {
         // Committed-text edit (e.g. double-space period); no live preedit involved.
         state = .idle
         preparedLiveRange = nil
-        super.replaceTextBeforeCursor(length: length, with: text)
+        return super.replaceTextBeforeCursor(length: length, with: text, verifying: context)
     }
 
     override func precomposeSyllableBeforeCursor(followsBackspace: Bool) {
