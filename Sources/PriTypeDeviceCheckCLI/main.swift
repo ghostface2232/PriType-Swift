@@ -8,6 +8,13 @@ import PriTypeDeviceCheck
 // exit before it does any work of its own.
 ABCLayoutStatusProbe.runIfRequested()
 
+// Read the installed input method's preferences, not this binary's. A
+// command-line tool has no bundle identifier, so its own `UserDefaults.standard`
+// is a domain PriType has never written a key to: left alone, every check that
+// depends on configuration would have been testing the built-in defaults while
+// reporting on the user's install. `preferences-domain` checks that this worked.
+PreferencesDomain.use(suiteName: PreferencesDomain.priTypeSuiteName)
+
 let usage = """
 pritype-device-check — verify PriType against the machine it is installed on
 
@@ -74,6 +81,7 @@ guard unknown.isEmpty else {
 }
 
 print("pritype-device-check — macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
+print("preferences: \(PreferencesDomain.currentSuiteName ?? "this process")")
 print("")
 
 let report = DeviceCheckRunner.run(checks, selection: parsed.selection)

@@ -143,6 +143,16 @@ public final class IOKitManager: Sendable {
     /// exposed to Swift and the literal alone reads as noise.
     static let exclusiveAccess: IOReturn = -536_870_203
 
+    /// What a start that did happen actually did.
+    ///
+    /// A start that found the manager already open opened nothing, and a check
+    /// that reports "IOHIDManagerOpen succeeded" off the back of it would be
+    /// claiming a syscall that never ran.
+    public enum StartOutcome: Sendable, Equatable {
+        case opened
+        case alreadyRunning
+    }
+
     /// Start monitoring keyboard events via IOHIDManager
     /// - Returns: `true` if successfully started, `false` otherwise
     @discardableResult
@@ -162,13 +172,22 @@ public final class IOKitManager: Sendable {
     ///   shows the system prompt. The app prompts; a verification run must not,
     ///   because a tool that changes the machine while measuring it cannot be
     ///   run twice and compared.
+    ///
+    /// ## What is deliberately outside the lock
+    ///
+    /// `IOHIDManagerOpen` is blocking IPC to `hidd` and can carry a TCC
+    /// evaluation with it; scheduling on the run loop and the permission checks
+    /// are no better. Holding the lock across them would matter, because
+    /// `RightCommandSuppressor.startLocked` calls `stop()` here while holding the
+    /// lock the tap callback needs for every keystroke on the system: one thread
+    /// inside `IOHIDManagerOpen` would then be enough to stall typing everywhere
+    /// until `hidd` answered. So the manager is built and opened unpublished, and
+    /// the lock is taken only to publish it.
     @discardableResult
-    public func start(promptForInputMonitoring: Bool) -> Result<Void, StartFailure> {
-        // The permission checks and the prompt go to other subsystems and can
-        // block; do them before taking the lock the HID callback needs.
+    public func start(promptForInputMonitoring: Bool) -> Result<StartOutcome, StartFailure> {
         guard state.withLock({ $0.manager == nil }) else {
             DebugLogger.log("IOKitManager: Already running")
-            return .success(())
+            return .success(.alreadyRunning)
         }
 
         // Without Input Monitoring, IOHIDManagerOpen fails with a bare
@@ -186,27 +205,21 @@ public final class IOKitManager: Sendable {
             return .failure(.inputMonitoringDenied)
         }
 
-        return state.withLock { state in
-        // A new ownership lifecycle must not inherit a half-pressed modifier from a
-        // previous IOKit run; otherwise its first key-up could emit a phantom toggle.
-        state.shortcutState = HIDShortcutState()
-        
         DebugLogger.log("IOKitManager: Starting IOKit-only toggle detection...")
-        
+
         // Create HID Manager
         let hidManager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-        state.manager = hidManager
-        
+
         // Match keyboard devices
         let matchingDict: [String: Any] = [
             kIOHIDDeviceUsagePageKey as String: kHIDPage_GenericDesktop,
             kIOHIDDeviceUsageKey as String: kHIDUsage_GD_Keyboard
         ]
         IOHIDManagerSetDeviceMatching(hidManager, matchingDict as CFDictionary)
-        
+
         // No input value matching - receive ALL keyboard events
         IOHIDManagerSetInputValueMatching(hidManager, nil)
-        
+
         // Set input value callback
         let context = Unmanaged.passUnretained(self).toOpaque()
         IOHIDManagerRegisterInputValueCallback(hidManager, { context, result, sender, value in
@@ -214,45 +227,71 @@ public final class IOKitManager: Sendable {
             let manager = Unmanaged<IOKitManager>.fromOpaque(context).takeUnretainedValue()
             manager.handleInputValue(value)
         }, context)
-        
+
         IOHIDManagerRegisterDeviceRemovalCallback(hidManager, { context, _, _, _ in
             guard let context else { return }
             let owner = Unmanaged<IOKitManager>.fromOpaque(context).takeUnretainedValue()
             owner.state.withLock { $0.shortcutState.handleDeviceRemoval() }
         }, context)
 
+        // A new ownership lifecycle must not inherit a half-pressed modifier from a
+        // previous IOKit run; otherwise its first key-up could emit a phantom toggle.
+        // Before the source is scheduled, so no callback can land on the old state.
+        state.withLock { $0.shortcutState = HIDShortcutState() }
+
         // Schedule with current run loop (like Gureum)
         IOHIDManagerScheduleWithRunLoop(hidManager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
-        
+
         // Open manager
         let result = IOHIDManagerOpen(hidManager, IOOptionBits(kIOHIDOptionsTypeNone))
         if result != kIOReturnSuccess {
             DebugLogger.log("IOKitManager: Failed to open IOHIDManager: \(result)")
             IOHIDManagerUnscheduleFromRunLoop(hidManager, CFRunLoopGetCurrent(),
                                               CFRunLoopMode.defaultMode.rawValue)
-            state.manager = nil
             return .failure(result == Self.exclusiveAccess
                             ? .keyboardsExclusivelyOwned(result)
                             : .openFailed(result))
         }
-        
+
+        // The check at the top of this function was made before the permission
+        // checks and the open, so it cannot stand in for this one: two starts can
+        // both have passed it. Whoever publishes first owns the keyboards, and the
+        // loser closes what it opened rather than overwriting — an abandoned
+        // manager stays scheduled and delivers every key press a second time.
+        let published = state.withLock { state -> Bool in
+            guard state.manager == nil else { return false }
+            state.manager = hidManager
+            return true
+        }
+        guard published else {
+            IOHIDManagerUnscheduleFromRunLoop(hidManager, CFRunLoopGetCurrent(),
+                                              CFRunLoopMode.defaultMode.rawValue)
+            IOHIDManagerClose(hidManager, IOOptionBits(kIOHIDOptionsTypeNone))
+            DebugLogger.log("IOKitManager: Another start won the race; closed this one")
+            return .success(.alreadyRunning)
+        }
+
         let config = ConfigurationManager.shared
         DebugLogger.log("IOKitManager: Started successfully (toggle=\(config.toggleKeyBinding.displayName), hanja=\(config.hanjaKeyBinding.displayName))")
-        return .success(())
-        }
+        return .success(.opened)
     }
     
     /// Stop monitoring
     public func stop() {
-        state.withLock { state in
-            if let hidManager = state.manager {
-                IOHIDManagerUnscheduleFromRunLoop(hidManager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
-                IOHIDManagerClose(hidManager, IOOptionBits(kIOHIDOptionsTypeNone))
+        // Take the manager out under the lock and close it outside: the close is
+        // the same blocking IPC the open is, and the tap callback can be waiting
+        // behind this lock by way of the suppressor's.
+        let manager = state.withLock { state -> IOHIDManager? in
+            defer {
                 state.manager = nil
-                DebugLogger.log("IOKitManager: Stopped")
+                state.shortcutState = HIDShortcutState()
             }
-            state.shortcutState = HIDShortcutState()
+            return state.manager
         }
+        guard let manager else { return }
+        IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
+        IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        DebugLogger.log("IOKitManager: Stopped")
     }
     
     // MARK: - Input Handling
@@ -312,20 +351,27 @@ public final class IOKitManager: Sendable {
                              toggle: KeyBinding? = nil, hanja: KeyBinding? = nil,
                              toggleEnabled: Bool? = nil, hanjaEnabled: Bool? = nil,
                              trigger: ToggleTrigger? = nil, paused: Bool? = nil) {
-        // Both of these take locks of their own. Resolve them before taking this
-        // one: two locks acquired in one order here and the other order elsewhere
-        // is the whole recipe, and the tap thread reads both of these too.
+        // Everything this needs from elsewhere is resolved before the lock is
+        // taken. All of it — the exclusion policy, the suppressor's recording
+        // flag, and every one of the configuration reads, which go through the
+        // binding cache's own lock — so this callback holds exactly one lock and
+        // no path can acquire two in an order some other path reverses.
         let config = ConfigurationManager.shared
         let isPaused = paused ?? (ToggleExclusionPolicy.shared.isTogglePaused
                                   || RightCommandSuppressor.shared.isRecordingKey)
+        let toggleBinding = toggle ?? config.toggleKeyBinding
+        let hanjaBinding = hanja ?? config.hanjaKeyBinding
+        let isToggleEnabled = toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled
+        let isHanjaEnabled = hanjaEnabled ?? config.hanjaEnabled
+        let activeTrigger = trigger ?? config.toggleTrigger
         let callback: (@Sendable (TimeInterval) -> Void)? = state.withLock { state in
             let action = state.shortcutState.consume(
                 usage: usage, pressed: pressed, device: device,
-                toggle: toggle ?? config.toggleKeyBinding,
-                hanja: hanja ?? config.hanjaKeyBinding,
-                toggleEnabled: toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled,
-                hanjaEnabled: hanjaEnabled ?? config.hanjaEnabled,
-                trigger: trigger ?? config.toggleTrigger,
+                toggle: toggleBinding,
+                hanja: hanjaBinding,
+                toggleEnabled: isToggleEnabled,
+                hanjaEnabled: isHanjaEnabled,
+                trigger: activeTrigger,
                 paused: isPaused
             )
             switch action {

@@ -6,6 +6,42 @@ import PriTypeCore
 // that passes says something about the shipped code rather than about a copy of
 // its formula kept next to it.
 
+/// Whether this run is reading the installed input method's preferences.
+///
+/// Every other check that mentions a key binding, the toggle trigger or the
+/// Hanja switch is only as true as this one. A command-line binary has no bundle
+/// identifier, so without the redirection its `UserDefaults.standard` is an
+/// empty domain and `ConfigurationManager` answers with built-in defaults —
+/// which look exactly like a user who has changed nothing, and cannot be told
+/// apart from one by any check downstream. So it is asked first, and loudly.
+public struct PreferencesDomainCheck: DeviceCheck {
+    public let id = "preferences-domain"
+    public let title = "Configuration is read from the installed input method's domain"
+
+    public init() {}
+
+    public func run() -> DeviceCheckFinding {
+        guard let suite = PreferencesDomain.currentSuiteName else {
+            return .failed("this run is reading its own preferences, not PriType's",
+                           evidence: "no domain redirection is in effect")
+        }
+        guard suite == PreferencesDomain.priTypeSuiteName else {
+            return .failed("this run is reading \(suite), not \(PreferencesDomain.priTypeSuiteName)")
+        }
+        // A domain that opens but holds nothing means PriType has never written a
+        // preference on this Mac — a fresh install, or the wrong Mac. Either way
+        // the configuration-dependent checks below are reporting defaults, and
+        // saying so is the difference between a report and a guess.
+        let written = PreferencesDomain.defaults.dictionaryRepresentation().keys
+            .filter { $0.hasPrefix("com.pritype.") }
+        guard !written.isEmpty else {
+            return .skipped("PriType has never written a preference in \(suite)",
+                            evidence: "the checks below describe built-in defaults, not this user's settings")
+        }
+        return .passed("\(suite), \(written.count) PriType key(s) present")
+    }
+}
+
 /// Accessibility, which `CGEvent.tapCreate` requires.
 public struct AccessibilityCheck: DeviceCheck {
     public let id = "accessibility"
@@ -95,9 +131,14 @@ public struct HIDOpenCheck: DeviceCheck {
     public func run() -> DeviceCheckFinding {
         let manager = IOKitManager.shared
         switch manager.start(promptForInputMonitoring: false) {
-        case .success:
+        case .success(.opened):
             manager.stop()
             return .passed("IOHIDManagerOpen succeeded and the keyboards were released again")
+        case .success(.alreadyRunning):
+            // Nothing was opened, so nothing was verified. Passing on this would
+            // be the warning-that-returns-success this tool exists not to be.
+            return .skipped("this process already had the keyboards open",
+                            evidence: "no IOHIDManagerOpen was performed by this check")
         case .failure(.keyboardsExclusivelyOwned(let code)):
             // The installed input method is holding them, which is the normal
             // state of a working Mac — and the reason this cannot be a failure.
@@ -117,9 +158,13 @@ public struct HIDOpenCheck: DeviceCheck {
 ///
 /// HIToolbox caches the enabled-source list per process and, since macOS 26,
 /// never refreshes it. Re-launching the executable is the only way PriType can
-/// observe the list it just changed, so the mechanism working is a load-bearing
-/// fact about this machine — and it is a fact no in-process test can establish,
-/// by construction.
+/// observe the list it just changed, and that is a fact no in-process test can
+/// establish, by construction.
+///
+/// What it establishes is narrower than it looks: the probe re-execs *this*
+/// binary, which has a different code signature and TCC identity from the
+/// installed app. A pass says the re-exec-and-parse mechanism works on this
+/// machine, not that the installed PriType can run it.
 public struct FreshProcessProbeCheck: DeviceCheck {
     public let id = "fresh-process-probe"
     public let title = "The input-source probe answers from a freshly launched process"
@@ -127,14 +172,15 @@ public struct FreshProcessProbeCheck: DeviceCheck {
     public init() {}
 
     public func run() -> DeviceCheckFinding {
+        let binary = Bundle.main.executableURL?.lastPathComponent ?? "this binary"
         guard let answer = ABCLayoutStatusProbe.answerFromFreshProcess() else {
             return .failed("the child process produced no usable answer",
-                           evidence: "re-exec of \(Bundle.main.executableURL?.lastPathComponent ?? "this binary") "
-                                   + "with \(ABCLayoutStatusProbe.argument)")
+                           evidence: "re-exec of \(binary) with \(ABCLayoutStatusProbe.argument)")
         }
         // Either answer is a pass: what is under test is the mechanism, not the
         // machine's current layout list.
-        return .passed("probe answered: ABC layout is \(answer ? "disabled" : "enabled")")
+        return .passed("\(binary) answered from a fresh process: "
+                     + "ABC layout is \(answer ? "disabled" : "enabled")")
     }
 }
 
@@ -166,6 +212,7 @@ public struct InputSourceRegistrationCheck: DeviceCheck {
 
 /// The unattended checks, in the order they are worth reading.
 public let unattendedChecks: [any DeviceCheck] = [
+    PreferencesDomainCheck(),
     AccessibilityCheck(),
     InputMonitoringCheck(),
     InputSourceRegistrationCheck(),

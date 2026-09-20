@@ -56,17 +56,21 @@ public final class ToggleExclusionPolicy: Sendable {
         refreshExcludedBundleIDs(from: configuration)
         updateFrontmostBundleID(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
 
-        state.withLock { state in
-            guard state.observer == nil else { return }
-            state.observer = NSWorkspace.shared.notificationCenter.addObserver(
-                forName: NSWorkspace.didActivateApplicationNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] notification in
-                let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-                self?.updateFrontmostBundleID(app?.bundleIdentifier)
-            }
+        guard state.withLock({ $0.observer == nil }) else { return }
+        // Registering goes to the workspace's notification centre, which is not
+        // this class's to make promises about. The tap thread waits on this lock
+        // for every keystroke on the system, so nothing that can block belongs
+        // inside it — the same rule `refreshExcludedBundleIDs` follows. Main-only
+        // by precondition, so no second `start()` can be racing this one.
+        let observer = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            self?.updateFrontmostBundleID(app?.bundleIdentifier)
         }
+        state.withLock { $0.observer = observer }
     }
 
     /// Stop tracking. Clears both halves of the snapshot so no stale value can keep
@@ -75,21 +79,29 @@ public final class ToggleExclusionPolicy: Sendable {
     /// - Important: Main thread only, for the same reason as `start()`.
     public func stop() {
         dispatchPrecondition(condition: .onQueue(.main))
-        state.withLock { state in
-            if let observer = state.observer {
-                NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        // Clear the snapshot under the lock, unregister outside it: the removal
+        // can synchronize against notification delivery already in flight, and a
+        // keystroke must never wait on that.
+        let observer = state.withLock { state -> NSObjectProtocol? in
+            defer {
+                state.observer = nil
+                state.frontmostBundleID = nil
+                state.excludedBundleIDs = []
             }
-            state.observer = nil
-            state.frontmostBundleID = nil
-            state.excludedBundleIDs = []
+            return state.observer
+        }
+        if let observer {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
     }
 
     deinit {
-        state.withLock { state in
-            if let observer = state.observer {
-                NSWorkspace.shared.notificationCenter.removeObserver(observer)
-            }
+        let observer = state.withLock { state -> NSObjectProtocol? in
+            defer { state.observer = nil }
+            return state.observer
+        }
+        if let observer {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
     }
 

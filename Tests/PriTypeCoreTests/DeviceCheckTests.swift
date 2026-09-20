@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+@testable import PriTypeCore
 @testable import PriTypeDeviceCheck
 
 // The on-device checks themselves cannot run here — that is the whole point of
@@ -259,5 +260,46 @@ struct ShippedDeviceCheckTests {
         #expect(unattendedChecks.allSatisfy { !$0.requiresOperator })
         #expect(interactiveChecks().allSatisfy { $0.requiresOperator })
         #expect(Set(interactiveChecks().map(\.id)) == ["physical-toggle-tap", "physical-toggle-hid"])
+    }
+}
+
+// `PreferencesDomain.use` writes state that every other test in this process
+// reads through `ConfigurationManager`, and swift-testing runs suites in
+// parallel — redirecting it here made unrelated IMK tests fail, because they
+// started reading a domain where `experimentalDirectInsertion` was absent. So
+// the redirection itself is exercised by `pritype-device-check`'s own
+// `preferences-domain` check, against a real install, and what is tested here is
+// the part that opens a domain without making it anyone's.
+@Suite("Preferences domain")
+struct PreferencesDomainTests {
+
+    @Test("A name that does not address a separable store is refused")
+    func refusesUnusableNames() {
+        // Falling back to this binary's own defaults would be the silent failure
+        // the device check exists to catch, so these return nil rather than
+        // something usable.
+        #expect(PreferencesDomain.resolve(suiteName: "") == nil)
+        #expect(PreferencesDomain.resolve(suiteName: "   ") == nil)
+        if let own = Bundle.main.bundleIdentifier {
+            #expect(PreferencesDomain.resolve(suiteName: own) == nil)
+        }
+    }
+
+    @Test("A resolved domain is a store of its own, separate from this process's")
+    func resolvesASeparateStore() throws {
+        let suite = "com.pritype.tests.\(UUID().uuidString)"
+        let defaults = try #require(PreferencesDomain.resolve(suiteName: suite))
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+
+        defaults.set("written", forKey: "com.pritype.tests.marker")
+        #expect(defaults.string(forKey: "com.pritype.tests.marker") == "written")
+        // The point of the whole mechanism: what PriType wrote is not what a
+        // bare command-line binary reads.
+        #expect(UserDefaults.standard.string(forKey: "com.pritype.tests.marker") == nil)
+    }
+
+    @Test("The installed input method's domain is named once, where the CLI can ask for it")
+    func suiteNameMatchesTheInstall() {
+        #expect(PreferencesDomain.priTypeSuiteName == "com.pritype.inputmethod.v2")
     }
 }

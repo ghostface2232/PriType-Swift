@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import os
+import CoreGraphics
 @testable import PriTypeCore
 
 // `Guarded` is the one place in this package where concurrency checking is
@@ -98,7 +99,13 @@ struct GuardedTests {
         #expect(throws: Boom.self) {
             try guarded.withLock { _ -> Void in throw Boom() }
         }
-        // Would hang rather than fail if the lock had been left held.
+        // The re-acquisition has to be on ANOTHER thread. The lock is recursive,
+        // so a leaked lock would let this same thread straight back in and the
+        // test would pass while the defect it is named for was present.
+        let acquired = DispatchSemaphore(value: 0)
+        Thread { guarded.withLock { _ in acquired.signal() } }.start()
+        #expect(acquired.wait(timeout: .now() + 2) == .success,
+                "the lock was still held after the body threw")
         #expect(guarded.withLock { $0.value } == 0)
     }
 }
@@ -131,16 +138,41 @@ struct KeystrokePathSendabilityTests {
         requireSendable(PolledPreference.self)
     }
 
-    @Test("The suppressor's callbacks survive being read from another thread")
-    func callbacksAreReadableConcurrently() async {
+    @Test("Every press reaches the callback once while other threads read the same state")
+    func eventsCountedWhileStateIsRead() async throws {
+        // The tap has exactly one producer — its own thread — and readers on
+        // main: the settings window asking whether recording is on, the IOKit
+        // fallback asking the same, a report reading the last provenance. That is
+        // the shape here. Feeding events from several threads at once would not
+        // be more rigorous, it would be meaningless: `toggleModifierIsDown` models
+        // one physical key, so two concurrent presses are one down edge and the
+        // count would be a property of the interleaving rather than of the lock.
         let tap = RightCommandSuppressor()
-        let calls = OSAllocatedUnfairLockCounter()
-        tap.onToggle = { _ in calls.increment() }
+        let toggles = OSAllocatedUnfairLockCounter()
+        tap.onToggle = { _ in toggles.increment() }
 
+        let presses = 800
         await withTaskGroup(of: Void.self) { group in
-            for _ in 0..<4 {
+            group.addTask {
+                for _ in 0..<presses {
+                    guard let press = CGEvent(keyboardEventSource: nil, virtualKey: 54, keyDown: true),
+                          let release = CGEvent(keyboardEventSource: nil, virtualKey: 54, keyDown: false)
+                    else { continue }
+                    // Down edge then up edge: the suppressor toggles on the down
+                    // edge only, so the pair is exactly one toggle.
+                    press.flags = CGEventFlags(rawValue: 0x100010)
+                    release.flags = CGEventFlags(rawValue: 0)
+                    for event in [press, release] {
+                        _ = tap.handleEvent(type: .flagsChanged, event: event,
+                                            toggle: .defaultToggle, hanja: .defaultHanja,
+                                            toggleEnabled: true, hanjaEnabled: false,
+                                            trigger: .press, excludedOverride: false)
+                    }
+                }
+            }
+            for _ in 0..<3 {
                 group.addTask {
-                    for _ in 0..<500 {
+                    for _ in 0..<2_000 {
                         _ = tap.isRunning
                         _ = tap.lastToggleProvenance
                         _ = tap.isRecordingKey
@@ -148,9 +180,12 @@ struct KeystrokePathSendabilityTests {
                 }
             }
             group.addTask {
+                // A writer too: the settings window entering and leaving
+                // recording mode replaces the recording state under the readers.
                 for _ in 0..<500 { tap.isRecordingKey = false }
             }
         }
-        #expect(calls.value == 0)
+        #expect(toggles.value == presses)
+        #expect(tap.lastToggleProvenance != nil)
     }
 }

@@ -349,12 +349,15 @@ public final class ConfigurationManager: ConfigurationProviding, Sendable {
     
     // MARK: - Private Properties
     
-    /// Computed rather than stored: `UserDefaults` is not `Sendable`, and this
-    /// has only ever been `.standard`, so holding a reference to it bought
-    /// nothing and cost the whole class its checked conformance. The lookup is a
-    /// cached global accessor, and none of the hot-path reads go through it —
-    /// they answer from `PolledPreference` and the binding cache below.
-    private var defaults: UserDefaults { .standard }
+    /// Computed rather than stored: `UserDefaults` is not `Sendable`, so holding
+    /// a reference to it would cost the whole class its checked conformance.
+    ///
+    /// `PreferencesDomain` rather than `.standard` because the on-device
+    /// verification tool has to read the *installed* input method's preferences,
+    /// not the ones belonging to whatever binary is asking. Inside PriType the
+    /// two are the same domain. None of the hot-path reads go through this — they
+    /// answer from `PolledPreference` and the binding cache below.
+    private var defaults: UserDefaults { PreferencesDomain.defaults }
 
     // Values other processes write (System Settings, `defaults write`), so they
     // have to be re-read rather than cached once. The event tap reads the Caps Lock
@@ -366,12 +369,16 @@ public final class ConfigurationManager: ConfigurationProviding, Sendable {
     private let doubleSpacePeriod = PolledPreference {
         // Absent means on (the macOS default). bool(forKey:) also accepts a
         // value stored as a "YES"/"NO" string.
+        //
+        // `.standard` deliberately: this key is macOS's, not PriType's, and it is
+        // answered from the global domain through the asking process's own search
+        // list. Redirecting it to another app's suite would not find it there.
         let defaults = UserDefaults.standard
         let key = "NSAutomaticPeriodSubstitutionEnabled"
         return defaults.object(forKey: key) == nil || defaults.bool(forKey: key)
     }
     private let directInsertion = PolledPreference {
-        UserDefaults.standard.bool(forKey: Keys.experimentalDirectInsertion)
+        PreferencesDomain.defaults.bool(forKey: Keys.experimentalDirectInsertion)
     }
     
     private init() {
