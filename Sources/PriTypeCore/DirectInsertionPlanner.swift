@@ -3,13 +3,24 @@ import Foundation
 // MARK: - KeyEventDedup
 //
 // Some hosts (observed: KakaoTalk) deliver the SAME physical keyDown to the IME twice,
-// which makes each backspace decompose two jamo and each character double up. We drop a
-// keyDown that is an exact re-delivery of the immediately-preceding one. Distinguishing a
-// re-delivery from legitimate input is safe because:
-//   • auto-repeat events carry isARepeat=true (a real key HOLD) — never deduped here;
-//   • a human cannot tap the same key twice within 50ms;
-// so only a non-repeat same-keyCode event arriving <50ms after another non-repeat
-// same-keyCode event is a machine duplicate. Pure + testable.
+// which makes each backspace decompose two jamo and each character double up. The
+// second delivery is the very same event object re-sent, so it carries the very same
+// `NSEvent.timestamp` — the instant the window server stamped the press. Two presses
+// of one key, however fast, are two events with two different stamps.
+//
+// So identity, not proximity, is what marks a re-delivery: same timestamp AND same key
+// information. A time WINDOW cannot tell a re-delivery from a fast typist, a key
+// repeated by a macro, or two keyboards typing at once — it only moves where the
+// false positives start. `NSEvent.timestamp` says when an event happened; it does not
+// promise that events close together are the same event.
+// https://developer.apple.com/documentation/appkit/nsevent/timestamp
+//
+// auto-repeat events (a real key HOLD) carry isARepeat=true and are never deduped:
+// their stamps differ anyway, but the guard keeps that explicit.
+//
+// A host that re-delivers with a FRESHLY generated timestamp is not covered here, and
+// must not be until there is a sample from that host showing what it does preserve.
+// Pure + testable.
 
 struct KeyDownSnapshot: Equatable {
     let timestamp: TimeInterval
@@ -20,17 +31,13 @@ struct KeyDownSnapshot: Equatable {
 }
 
 enum KeyEventDedup {
-    /// Maximum gap to treat two identical non-repeat keyDowns as one physical event.
-    static let duplicateWindow: TimeInterval = 0.05
-
     static func isDuplicate(_ event: KeyDownSnapshot, previous: KeyDownSnapshot?) -> Bool {
         guard let previous,
               !event.isARepeat, !previous.isARepeat,
               event.keyCode == previous.keyCode,
               event.characters == previous.characters,
               event.modifiers == previous.modifiers else { return false }
-        let dt = event.timestamp - previous.timestamp
-        return dt >= 0 && dt < duplicateWindow
+        return event.timestamp == previous.timestamp
     }
 }
 
