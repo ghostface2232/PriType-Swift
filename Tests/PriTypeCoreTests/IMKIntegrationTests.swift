@@ -191,6 +191,24 @@ struct IMKIntegrationTests {
                 "One rewrite while the report never moves")
     }
 
+    @Test("An arrow key between two Backspaces forgets the last rewrite")
+    func backspaceAfterArrowKey() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.ignoresReplacementRange = true
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.insertText(syllable + syllable, replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text.utf16.count == 6, "The host undid the rewrite itself")
+
+        // The caret may be anywhere now, so the next Backspace starts fresh.
+        #expect(!harness.press(.left))
+        field.client.placeCaret(at: 6)
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls.first == .insert("각"), "Tries again after the caret moved")
+    }
+
     @Test("Escape drops the composition and is consumed")
     func escapeCancels() {
         let (harness, field) = start()

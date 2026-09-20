@@ -90,9 +90,10 @@ public class HangulComposer: @unchecked Sendable {
 
     /// Whether the key handled before the current one was a Backspace. The
     /// decomposed-syllable rewrite needs it to tell a host that ignored the last
-    /// rewrite from a caret that simply came back to the same offset.
+    /// rewrite from a caret that simply came back to the same offset. Anything
+    /// that takes a key away from the composer (a toggle, the Hanja window, a
+    /// secure field) clears it: the next Backspace is not the consecutive one.
     private var previousKeyWasBackspace = false
-    private var currentKeyFollowsBackspace = false
     
     /// Text convenience handler (double-space period)
     /// Owns all state for text convenience features
@@ -146,6 +147,7 @@ public class HangulComposer: @unchecked Sendable {
     ///   PriType source, which always lands back in `.korean`). No other path —
     ///   including `activateServer` focus changes — may mutate the mode.
     public func setInputMode(_ mode: InputMode) {
+        previousKeyWasBackspace = false
         modeSelectionRevision &+= 1
         guard inputMode != mode else {
             return
@@ -174,7 +176,7 @@ public class HangulComposer: @unchecked Sendable {
     
     /// Handle special keys (Return, Escape, Space, Arrow, Tab, Backspace)
     /// - Returns: `nil` if not a special key, otherwise the result to return from handle()
-    private func handleSpecialKey(keyCode: UInt16, delegate: HangulComposerDelegate) -> Bool? {
+    private func handleSpecialKey(keyCode: UInt16, followsBackspace: Bool, delegate: HangulComposerDelegate) -> Bool? {
         // Return / Enter
         if keyCode == KeyCode.return || keyCode == KeyCode.numpadEnter {
             let hadComposition = !context.isEmpty()
@@ -190,6 +192,7 @@ public class HangulComposer: @unchecked Sendable {
             }
 
             DebugLogger.log("Return -> committed composition and passed original Return to app (hadComposition=\(hadComposition))")
+            delegate.forgetLastPrecomposedSyllable()
             return false
         }
         
@@ -230,6 +233,7 @@ public class HangulComposer: @unchecked Sendable {
            keyCode == KeyCode.upArrow || keyCode == KeyCode.downArrow {
             commitComposition(delegate: delegate)
             localTextBuffer = ""
+            delegate.forgetLastPrecomposedSyllable()
             return false
         }
         
@@ -237,6 +241,7 @@ public class HangulComposer: @unchecked Sendable {
         if keyCode == KeyCode.tab {
             commitComposition(delegate: delegate)
             localTextBuffer = ""
+            delegate.forgetLastPrecomposedSyllable()
             return false
         }
         
@@ -265,7 +270,7 @@ public class HangulComposer: @unchecked Sendable {
                 return true
             }
             if !localTextBuffer.isEmpty { localTextBuffer.removeLast() }
-            delegate.precomposeSyllableBeforeCursor(followsBackspace: currentKeyFollowsBackspace)
+            delegate.precomposeSyllableBeforeCursor(followsBackspace: followsBackspace)
             return false
         }
         
@@ -414,7 +419,7 @@ public class HangulComposer: @unchecked Sendable {
         // Any navigation or confirmation key (Arrow, Tab, Return) invalidates our local text context
         // because the cursor has likely moved, changing the text before it.
         let keyCode = event.keyCode
-        currentKeyFollowsBackspace = previousKeyWasBackspace
+        let followsBackspace = previousKeyWasBackspace
         previousKeyWasBackspace = keyCode == KeyCode.backspace
         if keyCode == KeyCode.leftArrow || keyCode == KeyCode.rightArrow ||
            keyCode == KeyCode.upArrow || keyCode == KeyCode.downArrow ||
@@ -436,7 +441,7 @@ public class HangulComposer: @unchecked Sendable {
             localTextBuffer = ""
             if keyCode == KeyCode.backspace,
                event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
-                delegate.precomposeSyllableBeforeCursor(followsBackspace: currentKeyFollowsBackspace)
+                delegate.precomposeSyllableBeforeCursor(followsBackspace: followsBackspace)
             }
             return false
         }
@@ -448,6 +453,7 @@ public class HangulComposer: @unchecked Sendable {
                 hanjaMode = false
             }
             if consumed {
+                previousKeyWasBackspace = false
                 return true
             }
             // If not consumed (regular key dismissed the window),
@@ -468,6 +474,8 @@ public class HangulComposer: @unchecked Sendable {
                  delegate.setMarkedText("")
              }
              localTextBuffer = "" // Any system shortcut (Cmd+V, Cmd+Z, etc.) invalidates local context
+             // A shortcut can paste, undo or move the caret anywhere.
+             delegate.forgetLastPrecomposedSyllable()
              return false
         }
         
@@ -488,7 +496,7 @@ public class HangulComposer: @unchecked Sendable {
         }
         
         // Handle special keys (Return, Escape, Space, Arrow, Tab, Backspace)
-        if let result = handleSpecialKey(keyCode: keyCode, delegate: delegate) {
+        if let result = handleSpecialKey(keyCode: keyCode, followsBackspace: followsBackspace, delegate: delegate) {
             return result
         }
         
@@ -504,6 +512,8 @@ public class HangulComposer: @unchecked Sendable {
                     delegate.setMarkedText("")
                 }
                 localTextBuffer = ""
+                // Home, End, Page Up/Down and friends all move the caret.
+                delegate.forgetLastPrecomposedSyllable()
                 return false
             }
         }
@@ -616,6 +626,7 @@ public class HangulComposer: @unchecked Sendable {
     /// `setMarkedText` or `insertText` while focus is inside a password field can
     /// trigger host-app warning beeps, so this reset intentionally has no delegate.
     public func discardCompositionForPassThrough() {
+        previousKeyWasBackspace = false
         context.reset()
         localTextBuffer = ""
         textConvenience.resetSpaceState()
