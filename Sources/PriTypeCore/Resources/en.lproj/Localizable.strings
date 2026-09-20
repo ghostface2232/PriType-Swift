@@ -42,8 +42,24 @@
 "update.download" = "Download";
 "update.error" = "Check failed";
 "update.notificationTitle" = "PriType Update Available";
-"update.notificationBody" = "PriType %@ is now available. Click to download.";
+"update.notificationBody" = "PriType %@ is now available. Click to install it from Settings.";
 "update.autoCheck" = "Automatically check for updates";
+"update.notificationAction" = "Open Update";
+"update.installButton" = "Install Update";
+"update.downloading" = "Downloading...";
+"update.verifying" = "Verifying signature...";
+"update.authorizing" = "Waiting for authorization...";
+"update.installing" = "Installing. PriType will restart shortly.";
+"update.authorizationPrompt" = "PriType needs administrator access to install the update.";
+"update.downloadFailed" = "Download failed";
+"update.verificationFailed" = "Could not verify the download";
+"update.installFailed" = "Could not start the install";
+"update.openReleasePage" = "Open release page";
+"update.cancel" = "Cancel";
+"update.installedTitle" = "PriType updated";
+"update.installedBody" = "You are now running %@.";
+"update.installIncompleteTitle" = "PriType update did not finish";
+"update.installIncompleteBody" = "Installing %@ did not complete. Please install it from the release page.";
 
 /* System */
 "system.accessibility" = "Accessibility Permission";
@@ -84,7 +100,7 @@
 "pane.exclusions.title" = "Excluded Apps";
 "pane.system.title" = "Permissions";
 "pane.system.description" = "Manage the permissions PriType needs to detect keys, and the default ABC input source.";
-"pane.update.description" = "Check whether a new version of PriType is available.";
+"pane.update.description" = "Check for a new version and install it without leaving Settings.";
 "pane.experimental.title" = "Experimental";
 "pane.experimental.description" = "Features still being refined. Turn them off if something goes wrong.";
 

@@ -27,11 +27,29 @@ public final class UpdateChecker: @unchecked Sendable {
     // MARK: - Types
     
     /// Information about an available update
-    public struct UpdateInfo: Sendable {
+    public struct UpdateInfo: Sendable, Equatable {
         /// The new version string (e.g. "2.1")
         public let version: String
         /// URL to the GitHub Releases page
         public let releasePageURL: URL
+        /// The files needed to install this release from inside the app.
+        ///
+        /// `nil` for a release published before signed manifests existed, or one
+        /// built without the signing secret. The settings window then offers the
+        /// release page instead of an in-app install.
+        public let assets: ReleaseAssets?
+    }
+
+    /// The three files an in-app install needs, all from the same release.
+    public struct ReleaseAssets: Sendable, Equatable {
+        /// The installer package.
+        public let package: URL
+        /// The signed description of that package.
+        public let manifest: URL
+        /// Detached signature over the manifest bytes.
+        public let signature: URL
+        /// Size GitHub reports for the package, checked before the digest is.
+        public let packageSize: Int
     }
     
     /// Result of an update check
@@ -54,6 +72,7 @@ public final class UpdateChecker: @unchecked Sendable {
         let name: String?
         let draft: Bool
         let prerelease: Bool
+        let assets: [GitHubAsset]
 
         enum CodingKeys: String, CodingKey {
             case tagName = "tag_name"
@@ -61,6 +80,47 @@ public final class UpdateChecker: @unchecked Sendable {
             case name
             case draft
             case prerelease
+            case assets
+        }
+
+        // A release from before signed manifests has no assets key worth
+        // failing over, and neither does one still being uploaded.
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            tagName = try container.decode(String.self, forKey: .tagName)
+            htmlUrl = try container.decode(String.self, forKey: .htmlUrl)
+            name = try container.decodeIfPresent(String.self, forKey: .name)
+            draft = try container.decode(Bool.self, forKey: .draft)
+            prerelease = try container.decode(Bool.self, forKey: .prerelease)
+            assets = try container.decodeIfPresent([GitHubAsset].self, forKey: .assets) ?? []
+        }
+
+        init(
+            tagName: String,
+            htmlUrl: String,
+            name: String?,
+            draft: Bool,
+            prerelease: Bool,
+            assets: [GitHubAsset] = []
+        ) {
+            self.tagName = tagName
+            self.htmlUrl = htmlUrl
+            self.name = name
+            self.draft = draft
+            self.prerelease = prerelease
+            self.assets = assets
+        }
+    }
+
+    struct GitHubAsset: Decodable, Sendable {
+        let name: String
+        let browserDownloadUrl: String
+        let size: Int
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case browserDownloadUrl = "browser_download_url"
+            case size
         }
     }
     
@@ -151,7 +211,8 @@ public final class UpdateChecker: @unchecked Sendable {
             if Self.offersUpdate(latest: latestVersion, current: currentVersion, channel: AboutInfo.releaseChannel) {
                 let updateInfo = UpdateInfo(
                     version: latestVersion,
-                    releasePageURL: URL(string: release.htmlUrl) ?? url
+                    releasePageURL: URL(string: release.htmlUrl) ?? url,
+                    assets: Self.installableAssets(in: release)
                 )
                 
                 DebugLogger.log("UpdateChecker: Update available! \(latestVersion)")
@@ -207,6 +268,52 @@ public final class UpdateChecker: @unchecked Sendable {
             .max { lhs, rhs in
                 isNewer(normalizeVersion(rhs.tagName), than: normalizeVersion(lhs.tagName))
             }
+    }
+
+    // MARK: - Release Assets
+
+    /// Names the release workflow publishes. All three are needed to install.
+    static let packageAssetName = "PriTypeV2_Release.pkg"
+    static let manifestAssetName = "update.json"
+    static let signatureAssetName = "update.json.sig"
+
+    /// The assets an in-app install needs, or `nil` if this release lacks any.
+    ///
+    /// Partial sets are treated as absent rather than as an error: releases
+    /// published before signed manifests existed have only the package, and the
+    /// app is expected to fall back to the release page for them.
+    static func installableAssets(in release: GitHubRelease) -> ReleaseAssets? {
+        guard let package = release.assets.first(where: { $0.name == packageAssetName }),
+              let manifest = release.assets.first(where: { $0.name == manifestAssetName }),
+              let signature = release.assets.first(where: { $0.name == signatureAssetName }),
+              package.size > 0,
+              let packageURL = downloadURL(package),
+              let manifestURL = downloadURL(manifest),
+              let signatureURL = downloadURL(signature) else {
+            return nil
+        }
+
+        return ReleaseAssets(
+            package: packageURL,
+            manifest: manifestURL,
+            signature: signatureURL,
+            packageSize: package.size
+        )
+    }
+
+    /// A download URL is used only if it is GitHub's own over TLS.
+    ///
+    /// The JSON already arrives over TLS from api.github.com, so this is a
+    /// second line rather than the first: it keeps a surprising `html_url` or a
+    /// tampered response from pointing the downloader somewhere else entirely.
+    static func downloadURL(_ asset: GitHubAsset) -> URL? {
+        guard let url = URL(string: asset.browserDownloadUrl),
+              url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased(),
+              host == "github.com" || host.hasSuffix(".github.com") else {
+            return nil
+        }
+        return url
     }
 
     /// Whether the latest stable release should be offered to this build.

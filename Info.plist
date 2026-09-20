@@ -65,6 +65,8 @@
 	<string>PriType_InputString_v2</string>
 	<key>InputMethodServerControllerClass</key>
 	<string>PriTypeInputController</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>PriTypeReleaseChannel</key>

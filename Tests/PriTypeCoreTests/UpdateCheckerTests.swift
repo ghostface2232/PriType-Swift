@@ -216,3 +216,99 @@ struct UpdateCheckerTests {
         )
     }
 }
+
+// MARK: - Release Asset Tests
+
+/// What decides whether a release can be installed from inside the app.
+@Suite("UpdateChecker release assets")
+struct UpdateCheckerAssetTests {
+
+    @Test("A release carrying package, manifest and signature is installable")
+    func acceptsCompleteRelease() throws {
+        let assets = try #require(UpdateChecker.installableAssets(in: release(with: [
+            asset(UpdateChecker.packageAssetName, size: 5_000_000),
+            asset(UpdateChecker.manifestAssetName, size: 200),
+            asset(UpdateChecker.signatureAssetName, size: 90),
+        ])))
+
+        #expect(assets.package.lastPathComponent == UpdateChecker.packageAssetName)
+        #expect(assets.manifest.lastPathComponent == UpdateChecker.manifestAssetName)
+        #expect(assets.signature.lastPathComponent == UpdateChecker.signatureAssetName)
+        #expect(assets.packageSize == 5_000_000)
+    }
+
+    @Test("A release from before signed manifests is not installable")
+    func rejectsReleaseWithoutManifest() {
+        // 2.8.0 and earlier: the app has to send the user to the release page.
+        #expect(UpdateChecker.installableAssets(in: release(with: [
+            asset(UpdateChecker.packageAssetName, size: 5_000_000),
+        ])) == nil)
+    }
+
+    @Test("A release missing any one of the three files is not installable")
+    func rejectsPartialRelease() {
+        #expect(UpdateChecker.installableAssets(in: release(with: [
+            asset(UpdateChecker.packageAssetName, size: 5_000_000),
+            asset(UpdateChecker.manifestAssetName, size: 200),
+        ])) == nil)
+        #expect(UpdateChecker.installableAssets(in: release(with: [
+            asset(UpdateChecker.manifestAssetName, size: 200),
+            asset(UpdateChecker.signatureAssetName, size: 90),
+        ])) == nil)
+    }
+
+    @Test("An empty package asset is not installable")
+    func rejectsEmptyPackage() {
+        // An upload still in progress reports a zero size.
+        #expect(UpdateChecker.installableAssets(in: release(with: [
+            asset(UpdateChecker.packageAssetName, size: 0),
+            asset(UpdateChecker.manifestAssetName, size: 200),
+            asset(UpdateChecker.signatureAssetName, size: 90),
+        ])) == nil)
+    }
+
+    @Test("Downloads are only followed to GitHub over TLS")
+    func rejectsForeignDownloadURL() {
+        #expect(UpdateChecker.downloadURL(asset("update.json", size: 10, url: "https://example.com/update.json")) == nil)
+        #expect(UpdateChecker.downloadURL(asset("update.json", size: 10, url: "http://github.com/update.json")) == nil)
+        #expect(UpdateChecker.downloadURL(asset("update.json", size: 10, url: "https://githubXcom/update.json")) == nil)
+        #expect(UpdateChecker.downloadURL(asset("update.json", size: 10, url: "https://GitHub.com/u")) != nil)
+        #expect(UpdateChecker.downloadURL(asset("update.json", size: 10, url: "https://objects.github.com/u")) != nil)
+    }
+
+    @Test("A release payload without an assets key still decodes")
+    func decodesReleaseWithoutAssetsKey() throws {
+        let json = Data("""
+        [{"tag_name": "v2.8.0", "html_url": "https://github.com/o/r/releases/tag/v2.8.0",
+          "name": "PriType 2.8.0", "draft": false, "prerelease": false}]
+        """.utf8)
+
+        let releases = try JSONDecoder().decode([UpdateChecker.GitHubRelease].self, from: json)
+
+        #expect(releases.first?.assets.isEmpty == true)
+    }
+
+    private func asset(
+        _ name: String,
+        size: Int,
+        url: String? = nil
+    ) -> UpdateChecker.GitHubAsset {
+        UpdateChecker.GitHubAsset(
+            name: name,
+            browserDownloadUrl: url
+                ?? "https://github.com/\(AboutInfo.repository)/releases/download/v2.9.0/\(name)",
+            size: size
+        )
+    }
+
+    private func release(with assets: [UpdateChecker.GitHubAsset]) -> UpdateChecker.GitHubRelease {
+        UpdateChecker.GitHubRelease(
+            tagName: "v2.9.0",
+            htmlUrl: "https://github.com/\(AboutInfo.repository)/releases/tag/v2.9.0",
+            name: nil,
+            draft: false,
+            prerelease: false,
+            assets: assets
+        )
+    }
+}

@@ -45,10 +45,11 @@ public final class UpdateNotifier: NSObject, @unchecked Sendable, UNUserNotifica
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         
-        // Define the "Download" action button
+        // Opens the update settings, where the release can be installed without
+        // leaving the app.
         let downloadAction = UNNotificationAction(
             identifier: actionIdentifier,
-            title: L10n.update.download,
+            title: L10n.update.notificationAction,
             options: [.foreground]
         )
         
@@ -68,8 +69,6 @@ public final class UpdateNotifier: NSObject, @unchecked Sendable, UNUserNotifica
     ///
     /// - Parameter update: The update information to display
     public func notifyUpdateAvailable(_ update: UpdateChecker.UpdateInfo) {
-        // Store the URL for when the user interacts with the notification
-
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { [weak self] settings in
             guard let self else { return }
@@ -96,6 +95,36 @@ public final class UpdateNotifier: NSObject, @unchecked Sendable, UNUserNotifica
         }
     }
 
+    /// Reports the outcome of an install, using permission already granted.
+    ///
+    /// Unlike an update notice, this never asks for notification permission:
+    /// being told an install finished is not worth a permission prompt, and the
+    /// user sees the new version in the settings window anyway.
+    public func notifyInstallResult(title: String, body: String) {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized
+                    || settings.authorizationStatus == .provisional else {
+                DebugLogger.log("UpdateNotifier: No permission, skipping install result")
+                return
+            }
+
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+
+            let request = UNNotificationRequest(
+                identifier: "pritype-install-\(UUID().uuidString)",
+                content: content,
+                trigger: nil
+            )
+            UNUserNotificationCenter.current().add(request) { error in
+                if let error {
+                    DebugLogger.log("UpdateNotifier: Failed to send - \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     private func enqueueUpdateNotification(_ update: UpdateChecker.UpdateInfo) {
         
         let content = UNMutableNotificationContent()
@@ -103,10 +132,7 @@ public final class UpdateNotifier: NSObject, @unchecked Sendable, UNUserNotifica
         content.body = String(format: L10n.update.notificationBody, update.version)
         content.sound = .default
         content.categoryIdentifier = categoryIdentifier
-        
-        // Store the release URL in userInfo for the delegate callback
-        content.userInfo = ["releaseURL": update.releasePageURL.absoluteString]
-        
+
         // Deliver immediately (no trigger = immediate)
         let request = UNNotificationRequest(
             identifier: "pritype-update-\(update.version)",
@@ -131,16 +157,13 @@ public final class UpdateNotifier: NSObject, @unchecked Sendable, UNUserNotifica
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let userInfo = response.notification.request.content.userInfo
-        
-        if let urlString = userInfo["releaseURL"] as? String,
-           let url = URL(string: urlString) {
-            DebugLogger.log("UpdateNotifier: Opening release page")
-            DispatchQueue.main.async {
-                NSWorkspace.shared.open(url)
-            }
+        // The settings window, not the browser: the update can be installed from
+        // there, and it offers the release page when it cannot be.
+        DebugLogger.log("UpdateNotifier: Opening update settings")
+        DispatchQueue.main.async {
+            SettingsWindowController.shared.showUpdateSettings()
         }
-        
+
         completionHandler()
     }
     
