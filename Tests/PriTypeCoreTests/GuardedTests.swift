@@ -103,7 +103,15 @@ struct GuardedTests {
         // so a leaked lock would let this same thread straight back in and the
         // test would pass while the defect it is named for was present.
         let acquired = DispatchSemaphore(value: 0)
-        Thread { guarded.withLock { _ in acquired.signal() } }.start()
+        // Both annotations are load-bearing: `signal()` returns an `Int`, so
+        // without them `withLock`'s generic result is inferred from a value this
+        // closure exists to throw away. Swift 6.4 lets that pass and the 6.2
+        // toolchain CI builds with does not.
+        Thread {
+            guarded.withLock { (_: Counter) -> Void in
+                _ = acquired.signal()
+            }
+        }.start()
         #expect(acquired.wait(timeout: .now() + 2) == .success,
                 "the lock was still held after the body threw")
         #expect(guarded.withLock { $0.value } == 0)
