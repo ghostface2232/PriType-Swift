@@ -140,12 +140,13 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
     /// that merely comes back to the same offset still gets its rewrite.
     private var lastPrecomposed: (caret: Int, syllable: String)?
 
-    /// How many rewrites this host has been seen not to apply. A host that ignores
-    /// replacement ranges edits at the caret instead and then deletes what it just
-    /// inserted, so every rewrite is wasted AND swallows its Backspace. After a few
-    /// of those the rewrite stops for this field: Backspace goes straight to the
-    /// host, exactly as it did before this feature existed. A host that merely
-    /// lagged for a moment gets its allowance back on the next focus change.
+    /// How many rewrites in a row this host has been seen not to apply. A host
+    /// that ignores replacement ranges edits at the caret instead and then deletes
+    /// what it just inserted, so every rewrite is wasted AND swallows its
+    /// Backspace. Two in a row stop the rewrite for this field: Backspace goes
+    /// straight to the host, exactly as it did before this feature existed. A
+    /// rewrite the host did apply clears the count, so a host that lagged once in
+    /// a long editing session keeps its rewrites.
     private var unappliedRewrites = 0
 
     /// The refusal this host keeps repeating, and how many times in a row. Google
@@ -162,7 +163,7 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
             || (repeatedUnusableSelection?.count ?? 0) >= Self.unusableSelectionLimit
     }
 
-    /// Two are a pattern; one can be a single slow moment in a healthy host.
+    /// Two in a row are a pattern; one is a single slow moment in a healthy host.
     private static let unappliedRewriteLimit = 2
 
     /// The same unusable caret three times running is the host's fixed answer.
@@ -292,6 +293,13 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
             return
         }
 
+        // A rewrite the host applied takes the whole syllable with it, so the caret
+        // comes back at least two units earlier. A host that dropped the rewrite and
+        // deleted one jamo instead leaves it exactly one unit earlier, which is no
+        // evidence of anything and must not clear the count.
+        if let previous, selRange.location <= previous.caret - 2 {
+            unappliedRewrites = 0
+        }
         client.insertText(syllable, replacementRange: NSRange(location: selRange.location - length, length: length))
         lastPrecomposed = (caret: selRange.location, syllable: syllable)
     }

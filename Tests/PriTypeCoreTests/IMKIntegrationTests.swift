@@ -311,6 +311,52 @@ struct IMKIntegrationTests {
         #expect(field.client.calls == [.insert("각"), .host("delete(각)")])
     }
 
+    @Test("Rewrites a host dropped once, twice over, do not cost it the session")
+    func unappliedRewritesFarApartAreForgiven() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.insertText(String(repeating: syllable, count: 9),
+                                replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        // Twice, far apart, the host drops one rewrite the way a moment of lag
+        // would, and otherwise applies every one of them.
+        for _ in 0..<2 {
+            field.client.ignoresReplacementRange = true
+            #expect(!harness.press(.backspace))     // dropped
+            field.client.ignoresReplacementRange = false
+            #expect(!harness.press(.backspace))     // suppressed: that one never landed
+            for _ in 0..<2 {
+                #expect(!harness.press(.backspace)) // applied, whole syllables
+            }
+        }
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls.first == .insert("각"),
+                "A rewrite that lands clears what the dropped one counted: \(field.client.calls)")
+    }
+
+    @Test("A host dropping every rewrite is left alone after two in a row")
+    func twoUnappliedRewritesInARowStopTheFeature() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.ignoresReplacementRange = true
+        field.client.insertText(String(repeating: syllable, count: 6),
+                                replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.clearLog()
+        field.client.resetQueryCounts()
+
+        for _ in 0..<12 {
+            #expect(!harness.press(.backspace))
+        }
+        #expect(field.client.calls.filter { $0.description.hasPrefix("insert") }.count == 2,
+                "Two wasted rewrites, then it stops trying: \(field.client.calls)")
+        #expect(field.client.selectionQueries == 4, "And stops asking the host anything")
+        // 6 syllables = 18 units; of the 12 presses, 2 were swallowed and 10 took a jamo.
+        #expect(field.client.text.utf16.count == 8, "Only the two swallowed presses are lost")
+    }
+
     @Test("Escape drops the composition and is consumed")
     func escapeCancels() {
         let (harness, field) = start()
