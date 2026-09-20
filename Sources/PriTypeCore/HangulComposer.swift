@@ -264,6 +264,9 @@ public class HangulComposer: @unchecked Sendable {
                     if !jamo.isEmpty {
                         delegate.insertText(jamo)
                     }
+                    // The host deletes that jamo, so what ends up before the caret
+                    // is whatever preceded the composition — not our own output.
+                    delegate.forgetLastPrecomposedSyllable()
                     return false
                 }
                 updateComposition(delegate: delegate)

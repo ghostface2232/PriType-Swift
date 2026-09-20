@@ -223,6 +223,36 @@ struct IMKIntegrationTests {
         #expect(field.client.calls == [.host("shortcut")], "The host keeps the whole shortcut")
     }
 
+    @Test("Deleting freshly typed Hangul asks the host nothing")
+    func backspaceAfterOwnOutputSkipsQueries() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type("rk")
+        harness.press(.space)                    // commits 가 and a space
+        field.client.resetQueryCounts()
+
+        #expect(!harness.press(.backspace))       // deletes the space
+        #expect(field.client.selectionQueries == 0, "Our own output is precomposed")
+        #expect(field.client.substringQueries == 0)
+
+        // The character before THAT one is unknown, so the next one does ask.
+        #expect(!harness.press(.backspace))
+        #expect(field.client.selectionQueries == 1)
+    }
+
+    @Test("A Backspace that commits the last jamo still lets the next one rewrite")
+    func backspaceAfterLastJamoCommit() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        harness.type("d")                         // ㅇ composing after the pasted 각
+        #expect(!harness.press(.backspace))       // the jamo is committed, the host deletes it
+        field.client.clearLog()
+
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls == [.insert("각"), .host("delete(각)")])
+    }
+
     @Test("Escape drops the composition and is consumed")
     func escapeCancels() {
         let (harness, field) = start()

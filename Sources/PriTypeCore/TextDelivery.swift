@@ -154,6 +154,14 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
     /// Two are a pattern; one can be a single slow moment in a healthy host.
     private static let unappliedRewriteLimit = 2
 
+    /// Whether the caret sits right after text this input method wrote. Everything
+    /// it writes is precomposed (`CompositionHelpers.convertAndNormalize`), so the
+    /// character before the caret cannot be a decomposed syllable and the host need
+    /// not be asked at all — which covers the most common Backspace of all, the one
+    /// that undoes what was just typed. One Backspace consumes it: what stands
+    /// before the deleted character is unknown again.
+    private var caretFollowsOwnOutput = false
+
     init(client: IMKTextInput, bundleId: String) {
         self.client = client
         self.bundleId = bundleId
@@ -168,6 +176,7 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         // range here desynced KakaoTalk's composition (stranded marked text +
         // missing commit on focus loss).
         lastPrecomposed = nil
+        caretFollowsOwnOutput = true
         client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
     }
 
@@ -197,6 +206,7 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
 
     func forgetLastPrecomposedSyllable() {
         lastPrecomposed = nil
+        caretFollowsOwnOutput = false
     }
 
     /// Give this host's rewrites another chance (called when the field changes).
@@ -209,6 +219,12 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         guard !precomposeIsHopeless else { return }
         let previous = lastPrecomposed
         lastPrecomposed = nil
+
+        // Deleting this input method's own output needs no questions asked.
+        if caretFollowsOwnOutput {
+            caretFollowsOwnOutput = false
+            return
+        }
 
         // A selection is deleted whole; only a caret deletes by character.
         let selRange = client.selectedRange()
