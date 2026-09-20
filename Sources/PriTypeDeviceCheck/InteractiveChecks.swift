@@ -140,7 +140,7 @@ public struct PhysicalToggleHIDCheck: DeviceCheck {
         case .success:
             break
         case .failure(.keyboardsExclusivelyOwned(let code)):
-            return .skipped("another process owns the keyboards; quit PriTypeV2 and re-run",
+            return .skipped(KeyboardOwners.currentAdvice(),
                             evidence: "IOReturn \(code) (kIOReturnExclusiveAccess)")
         case .failure(.inputMonitoringDenied):
             return .failed("Input Monitoring is denied, so the fallback can never read a key")

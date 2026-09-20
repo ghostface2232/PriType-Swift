@@ -142,7 +142,7 @@ public struct HIDOpenCheck: DeviceCheck {
         case .failure(.keyboardsExclusivelyOwned(let code)):
             // The installed input method is holding them, which is the normal
             // state of a working Mac — and the reason this cannot be a failure.
-            return .skipped("another process owns the keyboards; quit PriTypeV2 and re-run",
+            return .skipped(KeyboardOwners.currentAdvice(),
                             evidence: "IOReturn \(code) (kIOReturnExclusiveAccess)")
         case .failure(.inputMonitoringDenied):
             return .failed("Input Monitoring is denied, so the fallback can never read a key")

@@ -362,3 +362,51 @@ struct PreferencesDomainTests {
         #expect(info["CFBundleIdentifier"] as? String == PreferencesDomain.priTypeSuiteName)
     }
 }
+
+@Suite("Keyboard owner advice")
+struct KeyboardOwnerTests {
+
+    @Test("Names only what is actually running")
+    func matchesRunningProcesses() {
+        let running = [
+            "/Library/Input Methods/PriTypeV2.app/Contents/MacOS/PriTypeV2",
+            "/Library/Application Support/org.pqrs/Karabiner-Elements/Karabiner-Core-Service.app/Contents/MacOS/Karabiner-Core-Service",
+            "/usr/libexec/keyboardservicesd",
+        ]
+        let owners = KeyboardOwners.plausibleOwners(in: running)
+        #expect(owners.contains("PriTypeV2 (the installed input method)"))
+        #expect(owners.contains("Karabiner-Elements"))
+        #expect(!owners.contains("Hammerspoon"))
+    }
+
+    @Test("One process matching twice is named once")
+    func noDuplicates() {
+        let running = [
+            "/Library/Application Support/org.pqrs/Karabiner-Elements/Karabiner-Core-Service.app/Contents/MacOS/Karabiner-Core-Service",
+            "/Library/Application Support/org.pqrs/Karabiner-Elements/Karabiner-Console-User-Server.app/Contents/MacOS/Karabiner-Console-User-Server",
+        ]
+        #expect(KeyboardOwners.plausibleOwners(in: running) == ["Karabiner-Elements"])
+    }
+
+    @Test("An executable path carries no arguments to be confused by")
+    func executablePathsOnly() {
+        // Why the list is read as `ps -Ao comm`. With `command` it carries
+        // arguments, this process's own shell is in it, and a run started from a
+        // script that so much as names a remapper reports it as the owner — which
+        // is how this was found: the command that wrote this file listed four,
+        // and the check named all four as running.
+        #expect(KeyboardOwners.plausibleOwners(in: ["/bin/zsh"]).isEmpty)
+        #expect(KeyboardOwners.plausibleOwners(in: ["/usr/libexec/keyboardservicesd"]).isEmpty)
+        // The form `command` would have produced, which must not be how it reads.
+        let withArguments = ["/bin/zsh -c ./check # Karabiner-Elements Hammerspoon"]
+        #expect(KeyboardOwners.plausibleOwners(in: withArguments).count == 2,
+                "this is the false positive; the fix is the input, not the matcher")
+    }
+
+    @Test("Recognizing nobody says so rather than blaming someone")
+    func unknownOwner() {
+        let advice = KeyboardOwners.advice(owners: [])
+        #expect(advice.contains("nothing this check recognizes"))
+        #expect(!advice.contains("PriTypeV2"))
+    }
+}
