@@ -59,4 +59,67 @@ struct ReviewFixRegressionTests {
         harness.click()
         #expect(field.client.text == "ㄱ")
     }
+    // MARK: 3 — The double-space substitution edits the space it meant to edit
+
+    @Test("A space typed after the caret moved back does not eat the character before it")
+    func doubleSpaceAfterSilentCaretMove() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type("rk ")
+        #expect(field.client.text == "가 ")
+        // A click with nothing marked: IMK tells the input method nothing.
+        field.client.placeCaret(at: 1)
+        harness.press(.space)
+        #expect(field.client.text == "가  ", "가 is still there, and the space was typed")
+    }
+
+    @Test("An undisturbed double space still becomes a period")
+    func doubleSpaceStillWorks() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type("rk  ")
+        #expect(field.client.text == "가. ")
+    }
+    // MARK: 4 — A space the substitution cannot make is still a space
+
+    @Test("A host that reports no caret gets the space, not nothing")
+    func noSpaceLostWhenTheCaretIsUnavailable() {
+        let convenience = TextConvenienceHandler(isDoubleSpacePeriodEnabled: { true })
+        let client = FakeTextClient()
+        let adapter = MarkedTextAdapter(client: client, bundleId: client.bundleID)
+        var buffer = "가"
+        _ = convenience.handleDoubleSpacePeriod(buffer: &buffer, delegate: adapter)
+        buffer += " "
+        client.select(NSRange(location: NSNotFound, length: 0))
+        #expect(convenience.handleDoubleSpacePeriod(buffer: &buffer, delegate: adapter) == .normalSpace)
+    }
+
+    @Test("Chromium's garbage caret is not a licence to edit")
+    func garbageCaretIsUnavailable() {
+        let client = FakeTextClient()
+        let adapter = MarkedTextAdapter(client: client, bundleId: client.bundleID)
+        client.insertText("가 ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        client.select(NSRange(location: 99_999_999, length: 0))
+        #expect(adapter.replaceTextBeforeCursor(length: 1, with: ". ", verifying: "가 ") == .unavailable)
+        #expect(client.text == "가 ")
+    }
+
+    @Test("A selection is not a caret, and is not replaced")
+    func selectionIsUnavailable() {
+        let client = FakeTextClient()
+        let adapter = MarkedTextAdapter(client: client, bundleId: client.bundleID)
+        client.insertText("가 ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        client.select(NSRange(location: 0, length: 2))
+        #expect(adapter.replaceTextBeforeCursor(length: 1, with: ". ", verifying: "가 ") == .unavailable)
+        #expect(client.text == "가 ")
+    }
+
+    @Test("The confirmed target is replaced")
+    func confirmedTargetIsReplaced() {
+        let client = FakeTextClient()
+        let adapter = MarkedTextAdapter(client: client, bundleId: client.bundleID)
+        client.insertText("가 ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(adapter.replaceTextBeforeCursor(length: 1, with: ". ", verifying: "가 ") == .issued)
+        #expect(client.text == "가. ")
+    }
 }

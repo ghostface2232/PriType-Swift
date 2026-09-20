@@ -484,13 +484,17 @@ final class FakeDirectInsertionClient: HangulComposerDelegate {
     func precomposeSyllableBeforeCursor(followsBackspace: Bool) {}
     func forgetLastPrecomposedSyllable() {}
     func resumePrecomposing() {}
-    func replaceTextBeforeCursor(length: Int, with text: String) {
+    func replaceTextBeforeCursor(length: Int, with text: String, verifying context: String) -> TextReplacementResult {
         livePreeditLength = 0
         var units = Array(document.utf16)
-        guard units.count >= length else { return }
+        guard units.count >= context.utf16.count,
+              String(decoding: units.suffix(context.utf16.count), as: UTF16.self) == context else {
+            return .unavailable
+        }
         units.removeLast(length)
         units.append(contentsOf: Array(text.utf16))
         document = String(decoding: units, as: UTF16.self)
+        return .issued
     }
 }
 

@@ -216,13 +216,36 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         return client.attributedSubstring(from: charRange)?.string
     }
 
-    func replaceTextBeforeCursor(length: Int, with text: String) {
+    /// Rewrite committed text the host still holds, after confirming it is there.
+    ///
+    /// Committed text carries no marked range, so IMK tells the input method nothing
+    /// when the caret leaves it. The only thing that can stand in for that is the
+    /// host's own answer, taken immediately before the edit: a collapsed caret, and
+    /// the expected `context` still sitting in front of it. A host that answers with
+    /// no caret, or with text that is not the text this edit was computed from, gets
+    /// no edit at all — the caller inserts what the user actually typed instead.
+    @discardableResult
+    func replaceTextBeforeCursor(length: Int, with text: String, verifying context: String) -> TextReplacementResult {
+        let contextLength = context.utf16.count
+        guard length > 0, contextLength >= length else { return .unavailable }
+
         let selRange = client.selectedRange()
-        guard selRange.location != NSNotFound, selRange.location < 10000000, selRange.location >= length else { return }
+        guard DirectInsertionPlanner.isUsableCollapsedSelection(selRange),
+              selRange.location >= contextLength else { return .unavailable }
+
+        let contextRange = NSRange(location: selRange.location - contextLength, length: contextLength)
+        // Unreadable is not the same as unchanged. A host that cannot show what it
+        // holds cannot authorize an edit to it either.
+        guard let actual = client.attributedSubstring(from: contextRange)?.string,
+              actual.precomposedStringWithCanonicalMapping
+                  == context.precomposedStringWithCanonicalMapping else {
+            return .unavailable
+        }
 
         let replacementRange = NSRange(location: selRange.location - length, length: length)
         noteOwnOutput()
         client.insertText(text, replacementRange: replacementRange)
+        return .issued
     }
 
     /// Record that the caret now follows text this input method just wrote.
@@ -522,11 +545,11 @@ final class DirectInsertionAdapter: BaseClientAdapter {
         rewriteLivePreedit(with: text, keepingLive: true)
     }
 
-    override func replaceTextBeforeCursor(length: Int, with text: String) {
+    override func replaceTextBeforeCursor(length: Int, with text: String, verifying context: String) -> TextReplacementResult {
         // Committed-text edit (e.g. double-space period); no live preedit involved.
         state = .idle
         preparedLiveRange = nil
-        super.replaceTextBeforeCursor(length: length, with: text)
+        return super.replaceTextBeforeCursor(length: length, with: text, verifying: context)
     }
 
     override func precomposeSyllableBeforeCursor(followsBackspace: Bool) {
