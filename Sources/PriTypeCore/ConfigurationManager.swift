@@ -349,10 +349,12 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     
     private let defaults = UserDefaults.standard
 
-    // Values other processes write (System Settings, `defaults write`). The event
-    // tap reads the Caps Lock switch on every keystroke on the system, and the
-    // keystroke path reads the direct-insertion flag; each read would otherwise be
-    // a preferences lookup (~0.2–0.5µs, and a lock inside cfprefs).
+    // Values other processes write (System Settings, `defaults write`), so they
+    // have to be re-read rather than cached once. The event tap reads the Caps Lock
+    // switch on every keystroke on the system, and the keystroke path reads the
+    // direct-insertion flag; each read would otherwise be a preferences lookup
+    // (~0.2–0.5µs, and a lock inside cfprefs) on the thread that has to answer the
+    // key. `PolledPreference` answers from its cache and re-reads elsewhere.
     private let capsLockSwitch = PolledPreference(read: ConfigurationManager.readCapsLockSwitch)
     private let doubleSpacePeriod = PolledPreference {
         // Absent means on (the macOS default). bool(forKey:) also accepts a
@@ -721,25 +723,87 @@ final class PolledPreference: @unchecked Sendable {
     private let interval: TimeInterval
     private var cached = false
     private var readAt = -TimeInterval.infinity
+    /// A refresh is already on its way; a second reader must not start another.
+    private var refreshing = false
+    /// Bumped by `invalidate()`. A refresh that started before it reads a value
+    /// this process has since replaced, so its answer is dropped.
+    private var generation: UInt64 = 0
+
+    /// One queue for every polled preference. The reads are rare (one per
+    /// interval, per preference) and none of them is urgent.
+    private static let refreshQueue = DispatchQueue(label: "com.pritype.preference-refresh",
+                                                    qos: .utility)
 
     init(interval: TimeInterval = 1, read: @escaping @Sendable () -> Bool) {
         self.interval = interval
         self.read = read
     }
 
+    /// The preference, without going to the preferences system to get it.
+    ///
+    /// The value returned is the cached one, always; a stale cache starts a
+    /// refresh on another queue and the caller does not wait for it. This is the
+    /// difference that matters: one of these preferences is read inside the
+    /// CGEventTap callback, which is the one place in this process where a
+    /// synchronous round trip is not merely slow. A callback that overruns is
+    /// disabled by the system (`kCGEventTapDisabledByTimeout`) and the keystroke
+    /// that overran it is gone. The callback's own rule — never query the
+    /// workspace or Accessibility from here — had this one standing exception,
+    /// and `TISRomanSwitchState` is the one preference another process writes, so
+    /// it is the one read that actually leaves the process.
+    ///
+    /// The cost is that a value can be older than `interval` when nothing has
+    /// read it for a while: a refresh is started by a read, not by a clock. The
+    /// first keystroke after a long pause can act on the previous value and the
+    /// next one is current. These are preferences a person changes in System
+    /// Settings, so a keystroke's worth of lag is not something they can see.
     var value: Bool {
-        lock.withLock {
-            let now = ProcessInfo.processInfo.systemUptime
-            if now - readAt >= interval {
-                cached = read()
-                readAt = now
-            }
-            return cached
+        lock.lock()
+        let now = ProcessInfo.processInfo.systemUptime
+
+        // Nothing has been read yet, so there is no cache to answer from. This one
+        // read is synchronous — it is the cost the caller pays today, once — and
+        // every read after it is the refresh below.
+        guard readAt > -.infinity else {
+            let first = read()
+            cached = first
+            readAt = now
+            lock.unlock()
+            return first
         }
+
+        let shouldRefresh = (now - readAt >= interval) && !refreshing
+        if shouldRefresh {
+            refreshing = true
+        }
+        let answer = cached
+        let startedAt = generation
+        lock.unlock()
+
+        if shouldRefresh {
+            Self.refreshQueue.async { [self] in
+                let fresh = read()
+                let readAt = ProcessInfo.processInfo.systemUptime
+                lock.withLock {
+                    refreshing = false
+                    // `invalidate()` ran while this was in flight: what it read is
+                    // the value this process has already replaced.
+                    guard generation == startedAt else { return }
+                    cached = fresh
+                    self.readAt = readAt
+                }
+            }
+        }
+        return answer
     }
 
     /// Re-read on the next access (after this process wrote the value itself).
+    /// That read is synchronous, so a setting the user just changed takes effect
+    /// on the next keystroke rather than on the one after it.
     func invalidate() {
-        lock.withLock { readAt = -.infinity }
+        lock.withLock {
+            readAt = -.infinity
+            generation &+= 1
+        }
     }
 }
