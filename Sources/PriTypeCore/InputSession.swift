@@ -122,6 +122,8 @@ final class InputSession: @unchecked Sendable {
     /// `lastHandleResult` for duplicates instead of processing the event again.
     func registerKeyDown(_ snapshot: KeyDownSnapshot) -> Bool {
         let duplicate = KeyEventDedup.isDuplicate(snapshot, previous: lastKeyDown)
+        DuplicateKeyProbe.record(snapshot, previous: lastKeyDown,
+                                 duplicate: duplicate, bundleId: context.bundleId)
         lastKeyDown = snapshot
         return duplicate
     }

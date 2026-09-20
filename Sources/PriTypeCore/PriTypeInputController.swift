@@ -463,14 +463,23 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // result. Host-event-level, so it applies in every delivery mode.
         let keyDownSnapshot = KeyDownSnapshot(timestamp: event.timestamp, keyCode: event.keyCode, isARepeat: event.isARepeat, characters: event.characters, modifiers: event.modifierFlags.rawValue)
         if session.registerKeyDown(keyDownSnapshot) {
-            DebugLogger.log("PriTypeInputController: dropped duplicate keyDown keyCode=\(event.keyCode)")
+            DebugLogger.logSensitive("PriTypeInputController: dropped duplicate keyDown",
+                                     sensitiveContent: "keyCode=\(event.keyCode)")
             return session.lastHandleResult
         }
 
         #if DEBUG
         if debugHandleLogCount < 200 {
             debugHandleLogCount += 1
-            DebugLogger.log("PriTypeInputController: handle keyCode=\(event.keyCode) repeat=\(event.isARepeat) mode=\(composer.inputMode) modifiers=\(event.modifierFlags.rawValue) bundle=\(session.context.bundleId) lightweight=\(session.context.isLightweight) immediate=\(session.context.shouldUseImmediateMode)")
+            // A key code IS what the user typed — it is the letter, by another
+            // name, and `modifiers` says whether it was shifted. The first two
+            // hundred keystrokes of every Debug session were being written out in
+            // full, which is the leak the Hanja logging was fixed for, at a larger
+            // scale. The state around the key is what this line is read for, so the
+            // key itself goes the way `logSensitive` sends everything else.
+            DebugLogger.logSensitive(
+                "PriTypeInputController: handle repeat=\(event.isARepeat) mode=\(composer.inputMode) bundle=\(session.context.bundleId) lightweight=\(session.context.isLightweight) immediate=\(session.context.shouldUseImmediateMode)",
+                sensitiveContent: "keyCode=\(event.keyCode) modifiers=\(event.modifierFlags.rawValue)")
         }
         #endif
 
