@@ -11,18 +11,43 @@ permissions:
 
 jobs:
   build:
-    name: Build and Test
-    # Pull requests can change and execute test code. Keep them off the persistent
-    # signing host and use GitHub's clean, per-job macOS VM instead.
-    runs-on: macos-15
+    name: Build and Test (${{ matrix.name }})
+    # Both are fresh GitHub-hosted VMs per job. Pull requests can change and
+    # execute test code, so nothing here runs anywhere persistent and no job
+    # here receives a secret.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # One toolchain failing is worth seeing next to the other passing: which
+      # of the two broke is most of the diagnosis.
+      fail-fast: false
+      matrix:
+        include:
+          # What releases are actually built with. Without this job, a tag could
+          # be the first time the shipping toolchain ever compiled the tree.
+          # GitHub still labels this image beta; follow release.yml when the GA
+          # macOS 27 label appears.
+          - name: Xcode 27
+            runner: xcode-27
+            developer_dir: /Applications/Xcode_27.0.app/Contents/Developer
+          # The floor. Package.swift declares swift-tools-version 6.2, so the
+          # tree is supposed to build with that toolchain, and a contributor on
+          # it should not be the one to find out otherwise. It has already
+          # earned its place once: it caught an expression the 6.4 compiler
+          # infers and this one calls ambiguous.
+          - name: Xcode 26.3
+            runner: macos-15
+            developer_dir: /Applications/Xcode_26.3.app/Contents/Developer
     env:
-      # macos-15 currently defaults to Xcode 16.4, which cannot build this
-      # swift-tools-version 6.2 package. Use the installed Xcode 26 toolchain.
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      # macos-15 defaults to Xcode 16.4, which cannot build a
+      # swift-tools-version 6.2 package at all.
+      DEVELOPER_DIR: ${{ matrix.developer_dir }}
     
     steps:
     - name: Checkout
       uses: actions/checkout@v7
+
+    - name: Report toolchain
+      run: swift --version
     
     - name: Build
       run: swift build -v
