@@ -378,6 +378,37 @@ struct IMKIntegrationTests {
                 "The next field gets its own chance: \(field.client.calls)")
     }
 
+    @Test("Keys that move the caret give up what the rewrite knew")
+    func caretMovingKeysForgetOwnOutput() {
+        // Typing leaves the caret after this IME's own output, which lets the next
+        // Backspace skip its questions. Any key that can move the caret has to give
+        // that up, or a Backspace elsewhere would skip a rewrite it owed.
+        func afterTyping(_ move: (IMKHarness) -> Void) -> [FakeTextClient.Call] {
+            let (harness, field) = start()
+            defer { harness.finish() }
+            field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: NSNotFound, length: 0))
+            harness.type("rk")
+            harness.press(.space)                 // commits 가 and a space: our own output
+            move(harness)
+            field.client.placeCaret(at: 3)        // back to just after the pasted 각
+            field.client.clearLog()
+            #expect(!harness.press(.backspace))
+            return field.client.calls
+        }
+
+        #expect(afterTyping { _ = $0.press(.left) }.first == .insert("각"), "arrow")
+        #expect(afterTyping { _ = $0.press(.tab) }.first == .insert("각"), "tab")
+        #expect(afterTyping { _ = $0.press(.return) }.first == .insert("각"), "return")
+        #expect(afterTyping { _ = $0.keyDown(keyCode: 9, characters: "v", modifiers: .command) }.first
+                == .insert("각"), "⌘V")
+        #expect(afterTyping { $0.click() }.first == .insert("각"), "click")
+        // Home: a navigation key the special-key list does not name, caught by the
+        // non-printable filter instead.
+        #expect(afterTyping { _ = $0.keyDown(keyCode: 115, characters: "\u{1}") }.first
+                == .insert("각"), "home")
+        #expect(afterTyping { $0.toggle() }.first == .insert("각"), "한/영 toggle")
+    }
+
     @Test("Escape drops the composition and is consumed")
     func escapeCancels() {
         let (harness, field) = start()
