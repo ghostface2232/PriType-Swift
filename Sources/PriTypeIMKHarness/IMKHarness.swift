@@ -67,8 +67,26 @@ public final class IMKHarness {
     /// Stands in for the Hanja candidate window while the harness runs.
     public let candidates = FakeCandidatePresenter()
 
+    /// The highest event time any harness run has handed out.
+    ///
+    /// `NSEvent.timestamp` never goes backwards, and code that orders a key against
+    /// something else by its press time counts on that (`InputModeCoordinator`). A
+    /// fresh harness starting at the current uptime WOULD go backwards, because the
+    /// run before it advanced its own clock past that point — its keys would look
+    /// like keys from the future. So the clock carries on from where the last run
+    /// left it.
+    nonisolated(unsafe) private static var issuedClock: TimeInterval = 0
+
+    /// Take the next event time and move the clock on.
+    private func takeClock() -> TimeInterval {
+        let time = clock
+        clock += keyInterval
+        Self.issuedClock = max(Self.issuedClock, clock)
+        return time
+    }
+
     public init() {
-        clock = ProcessInfo.processInfo.systemUptime
+        clock = max(ProcessInfo.processInfo.systemUptime, Self.issuedClock)
         PriTypeInputController.systemModeReporter = { [weak self] mode in
             self?.reportedModes.append(mode)
         }
@@ -165,28 +183,24 @@ public final class IMKHarness {
     /// A keyDown event stamped with the harness clock, which then advances.
     public func makeEvent(keyCode: UInt16, characters: String,
                           modifiers: NSEvent.ModifierFlags = []) -> NSEvent {
-        let event = NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: clock,
+        return NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: takeClock(),
             windowNumber: 0, context: nil, characters: characters,
             charactersIgnoringModifiers: characters.lowercased(), isARepeat: false, keyCode: keyCode)!
-        clock += keyInterval
-        return event
     }
 
     // MARK: Mode and focus events
 
     /// The toggle key, pressed now, handled on main as the key monitor hands it over.
     public func toggle() {
-        InputModeCoordinator.shared.requestToggle(source: .customKey, eventTime: clock)
-        clock += keyInterval
+        InputModeCoordinator.shared.requestToggle(source: .customKey, eventTime: takeClock())
     }
 
     /// The toggle key as the event tap sees it: recorded off main with its key
     /// time, not yet run. The next keystroke typed after it applies it, before
     /// the main-queue hop does — the race the ordering queue exists for.
     public func toggleFromKeyMonitor() {
-        let time = clock
-        clock += keyInterval
+        let time = takeClock()
         let done = DispatchSemaphore(value: 0)
         Thread {
             InputModeCoordinator.shared.requestToggle(source: .customKey, eventTime: time)
@@ -213,8 +227,7 @@ public final class IMKHarness {
     /// over. The app maps the dictionary at launch; the harness does it here.
     public func pressHanjaKey() {
         HanjaManager.shared.loadIfNeeded()
-        InputModeCoordinator.shared.requestHanjaLookup(eventTime: clock)
-        clock += keyInterval
+        InputModeCoordinator.shared.requestHanjaLookup(eventTime: takeClock())
     }
 
     /// Run everything the key monitor queued, and leave the shared engine idle.

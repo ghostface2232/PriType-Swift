@@ -59,6 +59,23 @@ struct ReviewFixRegressionTests {
         harness.click()
         #expect(field.client.text == "ㄱ")
     }
+    // MARK: 2 — A key pressed before a toggle keeps the mode it was pressed in
+
+    @Test("A toggle that reaches main first does not claim an older key still in flight")
+    func toggleDoesNotOvertakeAnOlderKey() async {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        // Pressed first, still travelling host → IMK.
+        let older = harness.makeEvent(keyCode: 15, characters: "r")
+        harness.toggleFromKeyMonitor()
+        // Let the toggle's own main-queue block run before the key lands.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        let handled = field.controller.handle(older, client: field.client)
+        if !handled { field.client.performHostAction(for: older) }
+        #expect(field.client.text == "ㄱ", "It was pressed in Korean mode")
+    }
     // MARK: 3 — The double-space substitution edits the space it meant to edit
 
     @Test("A space typed after the caret moved back does not eat the character before it")

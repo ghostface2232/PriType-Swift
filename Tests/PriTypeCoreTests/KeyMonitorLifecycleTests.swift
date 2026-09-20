@@ -234,6 +234,25 @@ struct PendingToggleTests {
         #expect(coordinator.pendingActionCount == 0)
     }
 
+    @Test("A toggle no keystroke follows does not stay pending")
+    func pendingToggleDrainsWithoutAKeystroke() async {
+        let coordinator = InputModeCoordinator.shared
+        coordinator.applyPendingKeyActions()
+        // Pressed later than any key handled so far, so the queue is waiting for a
+        // key that will never arrive — a shortcut field, a non-text view, a host
+        // that forwards nothing to IMK. That wait has to be bounded, or the toggle
+        // is lost until the user types somewhere else.
+        requestOffMain(at: [ProcessInfo.processInfo.systemUptime + 60])
+        #expect(coordinator.pendingActionCount == 1)
+
+        var drained = false
+        for _ in 0..<40 where !drained {
+            try? await Task.sleep(for: .milliseconds(50))
+            drained = coordinator.pendingActionCount == 0
+        }
+        #expect(drained, "the queue ran on its own, with no keystroke to carry it")
+    }
+
     @Test("Hanja and toggle run in the order they were pressed, cut off by the key")
     func hanjaIsOrderedWithToggles() {
         let coordinator = InputModeCoordinator.shared

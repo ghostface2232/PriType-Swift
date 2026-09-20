@@ -78,7 +78,7 @@ public final class InputModeCoordinator: @unchecked Sendable {
             )
             pendingActions.withLock { $0.append(pending) }
             DispatchQueue.main.async {
-                self.applyPendingKeyActions()
+                self.drainAfterKeyMonitorHop(pressedAt: pending.eventTime)
             }
             return
         }
@@ -88,6 +88,40 @@ public final class InputModeCoordinator: @unchecked Sendable {
         perform(action)
     }
 
+    /// How long an action that reached main waits for a key pressed BEFORE it that
+    /// has not arrived yet.
+    ///
+    /// This bounds the wait; it does not order the two producers. Nothing can: the
+    /// key monitor's hop and the host → IMK → `handle()` message are independent,
+    /// and "no earlier key is still in flight" is not a question either side can
+    /// answer. What the wait buys is that the common case — an IMK message already
+    /// on its way — resolves itself, because a key that does arrive drains the queue
+    /// with its own press time (`applyPendingKeyActions(before:)`) and lands in the
+    /// mode it was pressed in. What it costs is nothing in typing latency: the very
+    /// next keystroke applies the action ahead of itself, so the wait is only ever
+    /// paid by an action no key follows.
+    ///
+    /// The bound is what keeps a host that never forwards a key to IMK (a shortcut
+    /// field, a non-text view) from leaving the toggle pending forever.
+    static let inFlightKeyGrace: TimeInterval = 0.03
+
+    /// The press time of the newest keystroke that has reached `handle()`.
+    /// Main thread only, like everything it is compared against.
+    private var lastHandledKeyTime: TimeInterval = -.infinity
+
+    /// An action has reached main from the key-monitor thread. Run the queue now if
+    /// every key pressed before it has already been handled; otherwise give those
+    /// keys the bounded moment above to arrive on their own.
+    private func drainAfterKeyMonitorHop(pressedAt eventTime: TimeInterval) {
+        if lastHandledKeyTime >= eventTime {
+            applyPendingKeyActions()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.inFlightKeyGrace) {
+            self.applyPendingKeyActions()
+        }
+    }
+
     /// Run key actions recorded off the main thread, in order. Main thread only.
     /// A no-op when nothing is pending, so every caller can invoke it freely.
     ///
@@ -95,6 +129,7 @@ public final class InputModeCoordinator: @unchecked Sendable {
     ///   handled. Only actions pressed before it run; later ones stay pending for
     ///   their own hop. `nil` runs everything.
     public func applyPendingKeyActions(before keyTime: TimeInterval? = nil) {
+        if let keyTime { lastHandledKeyTime = max(lastHandledKeyTime, keyTime) }
         let due = pendingActions.withLock { pending -> [PendingAction] in
             guard let keyTime else {
                 defer { pending.removeAll() }
