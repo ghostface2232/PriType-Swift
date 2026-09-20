@@ -363,7 +363,7 @@ struct IOKitShortcutRoutingTests {
     }
 
     @Test("A hardware key is handed over with the time it was pressed")
-    func managerReportsThePressTime() {
+    func managerReportsThePressTime() async {
         let manager = IOKitManager()
         let times = PressTimes()
         manager.onRightCommandToggle = { times.record($0) }
@@ -372,6 +372,11 @@ struct IOKitShortcutRoutingTests {
         manager.handleKeyboardEvent(usage: HIDUsage.f13, pressed: true, eventTime: pressedAt,
                                     toggle: f13Binding, hanja: rightOptionBinding,
                                     toggleEnabled: true, paused: false)
+        // The hand-over hops to main, so the toggle is not performed inside the
+        // IOHID value callback.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
         #expect(times.snapshot == [pressedAt],
                 "the fallback can only order against a keystroke if it says when the key was pressed")
     }

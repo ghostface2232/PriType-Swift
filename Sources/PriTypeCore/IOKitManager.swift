@@ -244,11 +244,13 @@ public final class IOKitManager: @unchecked Sendable {
         case .hanja: callback = onRightOptionHanja
         case nil: return
         }
-        // Handed over here, with the time the key was pressed, exactly as the event
-        // tap does it. The hop to main and the ordering against keystrokes belong to
-        // `InputModeCoordinator`, which is the one place that knows what is still in
-        // flight; this callback used to hop first and arrive with no press time at
-        // all, which left the fallback unable to make that ordering at all.
-        callback?(eventTime ?? ProcessInfo.processInfo.systemUptime)
+        // The press time is what this used to lose, and it is a parameter now, so
+        // it survives the hop. The hop itself stays: this run loop is the main one,
+        // and performing the toggle inline would run a composition finalize
+        // (`insertText` to the host) and `TISSelectInputSource` inside the IOHID
+        // value callback. Those can spin the run loop, which would re-enter this
+        // callback part-way through a mode transition.
+        let pressedAt = eventTime ?? ProcessInfo.processInfo.systemUptime
+        DispatchQueue.main.async { callback?(pressedAt) }
     }
 }
