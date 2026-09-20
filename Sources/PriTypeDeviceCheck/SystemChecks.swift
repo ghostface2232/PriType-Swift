@@ -190,10 +190,12 @@ public struct FreshProcessProbeCheck: DeviceCheck {
 /// switched off, in which case nothing else in this report matters.
 public struct InputSourceRegistrationCheck: DeviceCheck {
     public let id = "input-source-registered"
-    public let title = "PriType is enabled in Text Input Sources"
+    public let title = "PriType's composing mode is enabled in Text Input Sources"
 
-    /// The prefix both PriType input modes share.
+    /// The prefix every PriType input source id shares.
     static let bundlePrefix = PreferencesDomain.priTypeSuiteName
+    /// The suffix of the pass-through mode, which composes nothing by design.
+    static let englishSuffix = ".english"
 
     public init() {}
 
@@ -206,7 +208,27 @@ public struct InputSourceRegistrationCheck: DeviceCheck {
             return .failed("no enabled input source carries the PriType bundle id",
                            evidence: "enabled: \(ids.joined(separator: ", "))")
         }
+        guard Self.composingModeIsEnabled(among: mine) else {
+            return .failed("only the English pass-through mode is enabled, so nothing composes",
+                           evidence: "enabled: \(mine.joined(separator: ", "))")
+        }
         return .passed("enabled: \(mine.joined(separator: ", "))")
+    }
+
+    /// Whether at least one of PriType's enabled sources can compose.
+    ///
+    /// macOS lets a user enable the two modes separately, and the English one is
+    /// a pure pass-through: with only that enabled, PriType is "installed and
+    /// enabled" while Korean typing produces nothing. A prefix match cannot tell
+    /// those apart, so it is not the question worth asking.
+    ///
+    /// Matching on the suffix rather than on a full id on purpose: this tool
+    /// verifies whatever build is installed, whose mode ids need not be the ones
+    /// this source tree would produce — on the machine this was written against,
+    /// the installed build reports `…v2.v2` where this tree's `Info.plist` says
+    /// `…v2`. The pass-through mode is the `.english` one in every build.
+    static func composingModeIsEnabled(among priTypeIDs: [String]) -> Bool {
+        priTypeIDs.contains { !$0.hasSuffix(englishSuffix) }
     }
 }
 

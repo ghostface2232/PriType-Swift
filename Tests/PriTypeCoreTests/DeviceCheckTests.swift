@@ -270,6 +270,31 @@ struct ShippedDeviceCheckTests {
 // the redirection itself is exercised by `pritype-device-check`'s own
 // `preferences-domain` check, against a real install, and what is tested here is
 // the part that opens a domain without making it anyone's.
+@Suite("Input source registration rule")
+struct InputSourceRegistrationRuleTests {
+
+    @Test("Only the English pass-through mode enabled is not a working install")
+    func englishOnlyIsNotEnough() {
+        // The state this exists to catch: PriType shows up as enabled, and
+        // Korean typing produces nothing.
+        #expect(!InputSourceRegistrationCheck.composingModeIsEnabled(
+            among: ["com.pritype.inputmethod.v2.english"]))
+        #expect(!InputSourceRegistrationCheck.composingModeIsEnabled(
+            among: ["com.pritype.inputmethod.v2.v2.english"]))
+        #expect(!InputSourceRegistrationCheck.composingModeIsEnabled(among: []))
+    }
+
+    @Test("A composing mode enabled, whatever the installed build calls it")
+    func composingModeCounts() {
+        // The installed build's ids need not match this tree's; only the
+        // pass-through suffix is stable.
+        #expect(InputSourceRegistrationCheck.composingModeIsEnabled(
+            among: ["com.pritype.inputmethod.v2"]))
+        #expect(InputSourceRegistrationCheck.composingModeIsEnabled(
+            among: ["com.pritype.inputmethod.v2.v2", "com.pritype.inputmethod.v2.v2.english"]))
+    }
+}
+
 @Suite("Preferences domain")
 struct PreferencesDomainTests {
 

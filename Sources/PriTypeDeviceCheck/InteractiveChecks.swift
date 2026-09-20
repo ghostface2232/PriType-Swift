@@ -71,6 +71,9 @@ public struct PhysicalToggleTapCheck: DeviceCheck {
             return .skipped("this process already holds a tap")
         }
 
+        if let reason = Self.toggleDisabledReason() {
+            return .skipped(reason)
+        }
         let latch = Latch<TimeInterval>()
         let binding = ConfigurationManager.shared.toggleKeyBinding
         tap.onToggle = { eventTime in latch.signal(eventTime) }
@@ -121,6 +124,9 @@ public struct PhysicalToggleHIDCheck: DeviceCheck {
     }
 
     public func run() -> DeviceCheckFinding {
+        if let reason = Self.toggleDisabledReason() {
+            return .skipped(reason)
+        }
         let manager = IOKitManager.shared
         let latch = Latch<TimeInterval>()
         let binding = ConfigurationManager.shared.toggleKeyBinding
@@ -166,6 +172,20 @@ public struct PhysicalToggleHIDCheck: DeviceCheck {
             CFRunLoopRunInMode(.defaultMode, 0.05, true)
         }
         return latch.wait(timeout: 0)
+    }
+}
+
+extension DeviceCheck {
+    /// Why PriType's own toggle key is switched off right now, if it is.
+    ///
+    /// Both monitors ignore the custom toggle while macOS's Caps Lock
+    /// input-source switch is on — by design, so the two cannot fight. Without
+    /// this, that configuration produced "no toggle reached the tap", with
+    /// evidence blaming a key remapper: a user with a normal setting told their
+    /// install was broken, which is worse than no check at all.
+    static func toggleDisabledReason() -> String? {
+        guard ConfigurationManager.shared.capsLockInputSourceSwitchEnabled else { return nil }
+        return "macOS's Caps Lock input-source switch is on, so PriType's toggle key is disabled"
     }
 }
 

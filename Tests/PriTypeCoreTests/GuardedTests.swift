@@ -128,8 +128,12 @@ struct KeystrokePathSendabilityTests {
     /// contributor is free to work around with a capture list.
     private func requireSendable<T: Sendable>(_ type: T.Type) {}
 
-    @Test("Every type the tap and HID callbacks touch is Sendable")
-    func tapBoundaryIsSendable() {
+    @Test("The six types converted off @unchecked still conform without it")
+    func convertedTypesAreCheckedSendable() {
+        // Deliberately not "every type the tap touches": `InputModeCoordinator`
+        // and `HanjaCandidateWindow` are entered from the tap callback too and
+        // are still `@unchecked`, which this could not detect anyway. What it
+        // pins is that these six have not quietly gone back.
         requireSendable(RightCommandSuppressor.self)
         requireSendable(EventTapThread.self)
         requireSendable(IOKitManager.self)

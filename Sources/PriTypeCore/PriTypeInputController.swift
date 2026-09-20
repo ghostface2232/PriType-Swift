@@ -27,7 +27,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     // Korean composes; English is a pure pass-through (ABC layout override).
     // macOS Caps Lock / input-source switching moves between these two modes.
     private static let priTypeInputSourceID = PreferencesDomain.priTypeSuiteName    // Korean mode (== bundle id)
-    private static let priTypeEnglishInputModeID = "com.pritype.inputmethod.v2.english"
+    private static let priTypeEnglishInputModeID = PreferencesDomain.priTypeSuiteName + ".english"
     // MARK: - Shared State
     //
     // THREAD SAFETY INVARIANTS:

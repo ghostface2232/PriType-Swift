@@ -9,8 +9,8 @@ import Foundation
 /// whichever run loop opened the manager, the settings window runs on main, and
 /// all three reach the same objects. Swift 6 has one answer for that shape —
 /// `@unchecked Sendable`, which is not an answer but a promise — and this package
-/// made that promise on thirteen types, each one covering every field it had,
-/// including fields no lock was ever taken for.
+/// made that promise twenty-two times, each one covering every field its type
+/// had, including fields no lock was ever taken for.
 ///
 /// This is the same promise made once, in one place small enough to read, and
 /// made testable. A type that keeps its mutable state in a `Guarded` has no other
