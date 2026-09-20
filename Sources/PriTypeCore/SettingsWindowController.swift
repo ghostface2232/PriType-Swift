@@ -10,6 +10,13 @@ public class SettingsWindowController: NSObject {
 
     private var window: NSWindow?
 
+    /// Pane a freshly created settings view should open on.
+    ///
+    /// The view reads this while its state is being set up, which is the only
+    /// moment its selection can be chosen from outside. An already-open window
+    /// is moved by `showUpdatePane` instead.
+    static var pendingPane: SettingsPane?
+
     private override init() {
         super.init()
     }
@@ -62,6 +69,25 @@ public class SettingsWindowController: NSObject {
         newWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    /// Opens the settings window on the update pane and checks for an update.
+    ///
+    /// Reached from the update notification: the user asked about an update, so
+    /// landing them on a pane that still says nothing would waste the trip.
+    @MainActor
+    public func showUpdateSettings() {
+        Self.pendingPane = .update
+        showSettings()
+        // A window that was already open has its selection set from the outside,
+        // and a new one has already consumed `pendingPane` by now.
+        Self.pendingPane = nil
+        NotificationCenter.default.post(name: .priTypeShowUpdatePane, object: nil)
+    }
+}
+
+extension Notification.Name {
+    /// Asks an open settings view to show the update pane and check for updates.
+    static let priTypeShowUpdatePane = Notification.Name("com.pritype.showUpdatePane")
 }
 
 extension SettingsWindowController: NSWindowDelegate {
@@ -90,6 +116,8 @@ struct SettingsView: View {
     // Update check state
     @State private var updateStatus: UpdateStatus = .idle
     @State private var updateStatusReset: DispatchWorkItem?
+    /// The download-verify-authorize sequence, kept so it can be called off.
+    @State private var installTask: Task<Void, Never>?
 
     // Polls for the accessibility grant while the window is open. Stored so it can
     // be replaced on repeated taps and invalidated when the view disappears.
@@ -106,12 +134,39 @@ struct SettingsView: View {
     // Apps that must keep the toggle/hanja keys for themselves (remote desktop, VMs).
     @State private var excludedApps: [ExcludedApp] = []
 
+    /// Where the update pane is in the check → download → install sequence.
     private enum UpdateStatus: Equatable {
         case idle
         case checking
         case upToDate
-        case available(String)  // version string
+        case available(UpdateChecker.UpdateInfo)
+        /// Fraction is `nil` until the server states a length.
+        case downloading(UpdateChecker.UpdateInfo, fraction: Double?)
+        case verifying(UpdateChecker.UpdateInfo)
+        case authorizing(UpdateChecker.UpdateInfo)
+        /// Handed to the installer; PriType is about to be killed and relaunched.
+        case installing
+        /// The check itself failed.
         case error
+        /// The download, its verification, or the install did.
+        case installError(String)
+
+        /// Whether a spinner belongs next to the status.
+        var isBusy: Bool {
+            switch self {
+            case .checking, .downloading, .verifying, .authorizing, .installing: true
+            case .idle, .upToDate, .available, .error, .installError: false
+            }
+        }
+
+        /// Whether the work can still be called off. Once the installer has the
+        /// package, it runs as its own root process and answers to no one here.
+        var isCancellable: Bool {
+            switch self {
+            case .downloading, .verifying: true
+            default: false
+            }
+        }
     }
 
     private enum RemoveABCStatus: Equatable {
@@ -122,7 +177,7 @@ struct SettingsView: View {
         case error
     }
 
-    @State private var selection: SettingsPane? = .switching
+    @State private var selection: SettingsPane? = SettingsWindowController.pendingPane ?? .switching
 
     var body: some View {
         NavigationSplitView {
@@ -177,6 +232,14 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshCapsLockSwitchState()
             checkAccessibility()
+        }
+        // Sent when the update notification is clicked. The user asked about an
+        // update, so the pane checks rather than waiting to be asked again.
+        .onReceive(NotificationCenter.default.publisher(for: .priTypeShowUpdatePane)) { _ in
+            selection = .update
+            if !updateStatus.isBusy {
+                checkForUpdates()
+            }
         }
         .alert(L10n.keyBinding.capsLockBlockedTitle, isPresented: $showCapsLockBlockedAlert) {
             Button(L10n.keyBinding.capsLockOpenSettings) {
@@ -237,6 +300,13 @@ struct SettingsView: View {
         .onDisappear {
             removeABCTask?.cancel()
             removeABCTask = nil
+            // Closing the window calls off a download, but never an install that
+            // has already been authorized: by then the installer is a root
+            // process of its own and nothing here can or should stop it.
+            if updateStatus.isCancellable {
+                installTask?.cancel()
+            }
+            installTask = nil
             for reset in [removeABCReset, updateStatusReset, conflictReset] { reset?.cancel() }
             removeABCReset = nil
             updateStatusReset = nil
@@ -437,16 +507,50 @@ struct SettingsView: View {
                     .textSelection(.enabled)
             }
 
-            HStack(spacing: 8) {
-                updateStatusView
-                Spacer()
-                if updateStatus == .checking {
-                    ProgressView()
-                        .controlSize(.small)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    updateStatusView
+                    Spacer()
+                    if updateStatus.isBusy {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    updateActions
                 }
-                Button(L10n.update.checkButton) { checkForUpdates() }
-                    .disabled(updateStatus == .checking)
+
+                // Only once the server has stated a length; a bar that cannot
+                // move says less than the spinner already does.
+                if case .downloading(_, let fraction) = updateStatus, let fraction {
+                    ProgressView(value: fraction)
+                        .transition(.opacity)
+                }
             }
+        }
+    }
+
+    /// The buttons beside the update status, which depend on where it is.
+    @ViewBuilder
+    private var updateActions: some View {
+        switch updateStatus {
+        case .available(let info):
+            if info.assets == nil {
+                // A release published before signed manifests, or one built
+                // without the signing secret: nothing here can verify it, so
+                // the user installs it themselves.
+                Button(L10n.update.openReleasePage) { openReleasePage(info) }
+            } else {
+                Button(L10n.update.installButton) { install(info) }
+                    .buttonStyle(.borderedProminent)
+            }
+        case .downloading, .verifying:
+            Button(L10n.update.cancel) { cancelInstall() }
+        case .authorizing, .installing:
+            EmptyView()
+        case .installError:
+            Button(L10n.update.openReleasePage) { openLatestRelease() }
+        case .idle, .checking, .upToDate, .error:
+            Button(L10n.update.checkButton) { checkForUpdates() }
+                .disabled(updateStatus == .checking)
         }
     }
 
@@ -513,14 +617,31 @@ struct SettingsView: View {
         case .upToDate:
             StatusLabel(title: L10n.update.upToDate, systemImage: "checkmark.circle.fill", color: .green)
                 .transition(.opacity)
-        case .available(let version):
-            Button(action: { openLatestRelease() }) {
-                Label(String(format: L10n.update.available, version), systemImage: "arrow.down.circle.fill")
+        case .available(let info):
+            // Still a link to the notes, even when the button beside it can do
+            // the install: what changed is worth reading first.
+            Button(action: { openReleasePage(info) }) {
+                Label(String(format: L10n.update.available, info.version), systemImage: "arrow.down.circle.fill")
             }
             .buttonStyle(.link)
             .transition(.opacity)
+        case .downloading:
+            Text(L10n.update.downloading)
+                .foregroundStyle(.secondary)
+        case .verifying:
+            Text(L10n.update.verifying)
+                .foregroundStyle(.secondary)
+        case .authorizing:
+            Text(L10n.update.authorizing)
+                .foregroundStyle(.secondary)
+        case .installing:
+            Text(L10n.update.installing)
+                .foregroundStyle(.secondary)
         case .error:
             StatusLabel(title: L10n.update.error, systemImage: "exclamationmark.triangle.fill", color: .orange)
+                .transition(.opacity)
+        case .installError(let message):
+            StatusLabel(title: message, systemImage: "exclamationmark.triangle.fill", color: .orange)
                 .transition(.opacity)
         }
     }
@@ -538,7 +659,7 @@ struct SettingsView: View {
                 withAnimation(.easeInOut(duration: 0.3)) {
                     switch result {
                     case .updateAvailable(let info):
-                        updateStatus = .available(info.version)
+                        updateStatus = .available(info)
                     case .upToDate:
                         updateStatus = .upToDate
                     case .skipped:
@@ -556,6 +677,90 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    /// Downloads, verifies and installs `info`.
+    ///
+    /// The last step hands the package to a root installer that terminates
+    /// PriType, so this view is not around for the end of it: what happened is
+    /// reported on the next launch instead.
+    private func install(_ info: UpdateChecker.UpdateInfo) {
+        updateStatusReset?.cancel()
+        installTask?.cancel()
+        withAnimation { updateStatus = .downloading(info, fraction: nil) }
+
+        installTask = Task {
+            do {
+                try await UpdateInstaller.shared.install(info) { phase in
+                    Task { @MainActor in
+                        // A cancelled run can still deliver one last phase; it
+                        // must not overwrite the state cancelling restored.
+                        guard !Task.isCancelled else { return }
+                        applyInstallPhase(phase, for: info)
+                    }
+                }
+            } catch {
+                await MainActor.run { finishInstall(with: error, for: info) }
+            }
+        }
+    }
+
+    @MainActor
+    private func applyInstallPhase(_ phase: UpdateInstaller.Phase, for info: UpdateChecker.UpdateInfo) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            switch phase {
+            case .downloading(let fraction):
+                updateStatus = .downloading(info, fraction: fraction)
+            case .verifying:
+                updateStatus = .verifying(info)
+            case .awaitingAuthorization:
+                updateStatus = .authorizing(info)
+            case .installing:
+                updateStatus = .installing
+            }
+        }
+    }
+
+    @MainActor
+    private func finishInstall(with error: any Error, for info: UpdateChecker.UpdateInfo) {
+        installTask = nil
+
+        // Cancelling and dismissing the authorization dialog are both decisions,
+        // not failures: the update is still there to install.
+        if error is CancellationError {
+            withAnimation { updateStatus = .available(info) }
+            return
+        }
+
+        let message: String
+        switch error as? UpdateInstaller.Failure {
+        case .authorizationCancelled:
+            withAnimation { updateStatus = .available(info) }
+            return
+        case .download, .implausibleSize:
+            message = L10n.update.downloadFailed
+        case .verification:
+            message = L10n.update.verificationFailed
+        case .noInstallableAssets, .authorizationFailed, .none:
+            message = L10n.update.installFailed
+        }
+
+        DebugLogger.log("SettingsView: Install failed - \(error)")
+        withAnimation { updateStatus = .installError(message) }
+    }
+
+    private func cancelInstall() {
+        installTask?.cancel()
+        installTask = nil
+        if case .downloading(let info, _) = updateStatus {
+            withAnimation { updateStatus = .available(info) }
+        } else if case .verifying(let info) = updateStatus {
+            withAnimation { updateStatus = .available(info) }
+        }
+    }
+
+    private func openReleasePage(_ info: UpdateChecker.UpdateInfo) {
+        NSWorkspace.shared.open(info.releasePageURL)
     }
 
     private func openLatestRelease() {

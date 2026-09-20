@@ -403,6 +403,7 @@ public final class ConfigurationManager: ConfigurationProviding, Sendable {
         static let toggleTrigger = "com.pritype.toggleTrigger"
         static let lastUpdateCheck = "com.pritype.lastUpdateCheck"
         static let autoUpdateCheck = "com.pritype.autoUpdateCheck"
+        static let pendingUpdateVersion = "com.pritype.pendingUpdateVersion"
         static let experimentalDirectInsertion = "com.pritype.experimentalDirectInsertion"
         static let toggleExcludedBundleIDs = "com.pritype.toggleExcludedBundleIDs"
     }
@@ -720,6 +721,25 @@ public final class ConfigurationManager: ConfigurationProviding, Sendable {
         }
         set {
             defaults.set(newValue, forKey: Keys.autoUpdateCheck)
+        }
+    }
+
+    /// Version an in-app install was started for, if one was.
+    ///
+    /// The package terminates PriType partway through installing, so the
+    /// process that started the install is never around to see it finish. This
+    /// marker is what the next launch reads to tell an update that landed from
+    /// one that failed.
+    public var pendingUpdateVersion: String? {
+        get {
+            defaults.string(forKey: Keys.pendingUpdateVersion)
+        }
+        set {
+            if let newValue {
+                defaults.set(newValue, forKey: Keys.pendingUpdateVersion)
+            } else {
+                defaults.removeObject(forKey: Keys.pendingUpdateVersion)
+            }
         }
     }
 }

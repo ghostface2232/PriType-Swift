@@ -71,7 +71,7 @@ Caps Lock 입력 소스 전환을 쓰지 않는다면 PriType 설정에서 한/�
 | 전환 | macOS Caps Lock 입력 소스 전환 또는 PriType 사용자 지정 전환키(누르는 순간 / 단독 탭) |
 | 한자 | 단어 단위 한자 후보창, 자모 특수문자 입력, 한자 변환 끄기 |
 | 텍스트 편의 기능 | macOS 더블스페이스 마침표 설정 연동 |
-| 업데이트 | GitHub Releases 기반 자동 업데이트 확인 |
+| 업데이트 | GitHub Releases 확인 후 설정 창에서 바로 내려받아 설치(서명 검증 + 관리자 암호 한 번) |
 
 ## 요구사항
 
@@ -90,6 +90,26 @@ swift build
 # 고정 인증서로 서명 (손쉬운 사용·입력 모니터링 권한이 업데이트 뒤에도 유지됨)
 APP_SIGN_IDENTITY="PriType Release" ./build_release.sh
 ```
+
+## 앱 내 업데이트 서명
+
+설정 창에서 바로 설치하려면 릴리스가 `update.json`과 `update.json.sig`를 함께 올려야 합니다. PKG는
+서명·공증이 없고 PKG 안의 설치 스크립트는 앱 코드 서명 밖에 있으므로, 앱은 이 매니페스트의 Ed25519
+서명으로만 내려받은 파일을 신뢰합니다. 세 파일이 모두 없는 릴리스는 릴리스 페이지 링크로 대체됩니다.
+
+```bash
+# 키쌍 생성 (한 번만)
+swift Tools/sign_update.swift generate-key
+
+# 릴리스 워크플로가 하는 일과 같은 서명·검증
+UPDATE_SIGNING_KEY="<개인키>" swift Tools/sign_update.swift sign \
+    --pkg PriTypeV2_Release.pkg --version 2.9.0 --minimum-system-version 14.0
+swift Tools/sign_update.swift verify --pkg PriTypeV2_Release.pkg --public-key "<공개키>"
+```
+
+개인키는 `UPDATE_SIGNING_KEY` 리포지토리 secret에 넣고 따로 백업합니다. 공개키는
+`Sources/PriTypeCore/UpdateSignature.swift`의 `releasePublicKeyBase64`에 있으며, 릴리스 워크플로가
+서명 직후 이 값으로 다시 검증해 둘이 어긋난 채 배포되는 일을 막습니다.
 
 ## 문제 해결
 

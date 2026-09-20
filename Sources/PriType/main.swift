@@ -43,6 +43,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         
         // Setup update notifications
         UpdateNotifier.shared.setup()
+
+        // An in-app install kills this process partway through, so the launch
+        // after one is the first chance to say whether it landed.
+        UpdateInstaller.reportPendingInstall()
         
         // Check for updates now and then daily. An input method runs from login to
         // logout, often for weeks, so a check only at launch would rarely run.

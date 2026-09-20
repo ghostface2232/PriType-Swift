@@ -97,7 +97,27 @@ public enum L10n {
         public static var error: String { localized("update.error") }
         public static var notificationTitle: String { localized("update.notificationTitle") }
         public static var notificationBody: String { localized("update.notificationBody") }
+        public static var notificationAction: String { localized("update.notificationAction") }
         public static var autoCheck: String { localized("update.autoCheck") }
+
+        // In-app install
+        public static var installButton: String { localized("update.installButton") }
+        public static var downloading: String { localized("update.downloading") }
+        public static var verifying: String { localized("update.verifying") }
+        public static var authorizing: String { localized("update.authorizing") }
+        public static var installing: String { localized("update.installing") }
+        /// Shown in the macOS authorization dialog.
+        public static var authorizationPrompt: String { localized("update.authorizationPrompt") }
+        public static var downloadFailed: String { localized("update.downloadFailed") }
+        public static var verificationFailed: String { localized("update.verificationFailed") }
+        public static var installFailed: String { localized("update.installFailed") }
+        public static var openReleasePage: String { localized("update.openReleasePage") }
+        public static var cancel: String { localized("update.cancel") }
+        /// Reported on the launch after an install.
+        public static var installedTitle: String { localized("update.installedTitle") }
+        public static var installedBody: String { localized("update.installedBody") }
+        public static var installIncompleteTitle: String { localized("update.installIncompleteTitle") }
+        public static var installIncompleteBody: String { localized("update.installIncompleteBody") }
     }
     
     // MARK: - System
