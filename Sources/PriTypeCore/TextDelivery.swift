@@ -148,11 +148,26 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
     /// lagged for a moment gets its allowance back on the next focus change.
     private var unappliedRewrites = 0
 
+    /// The unusable caret report this host keeps repeating, and how many times in
+    /// a row. Google Docs answers every query with "one character selected at
+    /// offset 0" and an empty document, whatever the real caret is: it draws its
+    /// own text and shows the input method an empty shell. Asking it again can
+    /// never help, so the identical answer, repeated, ends the questions for this
+    /// field. A real selection being deleted looks nothing like this — its range
+    /// moves with the text.
+    private var repeatedUnusableSelection: (range: NSRange, count: Int)?
+
     /// Whether the rewrite has given up on this field.
-    private var precomposeIsHopeless: Bool { unappliedRewrites >= Self.unappliedRewriteLimit }
+    private var precomposeIsHopeless: Bool {
+        unappliedRewrites >= Self.unappliedRewriteLimit
+            || (repeatedUnusableSelection?.count ?? 0) >= Self.unusableSelectionLimit
+    }
 
     /// Two are a pattern; one can be a single slow moment in a healthy host.
     private static let unappliedRewriteLimit = 2
+
+    /// The same unusable caret three times running is the host's fixed answer.
+    private static let unusableSelectionLimit = 3
 
     /// Whether the caret sits right after text this input method wrote. Everything
     /// it writes is precomposed (`CompositionHelpers.convertAndNormalize`), so the
@@ -212,7 +227,20 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
     /// Give this host's rewrites another chance (called when the field changes).
     func resumePrecomposing() {
         unappliedRewrites = 0
+        repeatedUnusableSelection = nil
         lastPrecomposed = nil
+    }
+
+    /// Count an unusable caret report, and say so once when the host is written off.
+    private func noteUnusableSelection(_ selRange: NSRange) {
+        if let repeated = repeatedUnusableSelection, repeated.range == selRange {
+            repeatedUnusableSelection = (selRange, repeated.count + 1)
+        } else {
+            repeatedUnusableSelection = (selRange, 1)
+        }
+        if precomposeIsHopeless {
+            DebugLogger.log("Precompose: \(bundleId) reports no usable caret; asking it no more")
+        }
     }
 
     func precomposeSyllableBeforeCursor(followsBackspace: Bool) {
@@ -229,7 +257,11 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         // A selection is deleted whole; only a caret deletes by character.
         let selRange = client.selectedRange()
         guard selRange.location != NSNotFound, selRange.location < 10000000,
-              selRange.length == 0, selRange.location >= 2 else { return }
+              selRange.length == 0, selRange.location >= 2 else {
+            noteUnusableSelection(selRange)
+            return
+        }
+        repeatedUnusableSelection = nil
 
         // Four units: a syllable of three jamo and the one before it.
         let start = max(0, selRange.location - 4)

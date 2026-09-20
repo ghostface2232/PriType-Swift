@@ -253,6 +253,47 @@ struct IMKIntegrationTests {
         #expect(field.client.calls == [.insert("각"), .host("delete(각)")])
     }
 
+    @Test("A host with no usable caret, like Google Docs, is asked only a few times")
+    func backspaceInHostWithoutDocumentAccess() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        // What Google Docs answers to every query: one character selected at 0.
+        field.client.select(NSRange(location: 0, length: 1))
+        field.client.freezeReports = true
+        field.client.resetQueryCounts()
+
+        for _ in 0..<8 {
+            #expect(!harness.press(.backspace))
+        }
+        #expect(field.client.selectionQueries == 3, "Three identical answers are enough")
+        #expect(field.client.substringQueries == 0, "It never got as far as reading text")
+
+        // A new field may be an ordinary one, so the questions start again.
+        harness.blur()
+        harness.focus(field)
+        field.client.select(NSRange(location: 0, length: 1))
+        field.client.resetQueryCounts()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.selectionQueries == 1)
+    }
+
+    @Test("A real selection, deleted again and again, is not mistaken for that")
+    func repeatedSelectionDeletesKeepAsking() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("가나다라마바사", replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.resetQueryCounts()
+
+        for start in [5, 3, 1] {   // different places, and the text keeps shrinking
+            field.client.select(NSRange(location: start, length: 2))
+            #expect(!harness.press(.backspace))
+        }
+        field.client.placeCaret(at: field.client.text.utf16.count)
+        #expect(!harness.press(.backspace))
+        #expect(field.client.selectionQueries == 4, "Selections move, so none of them is a fixed answer")
+    }
+
     @Test("Escape drops the composition and is consumed")
     func escapeCancels() {
         let (harness, field) = start()
