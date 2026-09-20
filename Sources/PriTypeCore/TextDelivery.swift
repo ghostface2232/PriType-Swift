@@ -127,6 +127,14 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
     /// experimental flag flipped mid-session) and the adapter must be rebuilt.
     var deliveryMode: InputDeliveryMode { .markedText }
 
+    /// Caret location of the last decomposed-syllable rewrite. A Backspace that
+    /// arrives with the caret still exactly there means the host has not applied
+    /// the rewrite and the delete that followed it: either its selection report
+    /// lags (Chromium/Electron) or it ignored the replacement range and undid our
+    /// insert itself. Rewriting again would re-insert text the host just deleted,
+    /// so that Backspace is left to the host, which deletes a jamo as before.
+    private var lastPrecomposedCaret: Int?
+
     init(client: IMKTextInput, bundleId: String) {
         self.client = client
         self.bundleId = bundleId
@@ -140,6 +148,7 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         // what native hosts (e.g. KakaoTalk) expect. Passing an explicit marked
         // range here desynced KakaoTalk's composition (stranded marked text +
         // missing commit on focus loss).
+        lastPrecomposedCaret = nil
         client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
     }
 
@@ -165,6 +174,28 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
 
         let replacementRange = NSRange(location: selRange.location - length, length: length)
         client.insertText(text, replacementRange: replacementRange)
+    }
+
+    func precomposeSyllableBeforeCursor() {
+        // A selection is deleted whole; only a caret deletes by character.
+        let selRange = client.selectedRange()
+        guard selRange.location != NSNotFound, selRange.location < 10000000,
+              selRange.length == 0, selRange.location >= 2,
+              lastPrecomposedCaret != selRange.location else {
+            lastPrecomposedCaret = nil
+            return
+        }
+        lastPrecomposedCaret = nil
+
+        // Four units: a syllable of three jamo and the one before it.
+        let start = max(0, selRange.location - 4)
+        let range = NSRange(location: start, length: selRange.location - start)
+        guard let before = client.attributedSubstring(from: range)?.string,
+              before.utf16.count == range.length,
+              let (length, syllable) = CompositionHelpers.decomposedSyllableSuffix(of: before) else { return }
+
+        client.insertText(syllable, replacementRange: NSRange(location: selRange.location - length, length: length))
+        lastPrecomposedCaret = selRange.location
     }
 }
 
@@ -374,5 +405,12 @@ final class DirectInsertionAdapter: BaseClientAdapter {
         state = .idle
         preparedLiveRange = nil
         super.replaceTextBeforeCursor(length: length, with: text)
+    }
+
+    override func precomposeSyllableBeforeCursor() {
+        // Shortening committed text shifts every tracked range after it.
+        state = .idle
+        preparedLiveRange = nil
+        super.precomposeSyllableBeforeCursor()
     }
 }

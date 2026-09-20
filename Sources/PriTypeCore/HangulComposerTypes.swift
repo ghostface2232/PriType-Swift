@@ -38,6 +38,15 @@ public protocol HangulComposerDelegate: AnyObject {
     ///   - length: Number of characters to replace (counting backwards from cursor)
     ///   - text: The new text to insert
     func replaceTextBeforeCursor(length: Int, with text: String)
+
+    /// Called just before a Backspace goes to the host with nothing composing.
+    /// Rewrites a decomposed (NFD) syllable before the caret as its precomposed
+    /// form, so the host deletes the syllable instead of its last jamo.
+    func precomposeSyllableBeforeCursor()
+}
+
+public extension HangulComposerDelegate {
+    func precomposeSyllableBeforeCursor() {}
 }
 
 // MARK: - InputMode Enum

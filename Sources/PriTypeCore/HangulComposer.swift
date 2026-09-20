@@ -259,6 +259,7 @@ public class HangulComposer: @unchecked Sendable {
                 return true
             }
             if !localTextBuffer.isEmpty { localTextBuffer.removeLast() }
+            delegate.precomposeSyllableBeforeCursor()
             return false
         }
         
@@ -425,6 +426,10 @@ public class HangulComposer: @unchecked Sendable {
                 delegate.setMarkedText("")
             }
             localTextBuffer = ""
+            if keyCode == KeyCode.backspace,
+               event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+                delegate.precomposeSyllableBeforeCursor()
+            }
             return false
         }
         

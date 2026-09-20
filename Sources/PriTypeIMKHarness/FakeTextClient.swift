@@ -71,9 +71,19 @@ public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
         return string as? String ?? ""
     }
 
+    /// Some hosts (Qt, custom text views) drop the replacement range and edit at
+    /// the caret instead. Set this to model one.
+    public var ignoresReplacementRange = false
+
+    /// Select `range`, as dragging over the text does.
+    public func select(_ range: NSRange) {
+        selection = range
+    }
+
     /// Where an edit lands: the explicit range, else the marked text, else the selection.
     private func target(for replacementRange: NSRange) -> NSRange {
-        if replacementRange.location != NSNotFound,
+        if !ignoresReplacementRange,
+           replacementRange.location != NSNotFound,
            NSMaxRange(replacementRange) <= storage.length {
             return replacementRange
         }
@@ -216,6 +226,11 @@ public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
                 return
             }
             range = storage.rangeOfComposedCharacterSequence(at: range.location - 1)
+            // AppKit and Blink take a decomposed syllable apart one jamo at a time.
+            let last = storage.character(at: range.location + range.length - 1)
+            if range.length > 1, (0x1100...0x11FF).contains(last) {
+                range = NSRange(location: NSMaxRange(range) - 1, length: 1)
+            }
         }
         let removed = storage.substring(with: range)
         storage.deleteCharacters(in: range)

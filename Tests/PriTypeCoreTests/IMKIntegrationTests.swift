@@ -66,6 +66,75 @@ struct IMKIntegrationTests {
         #expect(field.client.calls == [.mark("ㅇ"), .insert("ㅇ"), .host("delete(ㅇ)")])
     }
 
+    @Test("Backspace after pasted decomposed Hangul deletes the whole syllable")
+    func backspaceAfterDecomposedSyllable() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        let pasted = "\u{1100}\u{1161}\u{11A8}\u{1103}\u{1169}"   // 각도, NFD
+        field.client.insertText(pasted, replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text == "\u{1100}\u{1161}\u{11A8}")
+        #expect(field.client.calls == [.insert("도"), .host("delete(도)")])
+        harness.toggle()
+        #expect(!harness.press(.backspace), "English mode deletes syllables too")
+        #expect(field.client.text.isEmpty)
+    }
+
+    @Test("A selection, a modifier and plain text leave Backspace alone")
+    func backspaceLeavesOtherCasesAlone() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}가나", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        field.client.select(NSRange(location: 0, length: 3))
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls == [.host("delete(\u{1100}\u{1161}\u{11A8})")], "A selection goes whole")
+
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: 0, length: 0))
+        field.client.clearLog()
+        #expect(!harness.press(.backspace, modifiers: .command))
+        #expect(!field.client.calls.contains(.insert("각")), "⌘⌫ deletes a line, not a syllable")
+
+        field.client.placeCaret(at: field.client.text.utf16.count)
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.calls == [.host("delete(나)")], "Whole syllables need no rewrite")
+    }
+
+    @Test("A decomposed syllable mid-text is rewritten where the caret is")
+    func backspaceMidText() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}\u{1103}\u{1169}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.placeCaret(at: 3)
+        field.client.clearLog()
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text == "\u{1103}\u{1169}", "Only the syllable before the caret goes")
+        #expect(field.client.calls == [.insert("각"), .host("delete(각)")])
+    }
+
+    @Test("A host that ignores the replacement range is not asked twice")
+    func backspaceInHostIgnoringReplacementRange() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.ignoresReplacementRange = true
+        let syllable = "\u{1100}\u{1161}\u{11A8}"
+        field.client.insertText(syllable, replacementRange: NSRange(location: NSNotFound, length: 0))
+        field.client.clearLog()
+
+        // The host inserts 각 at the caret and then deletes it again: nothing moves.
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text == syllable)
+        // So the next Backspace must reach the host instead of inserting again.
+        #expect(!harness.press(.backspace))
+        #expect(field.client.text == "\u{1100}\u{1161}", "The host took a jamo off")
+        #expect(field.client.calls == [
+            .insert("각"), .host("delete(각)"), .host("delete(\u{11A8})"),
+        ])
+    }
+
     @Test("Escape drops the composition and is consumed")
     func escapeCancels() {
         let (harness, field) = start()
