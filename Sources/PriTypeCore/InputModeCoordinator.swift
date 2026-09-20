@@ -71,14 +71,35 @@ public final class InputModeCoordinator: @unchecked Sendable {
     }
 
     private func request(_ action: KeyAction, eventTime: TimeInterval?) {
+        // A press time is what makes an action orderable against keystrokes, and a
+        // key monitor always has one. Which thread it calls from does not decide
+        // this: the event tap runs on its own thread, while the IOKit fallback's
+        // HID callback runs on the main run loop, and both are watching the same
+        // physical keyboard with the same need to stay in order with what is typed.
+        if let eventTime {
+            pendingActions.withLock {
+                $0.append(PendingAction(action: action, eventTime: eventTime))
+            }
+            if Thread.isMainThread {
+                drainAfterKeyMonitorHop(pressedAt: eventTime)
+            } else {
+                DispatchQueue.main.async {
+                    self.drainAfterKeyMonitorHop(pressedAt: eventTime)
+                }
+            }
+            return
+        }
+
+        // No press time: there is nothing to order this against, so it runs as
+        // soon as it reaches main, after everything recorded before it.
         guard Thread.isMainThread else {
             let pending = PendingAction(
                 action: action,
-                eventTime: eventTime ?? ProcessInfo.processInfo.systemUptime
+                eventTime: ProcessInfo.processInfo.systemUptime
             )
             pendingActions.withLock { $0.append(pending) }
             DispatchQueue.main.async {
-                self.drainAfterKeyMonitorHop(pressedAt: pending.eventTime)
+                self.applyPendingKeyActions()
             }
             return
         }

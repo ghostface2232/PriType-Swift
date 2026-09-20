@@ -191,9 +191,12 @@ public final class IMKHarness {
 
     // MARK: Mode and focus events
 
-    /// The toggle key, pressed now, handled on main as the key monitor hands it over.
+    /// The toggle key, pressed now and already applied — the settled state a test
+    /// wants when the toggle is its setup rather than its subject. Use
+    /// `toggleFromKeyMonitor()` for the race itself.
     public func toggle() {
         InputModeCoordinator.shared.requestToggle(source: .customKey, eventTime: takeClock())
+        InputModeCoordinator.shared.applyPendingKeyActions()
     }
 
     /// The toggle key as the event tap sees it: recorded off main with its key
@@ -228,6 +231,7 @@ public final class IMKHarness {
     public func pressHanjaKey() {
         HanjaManager.shared.loadIfNeeded()
         InputModeCoordinator.shared.requestHanjaLookup(eventTime: takeClock())
+        InputModeCoordinator.shared.applyPendingKeyActions()
     }
 
     /// Run everything the key monitor queued, and leave the shared engine idle.

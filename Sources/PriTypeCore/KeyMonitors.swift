@@ -62,11 +62,11 @@ public enum KeyMonitors {
     /// missing, `start()` prompts (first time only) and this waits for the grant
     /// instead of leaving the toggle and Hanja keys dead until the next launch.
     private static func startIOKitFallback() {
-        IOKitManager.shared.onRightCommandToggle = {
-            InputModeCoordinator.shared.requestToggle(source: .iokitFallback)
+        IOKitManager.shared.onRightCommandToggle = { eventTime in
+            InputModeCoordinator.shared.requestToggle(source: .iokitFallback, eventTime: eventTime)
         }
-        IOKitManager.shared.onRightOptionHanja = {
-            InputModeCoordinator.shared.requestHanjaLookup()
+        IOKitManager.shared.onRightOptionHanja = { eventTime in
+            InputModeCoordinator.shared.requestHanjaLookup(eventTime: eventTime)
         }
         guard !IOKitManager.shared.start() else { return }
         DebugLogger.log("IOKit fallback waiting for Input Monitoring permission")
