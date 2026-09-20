@@ -4,7 +4,7 @@ import Testing
 import PriTypeIMKHarness
 
 /// Regressions for the input-correctness defects found in the 2026-09-20 review
-/// (`Docs/CodeReview-2026-09-20.md`). Each test is the behaviour the fix owes the
+/// (the 2026-09-20 entry in `Docs/History.md`). Each test is the behaviour the fix owes the
 /// user, phrased the way the user meets it: what they typed, what the document
 /// holds afterwards.
 ///

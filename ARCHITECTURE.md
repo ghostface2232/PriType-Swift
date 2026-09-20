@@ -240,16 +240,23 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | 이벤트 탭(`com.pritype.eventtap`) | CGEventTap 콜백. 전환·한자 동작을 기록하고, 후보창 키를 가로채고, 수정키를 떼어 낸다 |
 | 백그라운드 | 한자 사전 미리 매핑, 업데이트 확인, ABC 상태 확인용 하위 프로세스, 디버그 로그 기록 |
 
+탭 경계의 가변 상태는 모두 `Guarded`(`Guarded.swift`) 안에 있다. 재귀 잠금 하나를 감싼 상자이고, 이 패키지에서 `@unchecked Sendable`을 쓰는 유일한 자리다. 상태를 여기에 넣은 타입은 다른 가변 저장 프로퍼티가 없으므로 `Sendable`을 **검사받아서** 만족한다 — 약속이 아니라 컴파일러가 확인한다. `OSAllocatedUnfairLock`이 검사받는 대안이지만 상태가 `CFMachPort`·`CFRunLoopSource`·`CFRunLoop`·`IOHIDManager`라 쓸 수 없다. 재귀인 이유는 탭 콜백이 이벤트 하나를 처리하는 도중 `stop()`을 부르기 때문이고, 상태를 구조체가 아니라 클래스로 두는 이유도 같다(재진입한 `withLock`이 같은 객체를 준다).
+
 | 잠금 | 보호 대상 |
 |---|---|
-| `RightCommandSuppressor.lock` (재귀) | 탭의 모든 상태와 콜백. 콜백 전체 동안 잡는다. 콜백이 `stop()`을 부를 수 있어 재귀 잠금이다 |
-| `ConfigurationManager.keyBindingLock` | 탭이 키마다 읽는 값의 캐시: 전환키·한자키 바인딩, 전환 시점, 한자 켜짐 |
-| `PolledPreference.lock` | 다른 프로세스가 쓰는 설정의 캐시: Caps Lock 입력 소스 전환, 더블스페이스 마침표, 직접 입력 실험. 1초에 한 번까지만 다시 읽는다 |
+| `RightCommandSuppressor.state` | 탭의 모든 상태와 콜백. 콜백 전체 동안 잡는다 |
+| `EventTapThread.state` | 탭 소스와 그 런루프 |
+| `IOKitManager.state` | HID 매니저, `HIDShortcutState`, 대체 경로 콜백. `IOHIDManagerOpen`·`Close`는 `hidd`를 기다리는 IPC라 잠금 밖에서 한다 |
+| `ConfigurationManager.bindings` | 탭이 키마다 읽는 값의 캐시: 전환키·한자키 바인딩, 전환 시점, 한자 켜짐 |
+| `PolledPreference.state` | 다른 프로세스가 쓰는 설정의 캐시: Caps Lock 입력 소스 전환, 더블스페이스 마침표, 직접 입력 실험. 1초에 한 번까지만 다시 읽는다 |
+| `ToggleExclusionPolicy.state` | 앞에 있는 앱, 제외 목록, 작업공간 옵저버. `NSWorkspace` 등록·해제는 잠금 밖에서 한다 |
+| `PreferencesDomain.resolved` | 이 프로세스가 읽는 설정 도메인 |
 | `InputModeCoordinator.pendingActions` | 탭 스레드가 기록한 전환·한자 동작 대기열 |
 | `HanjaManager.condition` | 사전 로딩 상태. 미리 매핑만 기다리고 검색은 기다리지 않는다. 매핑된 사전 자체는 읽기 전용이다 |
 | `HanjaCandidateWindow.pageCandidatesState` | 탭이 읽는, 현재 쪽의 후보 수(0이면 창이 닫힘) |
-| `ToggleExclusionPolicy.lock` | 앞에 있는 앱과 제외 목록 |
 | libhangul `ThreadSafeHangulInputContext` | 조합 엔진 내부 상태 |
+
+**잠금 순서.** 탭 경로에서 잠금 두 개를 동시에 잡는 지점은 하나뿐이다 — `RightCommandSuppressor`가 자기 잠금 안에서 `IOKitManager.stop()`을 부른다(탭이 뜨면 대체 경로를 멈춰야 하므로). 반대 방향은 없다: `IOKitManager.handleKeyboardEvent`는 제외 정책·녹화 여부·설정값을 **모두 자기 잠금 밖에서** 먼저 읽는다. 새 코드가 이 방향을 뒤집으면 시스템 전체의 타이핑이 멈추므로, 잠금 안에서 다른 싱글턴을 부르지 않는다.
 
 컨트롤러의 정적 상태(`sharedController`, 마지막 시스템 모드, 에코 필터, `systemModeReporter`)와 조합기는 메인 스레드에서만 쓴다. IMK가 메인에서 호출한다는 전제이며 컴파일러가 강제하지는 않는다. 디버그 빌드는 IMK 콜백에서 이를 단언한다.
 
@@ -264,6 +271,8 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `PriTypeIMKHarness` | 라이브러리 | 실제 `PriTypeInputController`를 가짜 입력창(`FakeTextClient`)에 연결해 키를 흘려 넣는 통합 테스트 도구. 한자 후보창은 `FakeCandidatePresenter`가 대신해 후보를 기록하고 선택·클릭을 흉내 낸다. `Dubeolsik`은 한글 문장을 두벌식 키로 바꾼다 |
 | `PriTypeHanjaCompiler` | 실행 파일 | `hanja.txt` → `hanja.dat` 컴파일 |
 | `PriTypeBenchmark` | 실행 파일 | 한자 사전·검색, 자모 검색, 동시성, 좌표 검증, 타이핑 경로 지연 측정([BENCHMARK.md](BENCHMARK.md)) |
+| `PriTypeDeviceCheck` | 라이브러리 | 설치본을 실제 머신에 대고 검증하는 검사들과, 그 결과·종료 상태를 정하는 규칙 |
+| `PriTypeDeviceCheckCLI` | 실행 파일 | 위를 실행하는 `pritype-device-check`([Docs/DeviceVerification.md](Docs/DeviceVerification.md)) |
 | `PriTypeCoreTests` | 테스트 | 유닛·통합 테스트 |
 
 ### `PriTypeCore` 파일
@@ -310,11 +319,17 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 swift test
 ```
 
-Swift Testing 기반, 377개 테스트와 56개 Suite(2026-09-20 기준). Command Line Tools에는 Testing 모듈이 없으므로 Xcode 툴체인이 필요하다.
+Swift Testing 기반, 475개 테스트와 70개 Suite(2026-09-20 기준). Command Line Tools에는 Testing 모듈이 없으므로 Xcode 툴체인이 필요하다.
 
 - 유닛 테스트: 조합, 키 위치, 전달 정책, 직접 삽입, 키 모니터(탭 이벤트 순서, IOKit 판정, 탭 스레드, 순서 대기열, 에코 필터), 한자 사전·검색·후보창 배치, 설정 이관, ABC 끄기, 업데이트 버전 비교, 등록 계약.
 - 통합 테스트(`IMKIntegrationTests`): `PriTypeIMKHarness`로 실제 컨트롤러를 돌린다. 확정 순서, 백스페이스, 중복 키, 한/영 전환(전환키, 대기열, Caps Lock, 재확인), 포커스 전환, 긴 문단 왕복 입력, 한자(단어 변환, 짧은 끝말 교체, 커서가 옮겨진 뒤의 선택 취소, 클릭으로 닫은 뒤의 버퍼, 다른 앱의 글자, 늦은 비활성화)를 검증한다. 하니스는 macOS에 모드를 통보하는 부분을 기록만 하고 한자 후보창은 패널을 열지 않으므로, 테스트가 실제 입력 소스를 바꾸거나 창을 띄우지 않는다. 이벤트 탭의 후보창 키 라우팅과 클릭 감시는 실제 이벤트가 필요해 다루지 않는다.
 - `swift run -c release PriTypeBenchmark`: 성능 측정.
+
+### 이 테스트들이 닿지 못하는 곳
+
+하니스는 가짜 입력창을 상대한다. 그래서 빠르고 결정적이며, 바로 그 이유로 답할 수 없는 것이 있다. `IOHIDManager`는 HID 드라이버 스택이 주는 것만 보므로 합성 이벤트가 대체 경로에 아예 도달하지 않고, HIToolbox는 활성 입력 소스 목록을 프로세스별로 캐시하므로 실행 중인 입력기는 자기가 바꾼 결과를 볼 수 없으며, 시스템이 만들어 주지 않는 `CGEventTap`은 어떤 대역으로도 흉내 낼 수 없다.
+
+`pritype-device-check`가 그 자리를 맡는다. 실행 방법과 각 검사의 의미는 [Docs/DeviceVerification.md](Docs/DeviceVerification.md)에 있다. 자동 테스트에 포함되지 않는다 — 권한과 하드웨어가 필요하고, 사람이 키를 눌러야 하는 검사가 있다.
 
 ## 빌드와 배포
 

@@ -29,7 +29,7 @@ public final class InputSourceManager: @unchecked Sendable {
     /// Tell macOS which PriType mode is now active, so the menu-bar input source
     /// matches `HangulComposer.inputMode`.
     ///
-    /// `Docs/UnifiedInputArchitecture.md` forbids driving a custom toggle *with*
+    /// ARCHITECTURE.md ("한/영 전환") forbids driving a custom toggle *with*
     /// `TISSelectInputSource`, and that invariant stands: in 2.7.x the selection
     /// WAS the switch, and its asynchrony is what ate the first character after a
     /// toggle. This is the opposite order. The composer has already switched
