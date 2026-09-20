@@ -54,9 +54,15 @@ swift run pritype-device-check --interactive
 
 명령줄 바이너리에는 번들 식별자가 없어서 자기 `UserDefaults.standard`는 PriType이 키를 하나도 쓴 적 없는 빈 도메인이다. 그대로 두면 설정에 의존하는 모든 검사가 **내장 기본값**을 검증하면서 사용자의 설치본을 보고하게 된다 — F13을 전환키로 쓰는 사람에게 "우측 Command를 누르세요"라고 안내하고, 그 사람이 시키는 대로 누르면 통과한다. 그래서 이 질문을 제일 먼저, 소리 내어 한다.
 
-### `hid-open`이 skip으로 나오는 것은 정상이다
+### `hid-open`이 skip으로 나올 때
 
-설치된 PriTypeV2가 떠 있으면 별도 프로세스의 `IOHIDManagerOpen`은 `kIOReturnExclusiveAccess`(-536870203)로 실패한다. 권한 부족은 `kIOReturnNotPermitted`(-536870174)로 따로 구분된다. 이 검사와 `physical-toggle-hid`를 실제로 돌리려면 **PriTypeV2를 종료한 뒤** 실행한다.
+`IOHIDManagerOpen`이 `kIOReturnExclusiveAccess`(-536870203)를 돌려주면 누군가 이미 키보드를 **seize**한 것이다. 권한 부족은 `kIOReturnNotPermitted`(-536870174)로 따로 구분된다.
+
+**PriTypeV2는 대개 범인이 아니다.** PriType은 `kIOHIDOptionsTypeNone`으로, 즉 비배타로 연다 — 비배타끼리는 공존한다. 게다가 `IOKitManager`는 CGEventTap이 실패했을 때만 도는 대체 경로라, 평소 PriType은 HID 매니저를 아예 열지 않는다. 실제로 이 Mac에서 PriTypeV2를 종료하고 `pgrep`으로 확인한 뒤에도 같은 오류가 났다.
+
+장치를 seize하는 쪽은 **키 리맵퍼**다. Karabiner-Elements가 대표적이고, 그게 그 프로그램의 동작 방식이다. skip 메시지는 알려진 후보 중 지금 실제로 도는 것들을 나열한다 — IOKit은 누가 쥐고 있는지 알려주지 않으므로, 그 목록은 단정이 아니라 찾아볼 곳이다.
+
+이 검사와 `physical-toggle-hid`를 실제로 돌리려면 그 프로그램을 멈춰야 한다. Karabiner는 `SMAppService`로 권한 데몬을 등록하므로 `launchctl`로 내려가지 않는다 — Karabiner-Elements 설정의 Misc에서 종료하거나, 시스템 설정 > 일반 > 로그인 항목의 백그라운드 항목에서 끈다.
 
 ### 합성 입력으로는 통과시킬 수 없다
 
