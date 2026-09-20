@@ -77,6 +77,10 @@ enum KeyboardOwners {
         guard (try? process.run()) != nil else { return [] }
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        return String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+        // Failable rather than lossy: a process list that did not decode is not
+        // a process list with a few characters missing, and reporting "nothing
+        // recognized" is the honest answer to one this could not read.
+        guard let listing = String(bytes: data, encoding: .utf8) else { return [] }
+        return listing.split(separator: "\n").map(String.init)
     }
 }
