@@ -143,6 +143,35 @@ struct ReviewFixRegressionTests {
         #expect(client.text == "가. ")
     }
 
+    @Test("A host that holds the text decomposed still gets its period")
+    func decomposedHostStillSubstitutes() {
+        // AppKit and Blink both hand back decomposed Hangul — which is why
+        // `precomposeSyllableBeforeCursor` exists at all. There, `가 ` is three
+        // UTF-16 units, not two, and a window sized for the composed form reads
+        // the middle of the syllable.
+        let client = FakeTextClient()
+        let adapter = MarkedTextAdapter(client: client, bundleId: client.bundleID)
+        client.insertText("가 ".decomposedStringWithCanonicalMapping,
+                          replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(client.text.utf16.count == 3, "the host holds it decomposed")
+
+        #expect(adapter.replaceTextBeforeCursor(length: 1, with: ". ", verifying: "가 ") == .issued)
+        #expect(client.text.precomposedStringWithCanonicalMapping == "가. ")
+    }
+
+    @Test("A decomposed host's moved caret is still refused")
+    func decomposedHostStillRefusesAMovedCaret() {
+        // The wider window must not become a licence to edit anywhere: the text in
+        // front of the caret still has to be the text the substitution was computed
+        // from, whatever form the host keeps it in.
+        let client = FakeTextClient()
+        let adapter = MarkedTextAdapter(client: client, bundleId: client.bundleID)
+        client.insertText("가 나".decomposedStringWithCanonicalMapping,
+                          replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(adapter.replaceTextBeforeCursor(length: 1, with: ". ", verifying: "가 ") == .unavailable)
+        #expect(client.text.precomposedStringWithCanonicalMapping == "가 나")
+    }
+
     // MARK: 5 — Changing the delivery mode ends the composition it was rendering
 
     private func makeSession(_ client: FakeTextClient, _ composer: HangulComposer) -> InputSession {

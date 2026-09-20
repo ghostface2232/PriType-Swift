@@ -233,20 +233,42 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         guard DirectInsertionPlanner.isUsableCollapsedSelection(selRange),
               selRange.location >= contextLength else { return .unavailable }
 
-        let contextRange = NSRange(location: selRange.location - contextLength, length: contextLength)
+        // The context is measured from what this input method remembers typing,
+        // which is composed (NFC). A host may hold the same text decomposed, where
+        // one Hangul syllable is three UTF-16 units instead of one, so a window the
+        // size of the composed context would read the middle of a syllable and
+        // decide, correctly for what it read, that the text is not the text. Read
+        // wide enough for the decomposed form and compare by content.
+        let windowLength = min(selRange.location, contextLength * Self.maxUTF16UnitsPerCharacter)
+        let windowRange = NSRange(location: selRange.location - windowLength, length: windowLength)
+
         // Unreadable is not the same as unchanged. A host that cannot show what it
         // holds cannot authorize an edit to it either.
-        guard let actual = client.attributedSubstring(from: contextRange)?.string,
-              actual.precomposedStringWithCanonicalMapping
-                  == context.precomposedStringWithCanonicalMapping else {
+        guard let window = client.attributedSubstring(from: windowRange)?.string,
+              window.precomposedStringWithCanonicalMapping
+                  .hasSuffix(context.precomposedStringWithCanonicalMapping) else {
             return .unavailable
         }
 
+        // The units actually being replaced have to be the intended ones in the
+        // host's own representation, whatever its normalization did in front of
+        // them. (For the double-space period they are one space, which is one unit
+        // either way — but a caller that replaces something else must not inherit
+        // an assumption that only holds for spaces.)
         let replacementRange = NSRange(location: selRange.location - length, length: length)
+        guard Array(window.utf16).suffix(length)
+                .elementsEqual(Array(context.utf16).suffix(length)) else {
+            return .unavailable
+        }
+
         noteOwnOutput()
         client.insertText(text, replacementRange: replacementRange)
         return .issued
     }
+
+    /// A decomposed Hangul syllable is three UTF-16 units where the composed form
+    /// is one, and no canonical decomposition in Unicode is longer than four.
+    private static let maxUTF16UnitsPerCharacter = 4
 
     /// Record that the caret now follows text this input method just wrote.
     /// EVERY write to the client from an adapter goes through here.
