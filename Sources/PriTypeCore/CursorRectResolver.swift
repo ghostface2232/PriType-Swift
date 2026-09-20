@@ -378,10 +378,12 @@ public enum CursorRectResolver {
     /// Fallback: use element's AXPosition to approximate caret location
     private static func getElementCaretPosition(_ axElement: AXUIElement,
                                                 within deadline: AXDeadline) -> NSRect? {
+        // Short-circuited: a host that will not give a position is not asked for a
+        // size, which is one fewer round trip out of a budget it is already failing.
         let posValue = copyAttribute(axElement, kAXPositionAttribute as String, within: deadline)
-        let sizeValue = copyAttribute(axElement, kAXSizeAttribute as String, within: deadline)
-
-        guard let pv = validatedAXValue(posValue), let sv = validatedAXValue(sizeValue) else {
+        guard let pv = validatedAXValue(posValue),
+              let sv = validatedAXValue(copyAttribute(axElement, kAXSizeAttribute as String,
+                                                      within: deadline)) else {
             DebugLogger.log("Hanja AX: element position/size unavailable")
             return nil
         }
