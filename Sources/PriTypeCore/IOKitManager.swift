@@ -86,14 +86,67 @@ public final class IOKitManager: @unchecked Sendable {
     }
 
     // MARK: - Start/Stop
-    
+
+    /// Why a start did not happen, in the terms the operator has to act on.
+    ///
+    /// `start()` returns a bare `false` because its callers only choose between
+    /// the tap and the fallback. The on-device verification tool has to tell a
+    /// missing permission from a keyboard another process already owns — the two
+    /// have completely different remedies, and `IOHIDManagerOpen` reports them as
+    /// two numbers that look alike. This is that distinction, made once, on the
+    /// path the app itself takes.
+    public enum StartFailure: Error, Sendable, Equatable {
+        /// The user has refused Input Monitoring; only System Settings can undo it.
+        case inputMonitoringDenied
+        /// Never asked, and this caller chose not to prompt.
+        case inputMonitoringNotDetermined
+        /// Another process holds the keyboards — in practice, a running PriTypeV2.
+        case keyboardsExclusivelyOwned(IOReturn)
+        /// `IOHIDManagerOpen` failed for some other reason.
+        case openFailed(IOReturn)
+
+        public var summary: String {
+            switch self {
+            case .inputMonitoringDenied:
+                return "Input Monitoring is denied for this binary"
+            case .inputMonitoringNotDetermined:
+                return "Input Monitoring has never been granted for this binary"
+            case .keyboardsExclusivelyOwned(let code):
+                return "another process owns the keyboards (IOReturn \(code))"
+            case .openFailed(let code):
+                return "IOHIDManagerOpen failed (IOReturn \(code))"
+            }
+        }
+    }
+
+    /// `kIOReturnExclusiveAccess`. Spelled out because the IOKit constant is not
+    /// exposed to Swift and the literal alone reads as noise.
+    static let exclusiveAccess: IOReturn = -536_870_203
+
     /// Start monitoring keyboard events via IOHIDManager
     /// - Returns: `true` if successfully started, `false` otherwise
     @discardableResult
     public func start() -> Bool {
+        switch start(promptForInputMonitoring: true) {
+        case .success:
+            return true
+        case .failure(let reason):
+            DebugLogger.log("IOKitManager: \(reason.summary)")
+            return false
+        }
+    }
+
+    /// The same start, saying why when it does not happen.
+    ///
+    /// - Parameter promptForInputMonitoring: whether a never-asked permission
+    ///   shows the system prompt. The app prompts; a verification run must not,
+    ///   because a tool that changes the machine while measuring it cannot be
+    ///   run twice and compared.
+    @discardableResult
+    public func start(promptForInputMonitoring: Bool) -> Result<Void, StartFailure> {
         guard manager == nil else {
             DebugLogger.log("IOKitManager: Already running")
-            return true
+            return .success(())
         }
 
         // Without Input Monitoring, IOHIDManagerOpen fails with a bare
@@ -102,11 +155,13 @@ public final class IOKitManager: @unchecked Sendable {
         case .granted:
             break
         case .notDetermined:
+            guard promptForInputMonitoring else { return .failure(.inputMonitoringNotDetermined) }
             DebugLogger.log("IOKitManager: Input Monitoring not determined — requesting")
-            guard Self.requestInputMonitoringPermission() else { return false }
+            guard Self.requestInputMonitoringPermission() else {
+                return .failure(.inputMonitoringNotDetermined)
+            }
         case .denied:
-            DebugLogger.log("IOKitManager: Input Monitoring denied — cannot read keyboards")
-            return false
+            return .failure(.inputMonitoringDenied)
         }
 
         // A new ownership lifecycle must not inherit a half-pressed modifier from a
@@ -150,13 +205,17 @@ public final class IOKitManager: @unchecked Sendable {
         let result = IOHIDManagerOpen(hidManager, IOOptionBits(kIOHIDOptionsTypeNone))
         if result != kIOReturnSuccess {
             DebugLogger.log("IOKitManager: Failed to open IOHIDManager: \(result)")
+            IOHIDManagerUnscheduleFromRunLoop(hidManager, CFRunLoopGetCurrent(),
+                                              CFRunLoopMode.defaultMode.rawValue)
             manager = nil
-            return false
+            return .failure(result == Self.exclusiveAccess
+                            ? .keyboardsExclusivelyOwned(result)
+                            : .openFailed(result))
         }
         
         let config = ConfigurationManager.shared
         DebugLogger.log("IOKitManager: Started successfully (toggle=\(config.toggleKeyBinding.displayName), hanja=\(config.hanjaKeyBinding.displayName))")
-        return true
+        return .success(())
     }
     
     /// Stop monitoring

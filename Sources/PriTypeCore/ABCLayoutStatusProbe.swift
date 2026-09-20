@@ -46,9 +46,26 @@ public enum ABCLayoutStatusProbe {
         executable: URL? = Bundle.main.executableURL,
         timeout: TimeInterval = 2
     ) -> Bool {
+        answerFromFreshProcess(executable: executable, timeout: timeout) ?? false
+    }
+
+    /// The same probe, telling a real answer from no answer at all.
+    ///
+    /// The app collapses the two: a probe that did not answer cannot prove ABC is
+    /// gone, so it reports "still enabled" and the user tries again. A
+    /// verification run has to separate them — "ABC is enabled" is a fact about
+    /// the machine, while "the probe never answered" is this mechanism being
+    /// broken, and the second one is the finding.
+    ///
+    /// - Returns: whether ABC is disabled, or `nil` when the child produced no
+    ///   usable answer.
+    public static func answerFromFreshProcess(
+        executable: URL? = Bundle.main.executableURL,
+        timeout: TimeInterval = 2
+    ) -> Bool? {
         guard let executable else {
             DebugLogger.log("ABCLayoutStatusProbe: no executable URL")
-            return false
+            return nil
         }
         let process = Process()
         process.executableURL = executable
@@ -62,7 +79,7 @@ public enum ABCLayoutStatusProbe {
             try process.run()
         } catch {
             DebugLogger.log("ABCLayoutStatusProbe: launch failed — \(error)")
-            return false
+            return nil
         }
         // The answer is one short line, far below the pipe buffer, so waiting for
         // exit before reading cannot deadlock. A hung child is killed, not awaited.
@@ -70,13 +87,13 @@ public enum ABCLayoutStatusProbe {
             process.terminate()
             _ = finished.wait(timeout: .now() + 1)
             DebugLogger.log("ABCLayoutStatusProbe: timed out")
-            return false
+            return nil
         }
         let data = stdout.fileHandleForReading.readDataToEndOfFile()
         let output = String(data: data, encoding: .utf8) ?? ""
         guard process.terminationStatus == 0, let answer = parse(output) else {
             DebugLogger.log("ABCLayoutStatusProbe: unusable answer status=\(process.terminationStatus) output=\(output)")
-            return false
+            return nil
         }
         return answer
     }

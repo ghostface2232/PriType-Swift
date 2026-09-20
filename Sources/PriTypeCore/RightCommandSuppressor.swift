@@ -500,7 +500,38 @@ public final class RightCommandSuppressor: @unchecked Sendable {
         return flags.intersection(required) == required
     }
 
+    /// Where the most recent toggle came from.
+    ///
+    /// Exists for the on-device verification run, which has to tell a key a
+    /// person pressed from one a script posted. Both reach this callback — that
+    /// is what a session tap is — so a run driven by `osascript` would otherwise
+    /// report the toggle key working when nothing about the hardware path had
+    /// been exercised. The window server stamps a posted event with the posting
+    /// process; a key the hardware produced carries 0.
+    ///
+    /// One field read per toggle, which a person performs a few times a minute.
+    public struct ToggleProvenance: Sendable, Equatable {
+        public let eventTime: TimeInterval
+        /// The process that posted the event, or 0 for hardware.
+        public let sourcePID: Int64
+        public var isHardware: Bool { sourcePID == 0 }
+
+        public init(eventTime: TimeInterval, sourcePID: Int64) {
+            self.eventTime = eventTime
+            self.sourcePID = sourcePID
+        }
+    }
+
+    /// The most recent toggle's provenance, or nil if none has been seen.
+    public var lastToggleProvenance: ToggleProvenance? {
+        lock.withLock { _lastToggleProvenance }
+    }
+    private var _lastToggleProvenance: ToggleProvenance?
+
     private func triggerToggle(_ event: CGEvent) {
+        _lastToggleProvenance = ToggleProvenance(
+            eventTime: Self.eventTime(of: event),
+            sourcePID: event.getIntegerValueField(.eventSourceUnixProcessID))
         // Hand the toggle over right here, on the tap thread. The owner records it
         // with the key's time and applies it on main (`InputModeCoordinator
         // .requestToggle`), so the keystroke typed next cannot overtake it. IMK

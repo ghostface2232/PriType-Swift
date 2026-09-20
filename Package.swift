@@ -14,6 +14,11 @@ let package = Package(
         .library(
             name: "PriTypeCore",
             targets: ["PriTypeCore"]),
+        // Verifies an install against the machine it runs on. Not part of the
+        // app: it answers what the in-process suite cannot reach.
+        .executable(
+            name: "pritype-device-check",
+            targets: ["PriTypeDeviceCheckCLI"]),
     ],
     dependencies: [
         // Pinned to the revision PriType is tested against. The newest tag,
@@ -67,7 +72,22 @@ let package = Package(
             dependencies: [
                 "PriTypeCore",
                 "PriTypeIMKHarness",
+                "PriTypeDeviceCheck",
                 .product(name: "LibHangul", package: "libhangul-swift")
+            ]
+        ),
+        .target(
+            name: "PriTypeDeviceCheck",
+            dependencies: ["PriTypeCore"],
+            linkerSettings: [
+                .unsafeFlags(["-framework", "InputMethodKit"])
+            ]
+        ),
+        .executableTarget(
+            name: "PriTypeDeviceCheckCLI",
+            dependencies: ["PriTypeCore", "PriTypeDeviceCheck"],
+            linkerSettings: [
+                .unsafeFlags(["-framework", "InputMethodKit"])
             ]
         ),
         .executableTarget(
