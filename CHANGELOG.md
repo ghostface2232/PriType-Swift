@@ -5,7 +5,7 @@ All notable changes to PriType-Swift will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.8.1] - 2026-09-20 (Stable)
 
 ### 추가 (설정 창에서 바로 업데이트 설치 — 2026-09-20)
 - 업데이트를 확인만 하고 다운로드와 설치는 직접 해야 했던 것을, 설정 창의 "업데이트 설치" 버튼 하나로 끝내도록 했습니다. 내려받기, 검증, 설치가 이어서 진행되고 관리자 암호는 한 번만 묻습니다. 설치가 끝나면 PriType이 스스로 다시 시작합니다.
