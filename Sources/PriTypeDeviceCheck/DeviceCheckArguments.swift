@@ -26,12 +26,15 @@ public struct DeviceCheckArguments: Sendable, Equatable {
         case unrecognized(String)
         case missingValue(String)
         case unusableTimeout(String)
+        case emptySelection(String)
 
         public var message: String {
             switch self {
             case .unrecognized(let argument): return "unrecognized argument: \(argument)"
             case .missingValue(let flag): return "\(flag) needs a value"
             case .unusableTimeout(let value): return "--timeout wants a positive number of seconds, not \(value)"
+            case .emptySelection(let value):
+                return "--only names no check: \(value.debugDescription)"
             }
         }
     }
@@ -59,10 +62,16 @@ public struct DeviceCheckArguments: Sendable, Equatable {
                 parsed.selection.allowMutation = true
             case "--only":
                 let value = try nextValue(for: "--only")
-                parsed.selection.ids.formUnion(
-                    value.split(separator: ",")
-                        .map { $0.trimmingCharacters(in: .whitespaces) }
-                        .filter { !$0.isEmpty })
+                let ids = value.split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                // An empty set means "no filter" to the runner, so a value that
+                // trims away to nothing — `--only ""`, `--only ",,"`, or
+                // `--only "$CHECKS"` with the variable unset — would quietly run
+                // every unattended check and report on a set nobody asked for.
+                // Asking for nothing is a mistake, not a request for everything.
+                guard !ids.isEmpty else { throw ParseError.emptySelection(value) }
+                parsed.selection.ids.formUnion(ids)
             case "--timeout":
                 let value = try nextValue(for: "--timeout")
                 guard let seconds = TimeInterval(value), seconds > 0 else {

@@ -206,6 +206,28 @@ struct DeviceCheckArgumentsTests {
         #expect(parsed.wantsList)
     }
 
+    @Test("An --only that names no check is an error, not a request for everything")
+    func emptyOnlyIsRejected() {
+        // The runner reads an empty id set as "no filter". So a value that trims
+        // away to nothing would run every unattended check and could exit 0,
+        // having verified a different set than the caller named — the shape this
+        // takes in practice is `--only "$CHECKS"` with the variable unset.
+        for value in ["", "   ", ",", ",, ", " , , "] {
+            #expect(throws: DeviceCheckArguments.ParseError.emptySelection(value)) {
+                try DeviceCheckArguments.parse(["--only", value])
+            }
+        }
+    }
+
+    @Test("A second --only that names nothing is rejected even after a good one")
+    func emptyOnlyAfterAGoodOne() {
+        // Otherwise the bad value is absorbed into the set the first one built,
+        // and the mistake disappears.
+        #expect(throws: DeviceCheckArguments.ParseError.emptySelection(",")) {
+            try DeviceCheckArguments.parse(["--only", "event-tap", "--only", ","])
+        }
+    }
+
     @Test("An unrecognized argument is an error, not an ignored word")
     func unrecognized() {
         #expect(throws: DeviceCheckArguments.ParseError.unrecognized("--intercative")) {
