@@ -336,9 +336,11 @@ public extension ConfigurationProviding {
 /// When a key binding changes, a `PriTypeKeyBindingChanged` notification is posted.
 ///
 /// ## Thread Safety
-/// This class uses `UserDefaults` which is thread-safe for reading/writing.
-/// The class is marked `@unchecked Sendable` as UserDefaults provides the synchronization.
-public final class ConfigurationManager: ConfigurationProviding, @unchecked Sendable {
+/// Every stored property is a `let`, and each one is `Sendable` on its own:
+/// `UserDefaults` synchronizes its own reads and writes, and `PolledPreference`
+/// keeps its cache behind a lock. So the conformance is checked rather than
+/// promised — there is nothing here for a promise to have to cover.
+public final class ConfigurationManager: ConfigurationProviding, Sendable {
     
     // MARK: - Singleton
     
@@ -347,7 +349,12 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     
     // MARK: - Private Properties
     
-    private let defaults = UserDefaults.standard
+    /// Computed rather than stored: `UserDefaults` is not `Sendable`, and this
+    /// has only ever been `.standard`, so holding a reference to it bought
+    /// nothing and cost the whole class its checked conformance. The lookup is a
+    /// cached global accessor, and none of the hot-path reads go through it —
+    /// they answer from `PolledPreference` and the binding cache below.
+    private var defaults: UserDefaults { .standard }
 
     // Values other processes write (System Settings, `defaults write`), so they
     // have to be re-read rather than cached once. The event tap reads the Caps Lock
@@ -410,9 +417,14 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     // JSON decoding on every access is wasteful; cache in memory and invalidate on write.
     // Lock protects in-memory cache from races between CGEventTap thread and settings UI.
     
-    private var _cachedToggleBinding: KeyBinding?
-    private var _cachedHanjaBinding: KeyBinding?
-    private let keyBindingLock = NSLock()
+    private final class BindingCache {
+        var toggle: KeyBinding?
+        var hanja: KeyBinding?
+        var trigger: ToggleTrigger?
+        var hanjaEnabled: Bool?
+    }
+
+    private let bindings = Guarded(BindingCache())
     
     /// The user-configured toggle key binding
     ///
@@ -421,28 +433,24 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     /// Result is cached in memory to avoid JSON decoding on every CGEventTap callback.
     public var toggleKeyBinding: KeyBinding {
         get {
-            keyBindingLock.lock()
-            defer { keyBindingLock.unlock() }
-            if let cached = _cachedToggleBinding {
-                return cached
+            bindings.withLock { cache in
+                if let cached = cache.toggle { return cached }
+                let binding: KeyBinding
+                if let data = defaults.data(forKey: Keys.toggleKeyBinding),
+                   let decoded = try? JSONDecoder().decode(KeyBinding.self, from: data) {
+                    // Fn and Caps Lock are not supported as PriType custom toggle keys.
+                    binding = decoded.isSafeGlobalBinding ? decoded : .defaultToggle
+                } else {
+                    // Migrate from legacy toggleKey
+                    binding = toggleKey.asKeyBinding
+                }
+                cache.toggle = binding
+                return binding
             }
-            let binding: KeyBinding
-            if let data = defaults.data(forKey: Keys.toggleKeyBinding),
-               let decoded = try? JSONDecoder().decode(KeyBinding.self, from: data) {
-                // Fn and Caps Lock are not supported as PriType custom toggle keys.
-                binding = decoded.isSafeGlobalBinding ? decoded : .defaultToggle
-            } else {
-                // Migrate from legacy toggleKey
-                binding = toggleKey.asKeyBinding
-            }
-            _cachedToggleBinding = binding
-            return binding
         }
         set {
             guard newValue.isSafeGlobalBinding else { return }
-            keyBindingLock.lock()
-            _cachedToggleBinding = newValue
-            keyBindingLock.unlock()
+            bindings.withLock { $0.toggle = newValue }
             if let data = try? JSONEncoder().encode(newValue) {
                 defaults.set(data, forKey: Keys.toggleKeyBinding)
             }
@@ -456,27 +464,23 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     /// Result is cached in memory to avoid JSON decoding on every CGEventTap callback.
     public var hanjaKeyBinding: KeyBinding {
         get {
-            keyBindingLock.lock()
-            defer { keyBindingLock.unlock() }
-            if let cached = _cachedHanjaBinding {
-                return cached
+            bindings.withLock { cache in
+                if let cached = cache.hanja { return cached }
+                let binding: KeyBinding
+                if let data = defaults.data(forKey: Keys.hanjaKeyBinding),
+                   let decoded = try? JSONDecoder().decode(KeyBinding.self, from: data) {
+                    // Sanitize: Fn key (63) is not supported in CGEventTap
+                    binding = decoded.isSafeGlobalBinding ? decoded : .defaultHanja
+                } else {
+                    binding = .defaultHanja
+                }
+                cache.hanja = binding
+                return binding
             }
-            let binding: KeyBinding
-            if let data = defaults.data(forKey: Keys.hanjaKeyBinding),
-               let decoded = try? JSONDecoder().decode(KeyBinding.self, from: data) {
-                // Sanitize: Fn key (63) is not supported in CGEventTap
-                binding = decoded.isSafeGlobalBinding ? decoded : .defaultHanja
-            } else {
-                binding = .defaultHanja
-            }
-            _cachedHanjaBinding = binding
-            return binding
         }
         set {
             guard newValue.isSafeGlobalBinding else { return }
-            keyBindingLock.lock()
-            _cachedHanjaBinding = newValue
-            keyBindingLock.unlock()
+            bindings.withLock { $0.hanja = newValue }
             if let data = try? JSONEncoder().encode(newValue) {
                 defaults.set(data, forKey: Keys.hanjaKeyBinding)
             }
@@ -486,44 +490,40 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     
     // MARK: - Toggle Trigger
 
-    private var _cachedToggleTrigger: ToggleTrigger?
-
     /// When a lone-modifier toggle key switches: on press (default, the
     /// long-standing behavior) or on a tap with no other key. Cached because the
     /// event tap and the IOKit monitor read it on every key event.
     public var toggleTrigger: ToggleTrigger {
         get {
-            keyBindingLock.withLock {
-                if let cached = _cachedToggleTrigger { return cached }
+            bindings.withLock { cache in
+                if let cached = cache.trigger { return cached }
                 let value = defaults.string(forKey: Keys.toggleTrigger).flatMap(ToggleTrigger.init(rawValue:)) ?? .press
-                _cachedToggleTrigger = value
+                cache.trigger = value
                 return value
             }
         }
         set {
-            keyBindingLock.withLock { _cachedToggleTrigger = newValue }
+            bindings.withLock { $0.trigger = newValue }
             defaults.set(newValue.rawValue, forKey: Keys.toggleTrigger)
         }
     }
 
     // MARK: - Hanja
 
-    private var _cachedHanjaEnabled: Bool?
-
     /// Whether Hanja conversion is on. When off, the Hanja key is not intercepted
     /// (it reaches apps as a plain key) and the dictionary is never mapped.
     /// Default: on. Cached because the event tap reads it on every key event.
     public var hanjaEnabled: Bool {
         get {
-            keyBindingLock.withLock {
-                if let cached = _cachedHanjaEnabled { return cached }
+            bindings.withLock { cache in
+                if let cached = cache.hanjaEnabled { return cached }
                 let value = defaults.object(forKey: Keys.hanjaEnabled) as? Bool ?? true
-                _cachedHanjaEnabled = value
+                cache.hanjaEnabled = value
                 return value
             }
         }
         set {
-            keyBindingLock.withLock { _cachedHanjaEnabled = newValue }
+            bindings.withLock { $0.hanjaEnabled = newValue }
             defaults.set(newValue, forKey: Keys.hanjaEnabled)
         }
     }
@@ -566,10 +566,10 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
     public func migrateKeyBindingsIfNeeded() -> Bool {
         let changed = Self.migrateKeyBindings(in: defaults)
         if changed {
-            keyBindingLock.lock()
-            _cachedToggleBinding = nil
-            _cachedHanjaBinding = nil
-            keyBindingLock.unlock()
+            bindings.withLock { cache in
+                cache.toggle = nil
+                cache.hanja = nil
+            }
             NotificationCenter.default.post(name: .keyBindingChanged, object: nil)
         }
         return changed
@@ -717,17 +717,20 @@ public final class ConfigurationManager: ConfigurationProviding, @unchecked Send
 /// There is no reliable change notification for these keys, and a second of
 /// staleness after flipping a switch in System Settings is invisible, while a
 /// preferences lookup on every keystroke is not free.
-final class PolledPreference: @unchecked Sendable {
-    private let lock = NSLock()
+final class PolledPreference: Sendable {
+    private final class State {
+        var cached = false
+        var readAt = -TimeInterval.infinity
+        /// A refresh is already on its way; a second reader must not start another.
+        var refreshing = false
+        /// Bumped by `invalidate()`. A refresh that started before it reads a value
+        /// this process has since replaced, so its answer is dropped.
+        var generation: UInt64 = 0
+    }
+
+    private let state = Guarded(State())
     private let read: @Sendable () -> Bool
     private let interval: TimeInterval
-    private var cached = false
-    private var readAt = -TimeInterval.infinity
-    /// A refresh is already on its way; a second reader must not start another.
-    private var refreshing = false
-    /// Bumped by `invalidate()`. A refresh that started before it reads a value
-    /// this process has since replaced, so its answer is dropped.
-    private var generation: UInt64 = 0
 
     /// One queue for every polled preference. The reads are rare (one per
     /// interval, per preference) and none of them is urgent.
@@ -758,52 +761,48 @@ final class PolledPreference: @unchecked Sendable {
     /// next one is current. These are preferences a person changes in System
     /// Settings, so a keystroke's worth of lag is not something they can see.
     var value: Bool {
-        lock.lock()
-        let now = ProcessInfo.processInfo.systemUptime
+        let outcome: (answer: Bool, refreshFrom: UInt64?) = state.withLock { state in
+            let now = ProcessInfo.processInfo.systemUptime
 
-        // Nothing has been read yet, so there is no cache to answer from. This one
-        // read is synchronous — it is the cost the caller pays today, once — and
-        // every read after it is the refresh below.
-        guard readAt > -.infinity else {
-            let first = read()
-            cached = first
-            readAt = now
-            lock.unlock()
-            return first
+            // Nothing has been read yet, so there is no cache to answer from. This
+            // one read is synchronous — it is the cost the caller pays today, once
+            // — and every read after it is the refresh below.
+            guard state.readAt > -.infinity else {
+                let first = read()
+                state.cached = first
+                state.readAt = now
+                return (first, nil)
+            }
+
+            let shouldRefresh = (now - state.readAt >= interval) && !state.refreshing
+            if shouldRefresh { state.refreshing = true }
+            return (state.cached, shouldRefresh ? state.generation : nil)
         }
 
-        let shouldRefresh = (now - readAt >= interval) && !refreshing
-        if shouldRefresh {
-            refreshing = true
-        }
-        let answer = cached
-        let startedAt = generation
-        lock.unlock()
-
-        if shouldRefresh {
+        if let startedAt = outcome.refreshFrom {
             Self.refreshQueue.async { [self] in
                 let fresh = read()
                 let readAt = ProcessInfo.processInfo.systemUptime
-                lock.withLock {
-                    refreshing = false
+                state.withLock { state in
+                    state.refreshing = false
                     // `invalidate()` ran while this was in flight: what it read is
                     // the value this process has already replaced.
-                    guard generation == startedAt else { return }
-                    cached = fresh
-                    self.readAt = readAt
+                    guard state.generation == startedAt else { return }
+                    state.cached = fresh
+                    state.readAt = readAt
                 }
             }
         }
-        return answer
+        return outcome.answer
     }
 
     /// Re-read on the next access (after this process wrote the value itself).
     /// That read is synchronous, so a setting the user just changed takes effect
     /// on the next keystroke rather than on the one after it.
     func invalidate() {
-        lock.withLock {
-            readAt = -.infinity
-            generation &+= 1
+        state.withLock { state in
+            state.readAt = -.infinity
+            state.generation &+= 1
         }
     }
 }

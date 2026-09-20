@@ -21,6 +21,10 @@ import os.log
 /// ```swift
 /// DebugLogger.log("User pressed key")  // Only logs in DEBUG builds
 /// ```
+/// - Note: The `@unchecked` conformance covers static storage that `logQueue`
+///   serializes — a serial queue is the synchronization here, and routing it
+///   through a lock as well would buy nothing. The one static read off-queue is
+///   `emittedLineObserver`, which is DEBUG-only and documented where it sits.
 public final class DebugLogger: @unchecked Sendable {
     
     #if DEBUG
@@ -99,7 +103,13 @@ public final class DebugLogger: @unchecked Sendable {
     // MARK: - Public API
     
     /// Cached date formatter for performance (avoid repeated allocations)
-    /// - Note: Access is serialized via logQueue, so nonisolated(unsafe) is safe here.
+    ///
+    /// - Note: Only ever touched on `logQueue`. That used to be written here and
+    ///   not be true: `log()` formatted the timestamp on the caller's thread,
+    ///   which for this logger is every thread there is, including the event tap.
+    ///   The caller now takes a `Date` — a value, and cheap — and the formatting
+    ///   happens with the write. The line's time is still when `log()` was
+    ///   called, not when the queue got to it.
     nonisolated(unsafe) private static let dateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         return formatter
@@ -109,6 +119,11 @@ public final class DebugLogger: @unchecked Sendable {
     /// test can assert what does NOT appear in the DEFAULT Debug output — whether
     /// input the user typed reached the log through some path that skipped
     /// `logSensitive`. DEBUG only, and nil unless a test installs it.
+    ///
+    /// - Note: This one is read on the caller's thread rather than on `logQueue`,
+    ///   which for this logger means any thread — a test installs it before it
+    ///   logs and removes it after, and nothing in the app ever sets it. Every
+    ///   other static here is touched only from inside `logQueue`.
     nonisolated(unsafe) public static var emittedLineObserver: (@Sendable (String) -> Void)?
 
     /// Log a debug message to file with console fallback
@@ -117,10 +132,10 @@ public final class DebugLogger: @unchecked Sendable {
     /// - Important: This function is only available in DEBUG builds.
     public static func log(_ msg: String) {
         emittedLineObserver?(msg)
-        let timestamp = dateFormatter.string(from: Date())
-        let logMsg = "[\(timestamp)] \(msg)\n"
-        
+        let calledAt = Date()
+
         logQueue.async {
+            let logMsg = "[\(dateFormatter.string(from: calledAt))] \(msg)\n"
             guard let data = logMsg.data(using: .utf8) else {
                 logToConsole("Failed to encode log message: \(msg)", isError: true)
                 return

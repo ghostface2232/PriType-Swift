@@ -1,5 +1,6 @@
 import Cocoa
 import Testing
+import os
 @testable import PriTypeCore
 
 @Suite("Key recording state")
@@ -52,8 +53,13 @@ struct EventTapRecordingTests {
     @Test("Tap captures a shortcut even when its modifier is the current toggle")
     func recordsCurrentToggleCombo() async throws {
         let tap = RightCommandSuppressor()
-        var recorded: [KeyRecordingState.RecordedKey] = []
-        tap.onKeyRecorded = { code, modifiers in recorded.append(.init(keyCode: code, modifiers: modifiers)) }
+        // The callback is handed to `DispatchQueue.main.async` from the tap
+        // thread, so it has to be `@Sendable` — a captured `var` cannot be its
+        // destination, however reliably this test happens to end up on main.
+        let recorded = RecordedKeys()
+        tap.onKeyRecorded = { code, modifiers in
+            recorded.append(.init(keyCode: code, modifiers: modifiers))
+        }
         tap.isRecordingKey = true
         for (code, flags, type): (CGKeyCode, UInt64, CGEventType) in [
             (54, 0x100010, .flagsChanged), (49, 0x100010, .keyDown), (54, 0, .flagsChanged)
@@ -64,6 +70,13 @@ struct EventTapRecordingTests {
                 toggleEnabled: true, excludedOverride: false) == nil)
         }
         await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
-        #expect(recorded == [.init(keyCode: 49, modifiers: 0x100000)])
+        #expect(recorded.value == [.init(keyCode: 49, modifiers: 0x100000)])
+    }
+
+    /// Somewhere the recording callback can leave its answer from any thread.
+    private final class RecordedKeys: Sendable {
+        private let keys = OSAllocatedUnfairLock<[KeyRecordingState.RecordedKey]>(initialState: [])
+        var value: [KeyRecordingState.RecordedKey] { keys.withLock { $0 } }
+        func append(_ key: KeyRecordingState.RecordedKey) { keys.withLock { $0.append(key) } }
     }
 }

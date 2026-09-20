@@ -25,21 +25,41 @@ import ApplicationServices
 /// ## Primary Use Cases
 /// - Accessibility permission check (`hasAccessibilityPermission()`)
 /// - Hardware-level key event monitoring when CGEventTap is unavailable
-public final class IOKitManager: @unchecked Sendable {
+public final class IOKitManager: Sendable {
     
     // Singleton - accessed from IOKit callback context
     public static let shared = IOKitManager()
-    
-    private var manager: IOHIDManager?
+
+    /// Everything mutable here.
+    ///
+    /// None of it used to be protected by anything. The HID value callback runs
+    /// on the run loop that opened the manager and reads `shortcutState` and the
+    /// callbacks, while `start()` and `stop()` write all three from whoever calls
+    /// them — the class simply declared itself `@unchecked Sendable` and left it
+    /// there. In practice `KeyMonitors` is `@MainActor` and everything happened
+    /// on main, which is a property of the callers rather than of this type, and
+    /// nothing here said so or checked it.
+    private final class State {
+        var manager: IOHIDManager?
+        var shortcutState = HIDShortcutState()
+        var onToggle: (@Sendable (TimeInterval) -> Void)?
+        var onHanja: (@Sendable (TimeInterval) -> Void)?
+    }
+
+    private let state = Guarded(State())
     
     /// Callback when toggle key is pressed, with when the key was pressed on
     /// `NSEvent.timestamp`'s clock.
-    public var onRightCommandToggle: (@Sendable (TimeInterval) -> Void)?
-    
-    private var shortcutState = HIDShortcutState()
+    public var onRightCommandToggle: (@Sendable (TimeInterval) -> Void)? {
+        get { state.withLock { $0.onToggle } }
+        set { state.withLock { $0.onToggle = newValue } }
+    }
 
     /// Callback when hanja key is pressed, with its press time.
-    public var onRightOptionHanja: (@Sendable (TimeInterval) -> Void)?
+    public var onRightOptionHanja: (@Sendable (TimeInterval) -> Void)? {
+        get { state.withLock { $0.onHanja } }
+        set { state.withLock { $0.onHanja = newValue } }
+    }
     
     init() {}
     
@@ -144,7 +164,9 @@ public final class IOKitManager: @unchecked Sendable {
     ///   run twice and compared.
     @discardableResult
     public func start(promptForInputMonitoring: Bool) -> Result<Void, StartFailure> {
-        guard manager == nil else {
+        // The permission checks and the prompt go to other subsystems and can
+        // block; do them before taking the lock the HID callback needs.
+        guard state.withLock({ $0.manager == nil }) else {
             DebugLogger.log("IOKitManager: Already running")
             return .success(())
         }
@@ -164,15 +186,16 @@ public final class IOKitManager: @unchecked Sendable {
             return .failure(.inputMonitoringDenied)
         }
 
+        return state.withLock { state in
         // A new ownership lifecycle must not inherit a half-pressed modifier from a
         // previous IOKit run; otherwise its first key-up could emit a phantom toggle.
-        shortcutState = HIDShortcutState()
+        state.shortcutState = HIDShortcutState()
         
         DebugLogger.log("IOKitManager: Starting IOKit-only toggle detection...")
         
         // Create HID Manager
         let hidManager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-        manager = hidManager
+        state.manager = hidManager
         
         // Match keyboard devices
         let matchingDict: [String: Any] = [
@@ -195,7 +218,7 @@ public final class IOKitManager: @unchecked Sendable {
         IOHIDManagerRegisterDeviceRemovalCallback(hidManager, { context, _, _, _ in
             guard let context else { return }
             let owner = Unmanaged<IOKitManager>.fromOpaque(context).takeUnretainedValue()
-            owner.shortcutState.handleDeviceRemoval()
+            owner.state.withLock { $0.shortcutState.handleDeviceRemoval() }
         }, context)
 
         // Schedule with current run loop (like Gureum)
@@ -207,7 +230,7 @@ public final class IOKitManager: @unchecked Sendable {
             DebugLogger.log("IOKitManager: Failed to open IOHIDManager: \(result)")
             IOHIDManagerUnscheduleFromRunLoop(hidManager, CFRunLoopGetCurrent(),
                                               CFRunLoopMode.defaultMode.rawValue)
-            manager = nil
+            state.manager = nil
             return .failure(result == Self.exclusiveAccess
                             ? .keyboardsExclusivelyOwned(result)
                             : .openFailed(result))
@@ -216,18 +239,20 @@ public final class IOKitManager: @unchecked Sendable {
         let config = ConfigurationManager.shared
         DebugLogger.log("IOKitManager: Started successfully (toggle=\(config.toggleKeyBinding.displayName), hanja=\(config.hanjaKeyBinding.displayName))")
         return .success(())
+        }
     }
     
     /// Stop monitoring
     public func stop() {
-        if let hidManager = manager {
-            IOHIDManagerUnscheduleFromRunLoop(hidManager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
-            IOHIDManagerClose(hidManager, IOOptionBits(kIOHIDOptionsTypeNone))
-            manager = nil
-            DebugLogger.log("IOKitManager: Stopped")
+        state.withLock { state in
+            if let hidManager = state.manager {
+                IOHIDManagerUnscheduleFromRunLoop(hidManager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
+                IOHIDManagerClose(hidManager, IOOptionBits(kIOHIDOptionsTypeNone))
+                state.manager = nil
+                DebugLogger.log("IOKitManager: Stopped")
+            }
+            state.shortcutState = HIDShortcutState()
         }
-
-        shortcutState = HIDShortcutState()
     }
     
     // MARK: - Input Handling
@@ -287,22 +312,29 @@ public final class IOKitManager: @unchecked Sendable {
                              toggle: KeyBinding? = nil, hanja: KeyBinding? = nil,
                              toggleEnabled: Bool? = nil, hanjaEnabled: Bool? = nil,
                              trigger: ToggleTrigger? = nil, paused: Bool? = nil) {
+        // Both of these take locks of their own. Resolve them before taking this
+        // one: two locks acquired in one order here and the other order elsewhere
+        // is the whole recipe, and the tap thread reads both of these too.
         let config = ConfigurationManager.shared
-        let action = shortcutState.consume(
-            usage: usage, pressed: pressed, device: device,
-            toggle: toggle ?? config.toggleKeyBinding,
-            hanja: hanja ?? config.hanjaKeyBinding,
-            toggleEnabled: toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled,
-            hanjaEnabled: hanjaEnabled ?? config.hanjaEnabled,
-            trigger: trigger ?? config.toggleTrigger,
-            paused: paused ?? (ToggleExclusionPolicy.shared.isTogglePaused || RightCommandSuppressor.shared.isRecordingKey)
-        )
-        let callback: (@Sendable (TimeInterval) -> Void)?
-        switch action {
-        case .toggle: callback = onRightCommandToggle
-        case .hanja: callback = onRightOptionHanja
-        case nil: return
+        let isPaused = paused ?? (ToggleExclusionPolicy.shared.isTogglePaused
+                                  || RightCommandSuppressor.shared.isRecordingKey)
+        let callback: (@Sendable (TimeInterval) -> Void)? = state.withLock { state in
+            let action = state.shortcutState.consume(
+                usage: usage, pressed: pressed, device: device,
+                toggle: toggle ?? config.toggleKeyBinding,
+                hanja: hanja ?? config.hanjaKeyBinding,
+                toggleEnabled: toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled,
+                hanjaEnabled: hanjaEnabled ?? config.hanjaEnabled,
+                trigger: trigger ?? config.toggleTrigger,
+                paused: isPaused
+            )
+            switch action {
+            case .toggle: return state.onToggle
+            case .hanja: return state.onHanja
+            case nil: return nil
+            }
         }
+        guard let callback else { return }
         // The press time is what this used to lose, and it is a parameter now, so
         // it survives the hop. The hop itself stays: this run loop is the main one,
         // and performing the toggle inline would run a composition finalize
@@ -310,6 +342,6 @@ public final class IOKitManager: @unchecked Sendable {
         // value callback. Those can spin the run loop, which would re-enter this
         // callback part-way through a mode transition.
         let pressedAt = eventTime ?? ProcessInfo.processInfo.systemUptime
-        DispatchQueue.main.async { callback?(pressedAt) }
+        DispatchQueue.main.async { callback(pressedAt) }
     }
 }
