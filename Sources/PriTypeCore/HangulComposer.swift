@@ -146,6 +146,13 @@ public class HangulComposer: @unchecked Sendable {
     ///   `PriTypeInputController.setValue(_:forTag:)` (macOS re-selecting the
     ///   PriType source, which always lands back in `.korean`). No other path —
     ///   including `activateServer` focus changes — may mutate the mode.
+    /// Forget what the last key was. The composer is shared by every client, so a
+    /// Backspace in one app must not make the first Backspace in another look like
+    /// the second of a pair.
+    public func forgetKeyHistory() {
+        previousKeyWasBackspace = false
+    }
+
     public func setInputMode(_ mode: InputMode) {
         previousKeyWasBackspace = false
         modeSelectionRevision &+= 1

@@ -657,6 +657,23 @@ struct HangulComposerTests {
         #expect(delegate.precomposeRequests == [true, true, false], "⌘⌫ broke the run")
     }
 
+    @Test("A Backspace in another client does not continue this client's run")
+    func keyHistoryDoesNotCrossClients() {
+        let (composer, delegate) = makeComposer()
+        func backspace() {
+            _ = composer.handle(
+                TestEventFactory.keyEvent(char: "\u{8}", keyCode: KeyCode.backspace)!, delegate: delegate)
+        }
+
+        backspace()
+        backspace()
+        #expect(delegate.precomposeRequests == [false, true])
+
+        composer.forgetKeyHistory()   // another client took the engine over
+        backspace()
+        #expect(delegate.precomposeRequests == [false, true, false])
+    }
+
     private func makeComposer() -> (HangulComposer, MockComposerDelegate) {
         let composer = HangulComposer(configuration: MockConfiguration())
         let delegate = MockComposerDelegate()

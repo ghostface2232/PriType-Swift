@@ -142,6 +142,8 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             // activation — and then it no longer owns the engine and leaves
             // them up, with the event tap routing this client's keys to them.
             composer.dismissHanjaCandidates(reason: "another client took over")
+            // The key history belongs to the client that typed it.
+            composer.forgetKeyHistory()
         }
         Self.sharedController = self
         if let pending = pendingSystemMode {
