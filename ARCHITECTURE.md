@@ -240,7 +240,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | 이벤트 탭(`com.pritype.eventtap`) | CGEventTap 콜백. 전환·한자 동작을 기록하고, 후보창 키를 가로채고, 수정키를 떼어 낸다 |
 | 백그라운드 | 한자 사전 미리 매핑, 업데이트 확인, ABC 상태 확인용 하위 프로세스, 디버그 로그 기록 |
 
-탭 경계의 가변 상태는 모두 `Guarded`(`Guarded.swift`) 안에 있다. 재귀 잠금 하나를 감싼 상자이고, 이 패키지에서 `@unchecked Sendable`을 쓰는 유일한 자리다. 상태를 여기에 넣은 타입은 다른 가변 저장 프로퍼티가 없으므로 `Sendable`을 **검사받아서** 만족한다 — 약속이 아니라 컴파일러가 확인한다. `OSAllocatedUnfairLock`이 검사받는 대안이지만 상태가 `CFMachPort`·`CFRunLoopSource`·`CFRunLoop`·`IOHIDManager`라 쓸 수 없다. 재귀인 이유는 탭 콜백이 이벤트 하나를 처리하는 도중 `stop()`을 부르기 때문이고, 상태를 구조체가 아니라 클래스로 두는 이유도 같다(재진입한 `withLock`이 같은 객체를 준다).
+탭 경계의 가변 상태는 모두 `Guarded`(`Guarded.swift`) 안에 있다. 재귀 잠금 하나를 감싼 상자이고, **탭 경계에서** `@unchecked Sendable`을 쓰는 유일한 자리다(패키지 전체에는 아직 열두 개가 더 있다 — IMK가 메인 스레드에서만 부른다는 전제로 사는 타입들과 로그 큐로, 별개 문제다). 상태를 여기에 넣은 타입은 다른 가변 저장 프로퍼티가 없으므로 `Sendable`을 **검사받아서** 만족한다 — 약속이 아니라 컴파일러가 확인한다. `OSAllocatedUnfairLock`이 검사받는 대안이지만 상태가 `CFMachPort`·`CFRunLoopSource`·`CFRunLoop`·`IOHIDManager`라 쓸 수 없다. 재귀인 이유는 탭 콜백이 이벤트 하나를 처리하는 도중 `stop()`을 부르기 때문이고, 상태를 구조체가 아니라 클래스로 두는 이유도 같다(재진입한 `withLock`이 같은 객체를 준다).
 
 | 잠금 | 보호 대상 |
 |---|---|
@@ -256,7 +256,9 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `HanjaCandidateWindow.pageCandidatesState` | 탭이 읽는, 현재 쪽의 후보 수(0이면 창이 닫힘) |
 | libhangul `ThreadSafeHangulInputContext` | 조합 엔진 내부 상태 |
 
-**잠금 순서.** 탭 경로에서 잠금 두 개를 동시에 잡는 지점은 하나뿐이다 — `RightCommandSuppressor`가 자기 잠금 안에서 `IOKitManager.stop()`을 부른다(탭이 뜨면 대체 경로를 멈춰야 하므로). 반대 방향은 없다: `IOKitManager.handleKeyboardEvent`는 제외 정책·녹화 여부·설정값을 **모두 자기 잠금 밖에서** 먼저 읽는다. 새 코드가 이 방향을 뒤집으면 시스템 전체의 타이핑이 멈추므로, 잠금 안에서 다른 싱글턴을 부르지 않는다.
+**잠금 순서.** 탭 콜백은 이벤트 하나를 처리하는 동안 자기 잠금을 계속 쥐고 있고, 그 안에서 다른 잠금 네 개를 잡는다 — `ConfigurationManager.bindings`(전환키·한자키·전환 시점·한자 켜짐), `ToggleExclusionPolicy.state`(제외 여부), `PolledPreference.state`(Caps Lock 전환), `HanjaCandidateWindow.pageCandidatesState`(후보창이 떠 있을 때). 여기에 더해 탭이 시작·재시작할 때 `RightCommandSuppressor`가 자기 잠금 안에서 `IOKitManager.stop()`을 부른다(탭이 뜨면 대체 경로를 멈춰야 하므로).
+
+**지켜야 할 규칙은 이 다섯이 모두 잎(leaf)이라는 것이다.** 어느 것도 `RightCommandSuppressor`의 잠금을 되잡지 않으므로 순환이 없다. 반대 방향이 생길 뻔한 곳이 실제로 있었다: `IOKitManager.handleKeyboardEvent`는 제외 정책·녹화 여부·설정값을 읽는데, 이것들을 **자기 잠금 밖에서** 먼저 해소한다. 잠금 안에서 읽었다면 `IOKit → RightCommandSuppressor` 간선이 생겨 위의 `RightCommandSuppressor → IOKit`과 맞물렸을 것이다. 새 코드가 이 잎들 중 하나에서 다른 싱글턴을 부르면 시스템 전체의 타이핑이 멈춘다.
 
 컨트롤러의 정적 상태(`sharedController`, 마지막 시스템 모드, 에코 필터, `systemModeReporter`)와 조합기는 메인 스레드에서만 쓴다. IMK가 메인에서 호출한다는 전제이며 컴파일러가 강제하지는 않는다. 디버그 빌드는 IMK 콜백에서 이를 단언한다.
 
@@ -319,7 +321,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 swift test
 ```
 
-Swift Testing 기반, 475개 테스트와 70개 Suite(2026-09-20 기준). Command Line Tools에는 Testing 모듈이 없으므로 Xcode 툴체인이 필요하다.
+Swift Testing 기반, 477개 테스트와 70개 Suite(2026-09-20 기준). Command Line Tools에는 Testing 모듈이 없으므로 Xcode 툴체인이 필요하다.
 
 - 유닛 테스트: 조합, 키 위치, 전달 정책, 직접 삽입, 키 모니터(탭 이벤트 순서, IOKit 판정, 탭 스레드, 순서 대기열, 에코 필터), 한자 사전·검색·후보창 배치, 설정 이관, ABC 끄기, 업데이트 버전 비교, 등록 계약.
 - 통합 테스트(`IMKIntegrationTests`): `PriTypeIMKHarness`로 실제 컨트롤러를 돌린다. 확정 순서, 백스페이스, 중복 키, 한/영 전환(전환키, 대기열, Caps Lock, 재확인), 포커스 전환, 긴 문단 왕복 입력, 한자(단어 변환, 짧은 끝말 교체, 커서가 옮겨진 뒤의 선택 취소, 클릭으로 닫은 뒤의 버퍼, 다른 앱의 글자, 늦은 비활성화)를 검증한다. 하니스는 macOS에 모드를 통보하는 부분을 기록만 하고 한자 후보창은 패널을 열지 않으므로, 테스트가 실제 입력 소스를 바꾸거나 창을 띄우지 않는다. 이벤트 탭의 후보창 키 라우팅과 클릭 감시는 실제 이벤트가 필요해 다루지 않는다.

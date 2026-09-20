@@ -49,4 +49,4 @@ macOS 27에서 "ABC 끄기"가 성공해도 항상 "실패"로 보고되던 문�
 같은 판단에서 이어진 작업:
 
 - **실기기 검증.** 합성 입력으로 도달할 수 없는 경로 — IOKit 대체 경로, 실제 탭 생성, 새 프로세스 프로브 — 를 실제 머신에 묻는 `pritype-device-check`를 만들었다. 이 자리에 있던 `PriTypeVerify`는 검사가 느슨해서(경고를 찍고 성공 반환, 릴리스에서 사라지는 단언, 실제 `UserDefaults` 오염) 제거했고, 그 실패 방식들이 새 도구의 설계 제약이 됐다. → [DeviceVerification.md](DeviceVerification.md)
-- **탭 경계 동시성.** 탭 스레드와 HID 콜백이 닿는 타입들이 `@unchecked Sendable`이었다. 그중 `IOKitManager`는 아무것도 보호하고 있지 않았고, `ToggleExclusionPolicy`는 옵저버를 잠금 밖에 두고 있었다. `Guarded` 하나로 모으고 나머지를 검사받는 `Sendable`로 바꿨다. → ARCHITECTURE.md "동시성"
+- **탭 경계 동시성.** 탭 스레드와 HID 콜백이 닿는 타입들이 `@unchecked Sendable`이었다. 그중 `IOKitManager`는 아무것도 보호하고 있지 않았고, `ToggleExclusionPolicy`는 옵저버를 잠금 밖에 두고 있었다. `Guarded` 하나로 모으고 탭 경계의 여섯 타입을 검사받는 `Sendable`로 바꿨다(패키지의 나머지 `@unchecked`는 IMK 메인 스레드 타입들이고 그대로 남아 있다). → ARCHITECTURE.md "동시성"

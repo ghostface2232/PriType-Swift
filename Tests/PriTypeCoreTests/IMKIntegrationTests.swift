@@ -279,17 +279,17 @@ struct IMKIntegrationTests {
 
     // MARK: Secure input
 
-    // The global flag is answered by the harness rather than by macOS. It is a
-    // fact about the machine — a locked screen turns it on, which a Mac being
-    // driven remotely does by itself — and while it is on, every keystroke costs
-    // one extra `selectedRange()`. Seven tests in this file counted that as a
-    // regression until the harness took the question over.
+    // The global flag is answered by the fake client, not by macOS. It is a fact
+    // about the machine — a locked screen turns it on, which a Mac being driven
+    // remotely does by itself — and while it is on, every keystroke costs one
+    // extra `selectedRange()`. Seven tests in this file counted that as a
+    // regression until the client took the question over.
 
     @Test("A field that will not say where its caret is, while macOS warns, gets nothing")
     func secureInputPassesKeysThrough() {
         let (harness, field) = start()
         defer { harness.finish() }
-        harness.globalSecureInput = true
+        field.client.reportsGlobalSecureInput = true
         // What a password field answers: no selection at all.
         field.client.select(NSRange(location: NSNotFound, length: 0))
         field.client.freezeReports = true
@@ -310,7 +310,7 @@ struct IMKIntegrationTests {
         // never through the controller that consults it.
         let (harness, field) = start()
         defer { harness.finish() }
-        harness.globalSecureInput = true
+        field.client.reportsGlobalSecureInput = true
 
         harness.type("rk")
         #expect(field.client.markedText == "가", "A capable field with a real caret still composes")

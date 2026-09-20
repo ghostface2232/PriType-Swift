@@ -193,7 +193,7 @@ public struct InputSourceRegistrationCheck: DeviceCheck {
     public let title = "PriType is enabled in Text Input Sources"
 
     /// The prefix both PriType input modes share.
-    static let bundlePrefix = "com.pritype.inputmethod.v2"
+    static let bundlePrefix = PreferencesDomain.priTypeSuiteName
 
     public init() {}
 

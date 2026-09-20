@@ -71,13 +71,4 @@ public enum PreferencesDomain {
     public static var currentSuiteName: String? {
         resolved.withLock { $0.suiteName }
     }
-
-    /// Back to this process's own domain. For tests, which must not leave a
-    /// redirection behind for whatever runs next.
-    static func reset() {
-        resolved.withLock { resolved in
-            resolved.suiteName = nil
-            resolved.cached = nil
-        }
-    }
 }

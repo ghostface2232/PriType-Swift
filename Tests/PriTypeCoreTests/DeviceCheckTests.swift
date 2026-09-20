@@ -298,8 +298,20 @@ struct PreferencesDomainTests {
         #expect(UserDefaults.standard.string(forKey: "com.pritype.tests.marker") == nil)
     }
 
-    @Test("The installed input method's domain is named once, where the CLI can ask for it")
-    func suiteNameMatchesTheInstall() {
-        #expect(PreferencesDomain.priTypeSuiteName == "com.pritype.inputmethod.v2")
+    @Test("The domain the CLI redirects to is the bundle the app actually registers")
+    func suiteNameMatchesTheBundle() throws {
+        // Comparing the constant against a copy of itself would prove nothing.
+        // The drift that matters is `Info.plist` changing identifier without this
+        // following, which would leave the verification tool reading an empty
+        // domain and cheerfully reporting on built-in defaults — so read the
+        // plist the build copies into the bundle.
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // PriTypeCoreTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // repo root
+        let data = try Data(contentsOf: repoRoot.appendingPathComponent("Info.plist"))
+        let info = try #require(PropertyListSerialization
+            .propertyList(from: data, options: [], format: nil) as? [String: Any])
+        #expect(info["CFBundleIdentifier"] as? String == PreferencesDomain.priTypeSuiteName)
     }
 }

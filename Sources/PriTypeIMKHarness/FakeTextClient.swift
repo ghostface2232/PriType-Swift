@@ -1,5 +1,6 @@
 import Cocoa
 import InputMethodKit
+import PriTypeCore
 
 /// A text field for driving PriType's IMK controller without a host app.
 ///
@@ -8,7 +9,7 @@ import InputMethodKit
 /// call the input method makes into it, in order. Keys the input method does not
 /// handle get the host's default action (`performHostAction`), as AppKit would
 /// run them through `interpretKeyEvents`.
-public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
+public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputReporting, @unchecked Sendable {
     /// One call into the client, in the order it happened.
     public enum Call: Equatable, CustomStringConvertible, Sendable {
         /// `setMarkedText` with the new marked string ("" ends the marked text).
@@ -74,6 +75,12 @@ public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
     /// Some hosts (Qt, custom text views) drop the replacement range and edit at
     /// the caret instead. Set this to model one.
     public var ignoresReplacementRange = false
+
+    /// What this client answers when the input method asks whether macOS has a
+    /// global secure-input warning up. False by default: whether a real one is up
+    /// depends on whether the screen happens to be locked, and no test may depend
+    /// on that. Set it to drive the pass-through path.
+    public var reportsGlobalSecureInput = false
 
     /// Chromium and Electron answer queries from a snapshot that trails the real
     /// document. While this is set, every query answers from the state the field

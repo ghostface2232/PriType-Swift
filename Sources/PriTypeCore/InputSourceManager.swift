@@ -22,7 +22,7 @@ public final class InputSourceManager: @unchecked Sendable {
     /// Keyboard Layout ID for ABC (252)
     static let abcKeyboardLayoutID = 252
 
-    private static let priTypeBundleID = "com.pritype.inputmethod.v2"
+    private static let priTypeBundleID = PreferencesDomain.priTypeSuiteName
     
     // MARK: - Mode Selection
 

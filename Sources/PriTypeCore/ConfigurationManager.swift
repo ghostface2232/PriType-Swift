@@ -382,6 +382,13 @@ public final class ConfigurationManager: ConfigurationProviding, Sendable {
     }
     
     private init() {
+        // Retired keys, stripped once per launch so an old install stops carrying
+        // them. Only ever from this process's own domain: since `defaults` can be
+        // pointed at the installed app's domain, doing this unconditionally meant
+        // the verification tool deleted two keys out of PriType's preferences,
+        // from another process, possibly while PriType was running — from a tool
+        // whose whole contract is to change nothing.
+        guard PreferencesDomain.currentSuiteName == nil else { return }
         defaults.removeObject(forKey: "com.pritype.autoCapitalize")
         defaults.removeObject(forKey: "com.pritype.doubleSpacePeriod")
     }

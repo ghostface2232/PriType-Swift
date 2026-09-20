@@ -183,8 +183,23 @@ public final class IOKitManager: Sendable {
     /// inside `IOHIDManagerOpen` would then be enough to stall typing everywhere
     /// until `hidd` answered. So the manager is built and opened unpublished, and
     /// the lock is taken only to publish it.
+    ///
+    /// ## Why that is safe, which is not the same as being thread-safe
+    ///
+    /// Opening outside the lock means the "already running?" check and the
+    /// publish are two acquisitions with an open between them, and the lock alone
+    /// does not make that sound: a `stop()` landing in the gap would find no
+    /// manager, do nothing, and leave the start to publish one nobody wanted.
+    /// What makes it sound is that starting and stopping happen on main and
+    /// nowhere else — `KeyMonitors` is `@MainActor`, `RightCommandSuppressor`
+    /// starts from main, and the verification tool runs on its main thread. The
+    /// lock is there for the HID callback, which shares the state but never
+    /// starts or stops. So the invariant is stated here rather than left to be
+    /// inferred, and the re-check at the publish is cheap insurance, not a claim
+    /// that two threads may race here.
     @discardableResult
     public func start(promptForInputMonitoring: Bool) -> Result<StartOutcome, StartFailure> {
+        dispatchPrecondition(condition: .onQueue(.main))
         guard state.withLock({ $0.manager == nil }) else {
             DebugLogger.log("IOKitManager: Already running")
             return .success(.alreadyRunning)
@@ -236,7 +251,9 @@ public final class IOKitManager: Sendable {
 
         // A new ownership lifecycle must not inherit a half-pressed modifier from a
         // previous IOKit run; otherwise its first key-up could emit a phantom toggle.
-        // Before the source is scheduled, so no callback can land on the old state.
+        // Before the source is scheduled, so no callback can land on the old state
+        // — which holds because only main gets here, so there is no other start's
+        // callbacks to wipe this out from under.
         state.withLock { $0.shortcutState = HIDShortcutState() }
 
         // Schedule with current run loop (like Gureum)
@@ -254,10 +271,11 @@ public final class IOKitManager: Sendable {
         }
 
         // The check at the top of this function was made before the permission
-        // checks and the open, so it cannot stand in for this one: two starts can
-        // both have passed it. Whoever publishes first owns the keyboards, and the
-        // loser closes what it opened rather than overwriting — an abandoned
-        // manager stays scheduled and delivers every key press a second time.
+        // checks and the open, so it cannot stand in for this one. Under the
+        // main-only invariant nothing can have published in between; this costs
+        // one uncontended acquisition to make sure that an abandoned manager —
+        // which would stay scheduled and deliver every key press a second time —
+        // cannot outlive a mistake about that invariant.
         let published = state.withLock { state -> Bool in
             guard state.manager == nil else { return false }
             state.manager = hidManager
@@ -276,8 +294,11 @@ public final class IOKitManager: Sendable {
         return .success(.opened)
     }
     
-    /// Stop monitoring
+    /// Stop monitoring.
+    ///
+    /// - Important: Main thread only, like `start()`, and for the same reason.
     public func stop() {
+        dispatchPrecondition(condition: .onQueue(.main))
         // Take the manager out under the lock and close it outside: the close is
         // the same blocking IPC the open is, and the tap callback can be waiting
         // behind this lock by way of the suppressor's.
