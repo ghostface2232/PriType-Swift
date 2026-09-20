@@ -41,7 +41,39 @@ public final class DebugLogger: @unchecked Sendable {
     /// - Note: Protected by logQueue serial dispatch
     nonisolated(unsafe) private static var cachedHandle: FileHandle?
 
+    /// Bytes in the file the cached handle is open on.
+    ///
+    /// Rotation used to ask the filesystem for the size, but only when there was
+    /// no cached handle — which is true exactly once per process. An input method
+    /// runs for days, so after its first log line the 5 MiB limit was never
+    /// checked again and the file grew without end. The size is counted here
+    /// instead: it is known at every write, and it stays known.
+    /// - Note: Protected by logQueue serial dispatch
+    nonisolated(unsafe) private static var bytesInCurrentFile = 0
+
     private static let maxLogFileSize = 5 * 1024 * 1024
+
+    /// Where the logger writes, and when it rotates.
+    ///
+    /// The whole logger is DEBUG-only, so this seam does not exist in a Release
+    /// build. It lets a test point the logger at a temporary file and shrink the
+    /// limit, rather than writing megabytes into the user's own log to find out
+    /// whether rotation happens.
+    struct TestOverrides {
+        var path: String?
+        var rotationLimit: Int?
+    }
+
+    /// - Note: Set from a test before it logs; read on logQueue.
+    nonisolated(unsafe) static var testOverrides = TestOverrides()
+
+    private static var currentLogPath: String { testOverrides.path ?? PriTypeConfig.logPath }
+    private static var rotationLimit: Int { testOverrides.rotationLimit ?? maxLogFileSize }
+
+    /// Wait for everything logged so far to reach the file (tests only).
+    static func flushPendingWrites() {
+        logQueue.sync {}
+    }
     
     /// Flag to prevent infinite recursion on logging errors
     /// - Note: Protected by logQueue serial dispatch
@@ -114,50 +146,62 @@ public final class DebugLogger: @unchecked Sendable {
     // MARK: - Private Methods
     
     private static func writeToFile(data: Data) throws {
-        let url = URL(fileURLWithPath: PriTypeConfig.logPath)
+        let path = currentLogPath
+        let url = URL(fileURLWithPath: path)
+        let fileManager = FileManager.default
         let directory = url.deletingLastPathComponent()
-        
+
         // Ensure directory exists
-        if !FileManager.default.fileExists(atPath: directory.path) {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if !fileManager.fileExists(atPath: directory.path) {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
 
-        try rotateLogIfNeeded(at: url)
-        
-        // Create file if it doesn't exist
-        if !FileManager.default.fileExists(atPath: PriTypeConfig.logPath) {
-            FileManager.default.createFile(atPath: PriTypeConfig.logPath, contents: nil)
-            cachedHandle = nil // Invalidate cache
+        // The log can be deleted under a running process — clearing it between two
+        // debugging runs is routine. An open handle would keep writing into the
+        // unlinked file, where nothing can read it, so the handle is dropped and a
+        // new file made. This costs one existence check per line, on the logger's
+        // own utility queue, which is worth more than it saves.
+        if !fileManager.fileExists(atPath: path) {
+            closeCurrentFile()
+            fileManager.createFile(atPath: path, contents: nil)
         }
-        
-        // Get or create file handle
+
         if cachedHandle == nil {
-            cachedHandle = FileHandle(forWritingAtPath: PriTypeConfig.logPath)
+            cachedHandle = FileHandle(forWritingAtPath: path)
+            // A file left by an earlier run starts this count where it left off, so
+            // an already-oversized log rotates on its first line rather than never.
+            bytesInCurrentFile = cachedHandle.flatMap { try? $0.seekToEnd() }.map(Int.init) ?? 0
         }
-        
+
         guard let handle = cachedHandle else {
             throw LoggingError.failedToOpenFile
         }
-        
+
         try handle.seekToEnd()
         try handle.write(contentsOf: data)
+        bytesInCurrentFile += data.count
+
+        if bytesInCurrentFile > rotationLimit {
+            try rotate(at: url)
+        }
     }
 
-    private static func rotateLogIfNeeded(at url: URL) throws {
-        guard cachedHandle == nil else { return }
-
+    /// Close the file, move it aside and start a new one. Rotating AFTER the write
+    /// rather than before lets the limit be what it says it is: a cap on the file
+    /// left behind, overshot by at most the one line that crossed it.
+    private static func rotate(at url: URL) throws {
+        closeCurrentFile()
         let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: url.path),
-              let attributes = try? fileManager.attributesOfItem(atPath: url.path),
-              let size = attributes[.size] as? NSNumber,
-              size.intValue > maxLogFileSize else {
-            return
-        }
-
         let rotatedURL = url.deletingPathExtension().appendingPathExtension("log.1")
         try? fileManager.removeItem(at: rotatedURL)
         try fileManager.moveItem(at: url, to: rotatedURL)
         fileManager.createFile(atPath: url.path, contents: nil)
+    }
+
+    private static func closeCurrentFile() {
+        try? cachedHandle?.close()
+        cachedHandle = nil
+        bytesInCurrentFile = 0
     }
     
     private static func logToConsole(_ msg: String, isError: Bool) {
