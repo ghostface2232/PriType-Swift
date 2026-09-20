@@ -277,6 +277,45 @@ struct IMKIntegrationTests {
         #expect(field.client.selectionQueries == 1)
     }
 
+    // MARK: Secure input
+
+    // The global flag is answered by the harness rather than by macOS. It is a
+    // fact about the machine — a locked screen turns it on, which a Mac being
+    // driven remotely does by itself — and while it is on, every keystroke costs
+    // one extra `selectedRange()`. Seven tests in this file counted that as a
+    // regression until the harness took the question over.
+
+    @Test("A field that will not say where its caret is, while macOS warns, gets nothing")
+    func secureInputPassesKeysThrough() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.globalSecureInput = true
+        // What a password field answers: no selection at all.
+        field.client.select(NSRange(location: NSNotFound, length: 0))
+        field.client.freezeReports = true
+        field.client.clearLog()
+
+        #expect(harness.type("rk") == [false, false], "The host types these itself")
+        #expect(field.client.calls == [.host("insert(r)"), .host("insert(k)")],
+                "Every key reached the host untouched")
+        #expect(field.client.text == "rk", "Latin, not 가 — nothing went through the composer")
+        #expect(field.client.markedText == nil)
+    }
+
+    @Test("A stale warning does not stop an ordinary field from composing")
+    func staleSecureInputStillComposes() {
+        // The 2026-09-09 fix: the flag is system-wide, so another app's stale
+        // secure input must not silence a field that is plainly a text field.
+        // Until the probe became a seam this could only be tested as pure policy,
+        // never through the controller that consults it.
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.globalSecureInput = true
+
+        harness.type("rk")
+        #expect(field.client.markedText == "가", "A capable field with a real caret still composes")
+    }
+
     @Test("A real selection, deleted again and again, is not mistaken for that")
     func repeatedSelectionDeletesKeepAsking() {
         let (harness, field) = start()

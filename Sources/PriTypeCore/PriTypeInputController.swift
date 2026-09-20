@@ -92,6 +92,23 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// input source follows. Called on main right after the toggle; the default
     /// defers the TIS selection off the hot path. A harness replaces it: driving
     /// real controllers must not change the machine's input source.
+    /// Whether macOS has a global secure-input warning up.
+    ///
+    /// A seam for the same reason `systemModeReporter` is one: the integration
+    /// tests drive a real controller, and this is a question about the machine
+    /// rather than about the code. The lock screen turns it on — a screen saver
+    /// on a Mac being driven remotely is enough — and while it is on, every
+    /// keystroke adds one synchronous `selectedRange()` to the host, which is
+    /// exactly what those tests count. Seven of them failed on a locked Mac and
+    /// passed on the same commit with the screen awake.
+    ///
+    /// The harness pins it; nothing in the app touches it.
+    /// - Warning: Access from main thread only (guaranteed by IMK).
+    nonisolated(unsafe) public static var globalSecureInputProbe: () -> Bool = systemSecureInputProbe
+
+    /// What the app uses: macOS's own answer.
+    public static let systemSecureInputProbe: @Sendable () -> Bool = { IsSecureEventInputEnabled() }
+
     /// - Warning: Access from main thread only.
     nonisolated(unsafe) public static var systemModeReporter: (InputMode) -> Void = { mode in
         DispatchQueue.main.async {
@@ -522,7 +539,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     private func shouldPassThroughSecureInput(client: IMKTextInput, context: ClientContext) -> Bool {
         let bundleId = context.bundleId
         let isSystemSecureClient = SecureInputPolicy.isSystemSecureClient(bundleId)
-        let hasGlobalSecureInput = IsSecureEventInputEnabled()
+        let hasGlobalSecureInput = Self.globalSecureInputProbe()
 
         // selectedRange is synchronous client IPC. Probe only when it can change the
         // decision: a global secure-input warning. System

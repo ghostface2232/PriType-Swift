@@ -90,6 +90,12 @@ public final class IMKHarness {
         PriTypeInputController.systemModeReporter = { [weak self] mode in
             self?.reportedModes.append(mode)
         }
+        // Answer the secure-input question from the harness, not from the Mac.
+        // A locked screen turns the real flag on, and then every keystroke costs
+        // one extra `selectedRange()` — which several tests count exactly.
+        PriTypeInputController.globalSecureInputProbe = { [weak self] in
+            self?.globalSecureInput ?? false
+        }
         InputModeCoordinator.shared.applyPendingKeyActions()
         let composer = PriTypeInputController.sharedComposer
         composer.setInputMode(.korean)
@@ -99,6 +105,13 @@ public final class IMKHarness {
         composer.candidatePresenter = candidates
         composer.frontmostBundleID = { [weak self] in self?.focused?.client.bundleID }
     }
+
+    /// Whether this run reports a global secure-input warning.
+    ///
+    /// False by default, because whether a real one is up is a property of the
+    /// machine — the screen being locked, another app holding secure input —
+    /// and no test may depend on that. Set it to drive the pass-through path.
+    public var globalSecureInput = false
 
     /// A new field, not yet focused.
     public func makeField(bundleID: String = "com.pritype.imk-harness") -> Field {
@@ -236,6 +249,7 @@ public final class IMKHarness {
 
     /// Run everything the key monitor queued, and leave the shared engine idle.
     public func finish() {
+        PriTypeInputController.globalSecureInputProbe = PriTypeInputController.systemSecureInputProbe
         InputModeCoordinator.shared.applyPendingKeyActions()
         blur()
         let composer = PriTypeInputController.sharedComposer
