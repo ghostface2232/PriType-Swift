@@ -65,10 +65,27 @@ public final class DebugLogger: @unchecked Sendable {
     }
 
     /// - Note: Set from a test before it logs; read on logQueue.
-    nonisolated(unsafe) static var testOverrides = TestOverrides()
+    ///
+    /// Setting this closes the file currently open, and waits for the queue to
+    /// finish what it was writing. A handle refers to a file, not to a path: left
+    /// open across a redirection it would go on writing into the old one, and a
+    /// test that then replaces its new file on disk would be counting bytes in a
+    /// file nothing is writing to.
+    static var testOverrides: TestOverrides {
+        get { logQueue.sync { storedTestOverrides } }
+        set {
+            logQueue.sync {
+                storedTestOverrides = newValue
+                closeCurrentFile()
+            }
+        }
+    }
 
-    private static var currentLogPath: String { testOverrides.path ?? PriTypeConfig.logPath }
-    private static var rotationLimit: Int { testOverrides.rotationLimit ?? maxLogFileSize }
+    /// - Note: Protected by logQueue serial dispatch.
+    nonisolated(unsafe) private static var storedTestOverrides = TestOverrides()
+
+    private static var currentLogPath: String { storedTestOverrides.path ?? PriTypeConfig.logPath }
+    private static var rotationLimit: Int { storedTestOverrides.rotationLimit ?? maxLogFileSize }
 
     /// Wait for everything logged so far to reach the file (tests only).
     static func flushPendingWrites() {

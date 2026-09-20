@@ -103,14 +103,31 @@ public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
         selection = range
     }
 
-    /// Where an edit lands: the explicit range, else the marked text, else the selection.
+    /// Where an edit lands: the explicit range, else the marked text, else the
+    /// selection — clamped to the document.
+    ///
+    /// A host always knows where its own caret is, even when it will not say:
+    /// Google Docs answers every query with NSNotFound and still types where the
+    /// user is looking. So an edit against an unusable reported selection lands at
+    /// the end of the document rather than failing. Without this, a test that makes
+    /// a host lie about its caret — which is the whole point of having one — dies
+    /// with an out-of-bounds exception instead of reporting what the input method
+    /// did about it.
     private func target(for replacementRange: NSRange) -> NSRange {
         if !ignoresReplacementRange,
            replacementRange.location != NSNotFound,
            NSMaxRange(replacementRange) <= storage.length {
             return replacementRange
         }
-        return marked ?? selection
+        return clampedToDocument(marked ?? selection)
+    }
+
+    private func clampedToDocument(_ range: NSRange) -> NSRange {
+        guard range.location != NSNotFound else {
+            return NSRange(location: storage.length, length: 0)
+        }
+        let location = max(0, min(storage.length, range.location))
+        return NSRange(location: location, length: max(0, min(storage.length - location, range.length)))
     }
 
     private func replace(_ range: NSRange, with string: String) -> NSRange {
@@ -240,14 +257,14 @@ public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
     }
 
     private func insertByHost(_ string: String) {
-        let inserted = replace(marked ?? selection, with: string)
+        let inserted = replace(clampedToDocument(marked ?? selection), with: string)
         marked = nil
         selection = NSRange(location: NSMaxRange(inserted), length: 0)
         log(.host("insert(\(string.replacingOccurrences(of: "\n", with: "\\n")))"))
     }
 
     private func deleteBackward() {
-        var range = selection
+        var range = clampedToDocument(selection)
         if range.length == 0 {
             guard range.location > 0 else {
                 log(.host("delete(nothing)"))
@@ -268,7 +285,8 @@ public final class FakeTextClient: NSObject, IMKTextInput, @unchecked Sendable {
     }
 
     private func moveCaret(by offset: Int) {
-        let location = max(0, min(storage.length, selection.location + offset))
+        let from = clampedToDocument(selection).location
+        let location = max(0, min(storage.length, from + offset))
         selection = NSRange(location: location, length: 0)
         log(.host(offset < 0 ? "left" : "right"))
     }
