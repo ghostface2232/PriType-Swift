@@ -21,6 +21,9 @@ final class MockComposerDelegate: HangulComposerDelegate {
     /// Ordered log of delegate calls across insertText/setMarkedText, e.g.
     /// ["insert:아", "mark:나"]. Used to assert the commit-before-mark invariant.
     var orderedCalls: [String] = []
+    /// Ordered record of the decomposed-syllable rewrite requests.
+    var precomposeRequests: [Bool] = []
+    var forgetPrecomposedCount = 0
     var backspaceCompositionUpdateDepth = 0
     var backspaceCompositionUpdateCallCount = 0
     var markedTextDuringBackspaceUpdates: [String] = []
@@ -60,6 +63,14 @@ final class MockComposerDelegate: HangulComposerDelegate {
         return true
     }
     
+    func precomposeSyllableBeforeCursor(followsBackspace: Bool) {
+        precomposeRequests.append(followsBackspace)
+    }
+
+    func forgetLastPrecomposedSyllable() {
+        forgetPrecomposedCount += 1
+    }
+
     func textBeforeCursor(length: Int) -> String? {
         if fullText.isEmpty { return "" }
         let count = fullText.count
@@ -85,6 +96,8 @@ final class MockComposerDelegate: HangulComposerDelegate {
         markedTextDuringBackspaceUpdates = []
         shouldPassThroughBackspaceAfterClearingComposition = false
         passThroughBackspaceAfterClearingCompositionCallCount = 0
+        precomposeRequests = []
+        forgetPrecomposedCount = 0
     }
 }
 

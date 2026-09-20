@@ -434,12 +434,16 @@ public class HangulComposer: @unchecked Sendable {
         // Text conveniences belong to the host, which knows the field's opt-in
         // settings. English printable keys always pass through unchanged.
         if inputMode == .english {
-            if !context.isEmpty() {
+            // Text this keystroke commits is precomposed already, and a host that
+            // answers from before the commit would describe a document that no
+            // longer exists — so the rewrite only runs when nothing was composing.
+            let wasComposing = !context.isEmpty()
+            if wasComposing {
                 commitComposition(delegate: delegate)
                 delegate.setMarkedText("")
             }
             localTextBuffer = ""
-            if keyCode == KeyCode.backspace,
+            if !wasComposing, keyCode == KeyCode.backspace,
                event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
                 delegate.precomposeSyllableBeforeCursor(followsBackspace: followsBackspace)
             }

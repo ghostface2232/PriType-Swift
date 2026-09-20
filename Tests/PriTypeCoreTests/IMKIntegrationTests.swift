@@ -209,6 +209,20 @@ struct IMKIntegrationTests {
         #expect(field.client.calls.first == .insert("각"), "Tries again after the caret moved")
     }
 
+    @Test("English mode: ⌘⌫ never rewrites")
+    func englishModeCommandBackspace() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("\u{1100}\u{1161}\u{11A8}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        harness.systemSelects(.english)
+        field.client.clearLog()
+        field.client.resetQueryCounts()
+
+        #expect(!harness.press(.backspace, modifiers: .command))
+        #expect(field.client.selectionQueries == 0, "⌘⌫ deletes a line; the host owns it")
+        #expect(field.client.calls == [.host("shortcut")], "The host keeps the whole shortcut")
+    }
+
     @Test("Escape drops the composition and is consumed")
     func escapeCancels() {
         let (harness, field) = start()
