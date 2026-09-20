@@ -402,3 +402,12 @@ print("  메모리 증가:     \(String(format: "+%.1f", finalMemory - baseMemor
 print(String(repeating: "─", count: 60))
 print("  종합 결과: \(allPassed ? "✅ ALL TESTS PASSED" : "❌ SOME TESTS FAILED")")
 print(String(repeating: "=", count: 60))
+
+// The correctness checks above are pass/fail, so say so in the exit status too.
+// Printing ❌ and exiting 0 means anything that runs this — a CI step, a shell
+// loop over several commits — reads a failing run as a passing one. Nothing runs
+// it automatically today; this is what has to be true before anything can.
+// The timings are reported, never judged: a threshold on a number measured on
+// whatever machine happens to run it would fail for reasons that are not this
+// program's to decide.
+exit(allPassed ? 0 : 1)
