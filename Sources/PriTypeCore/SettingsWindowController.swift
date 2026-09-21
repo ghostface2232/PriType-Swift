@@ -858,6 +858,12 @@ struct SettingsView: View {
     /// success. That confirmation runs in a fresh process: this process's own TIS
     /// view never sees the write, and checking it here reported a failure after
     /// every successful removal (see `ABCLayoutStatusProbe`).
+    ///
+    /// Success does not mean every running process sees the change: each one
+    /// keeps its own TIS view until it restarts, and only TextInputMenuAgent is
+    /// relaunched here. No other input method or community guide gets live
+    /// propagation from a preference write either, so the UI tells the user to
+    /// log out instead of promising an immediate effect.
     private func removeABCKeyboard() {
         guard removeABCStatus != .working else { return }
         removeABCReset?.cancel()

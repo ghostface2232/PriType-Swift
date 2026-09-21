@@ -70,7 +70,7 @@
 "system.inputMonitoringSubtitle" = "Needed for the backup path that detects keys when the primary one stops.";
 "system.openSystemSettings" = "Open System Settings";
 "system.removeABC" = "Turn Off ABC Input Source";
-"system.removeABCSubtitle" = "Removes ABC from your input sources when PriType handles both languages. You can add it back in System Settings.";
+"system.removeABCSubtitle" = "Removes ABC from your input sources. Log out and back in to apply.";
 "system.removeABCButton" = "Turn Off";
 "system.removeABCSuccess" = "Disabled";
 "system.removeABCFailed" = "Failed";
