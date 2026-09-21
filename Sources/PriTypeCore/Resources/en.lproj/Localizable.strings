@@ -70,9 +70,9 @@
 "system.inputMonitoringSubtitle" = "Needed for the backup path that detects keys when the primary one stops.";
 "system.openSystemSettings" = "Open System Settings";
 "system.removeABC" = "Turn Off ABC Input Source";
-"system.removeABCSubtitle" = "Removes ABC from your input sources when PriType handles both languages. You can add it back in System Settings.";
+"system.removeABCSubtitle" = "Removes ABC from your input sources when PriType handles both languages. Apps that are already open pick this up after you log out and back in. You can add it back in System Settings.";
 "system.removeABCButton" = "Turn Off";
-"system.removeABCSuccess" = "Disabled";
+"system.removeABCSuccess" = "Done · Log out to apply";
 "system.removeABCFailed" = "Failed";
 
 /* Toggle Key App Exclusions */
