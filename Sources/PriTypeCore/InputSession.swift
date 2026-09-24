@@ -210,6 +210,51 @@ final class InputSession: @unchecked Sendable {
         return true
     }
 
+    /// Show the host the live syllable again after IMK deactivated and re-activated
+    /// this session's field in the middle of a keystroke (a host finishing its own
+    /// activation just after a click). The composition was kept through the churn,
+    /// but the host may not have kept its side of it: edits it got while inactive
+    /// can have been dropped, or its marked text ended.
+    ///
+    /// - Marked text that already shows the syllable: nothing to do.
+    /// - Other marked text: the syllable replaces it.
+    /// - No marked text, and the syllable already sits before the caret as plain
+    ///   text: the host committed it itself. Marking it again would type it twice,
+    ///   so the composition ends there, engine-only. The check includes the last
+    ///   character this input method committed, so a syllable the host dropped is
+    ///   not mistaken for the same syllable typed just before it (가 + 가).
+    /// - Otherwise the host lost it: mark it again.
+    ///
+    /// Direct-live text is real text a churn cannot take away; the next key's
+    /// `prepareForInput` verifies it as usual.
+    func restorePreeditAfterReactivation() {
+        guard composer.hasActiveComposition, adapter.deliveryMode != .immediate else { return }
+        if let direct = adapter as? DirectInsertionAdapter, !direct.requiresMarkedTextFinalize { return }
+        let preedit = composer.preeditForDisplay
+        let marked = client.markedRange()
+        if marked.location != NSNotFound, marked.length > 0 {
+            if client.attributedSubstring(from: marked)?.string == preedit { return }
+        } else if hostCommitted(preedit) {
+            DebugLogger.log("InputSession: host committed the preedit during reactivation; ending the composition")
+            _ = composer.flushCommitString()
+            return
+        }
+        DebugLogger.log("InputSession: re-rendering the preedit after reactivation")
+        adapter.setMarkedText(preedit)
+    }
+
+    private func hostCommitted(_ preedit: String) -> Bool {
+        let selection = client.selectedRange()
+        guard selection.location != NSNotFound, selection.location < 10_000_000, selection.length == 0 else {
+            return false
+        }
+        let expected = (composer.localTextBuffer.last.map(String.init) ?? "") + preedit
+        let length = expected.utf16.count
+        guard selection.location >= length else { return false }
+        let before = client.attributedSubstring(from: NSRange(location: selection.location - length, length: length))
+        return before?.string == expected
+    }
+
     /// The marked-text finalize, callable against any client. `PriTypeInputController`
     /// uses this directly when IMK hands it a sender that is not this session's client.
     static func finalizeMarkedComposition(

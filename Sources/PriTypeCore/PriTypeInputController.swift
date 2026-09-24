@@ -282,6 +282,11 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         assert(Thread.isMainThread, "IMK activateServer must run on main thread")
         #endif
         super.activateServer(sender)
+        Self.deliver(.activate(self, sender))
+    }
+
+    /// The session work of `activateServer`, once it may run (see `deliver`).
+    private func beginActivation(_ sender: Any?) {
         claimActiveController()
         // NOTE: Focus changes never reset `composer.inputMode`. The Korean/English
         // state is owned solely by the toggle path and the `setValue` ingress, so
@@ -315,6 +320,19 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         #if DEBUG
         assert(Thread.isMainThread, "IMK deactivateServer must run on main thread")
         #endif
+        // Committed before IMK hears of the deactivation, as always; a queued
+        // deactivation cannot wait for that, so its commit comes after.
+        if Self.handleDepth > 0 {
+            super.deactivateServer(sender)
+            Self.deliver(.deactivate(self, sender))
+        } else {
+            Self.deliver(.deactivate(self, sender))
+            super.deactivateServer(sender)
+        }
+    }
+
+    /// The session work of `deactivateServer`, once it may run (see `deliver`).
+    private func endActivation(_ sender: Any?) {
         // Fallback finalize. The primary path is the session's focus-loss observer (it
         // fires earlier, while the host still accepts input); by the time
         // deactivateServer runs, native hosts like KakaoTalk have already resigned and
@@ -331,7 +349,6 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // after a reactivation. Cross-app leaking is prevented by the composer:
         // `markKeystroke` empties the buffer on the first keystroke in another
         // app, and `handleHanjaLookup` ignores a buffer typed in another app.
-        super.deactivateServer(sender)
         // Keep the session alive — async Hanja callbacks need the adapter, and a
         // handle() arriving before the next activateServer needs the context. But:
         // - disarm the focus-loss observer: the composer is shared, so a stale
@@ -418,6 +435,135 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         super.setValue(value, forTag: tag, client: sender)
     }
 
+    // MARK: - Re-entrant Lifecycle Calls
+    //
+    // `handle()` makes synchronous calls into the host (insertText, setMarkedText,
+    // validAttributesForMarkedText), and IMK can deliver activateServer and
+    // deactivateServer NESTED inside them. Observed on macOS 27: a key typed right
+    // after clicking into TextEdit, whose activation finishes ~250 ms after the
+    // click, got deactivateServer + activateServer while `updateComposition` was
+    // inside `insertText("한")`. The nested deactivation flushed the shared engine
+    // (the pending ㄱ) into a host that was not taking edits, and the composer then
+    // marked the ㄱ it had read before the insert on an engine that no longer held
+    // it: the next vowel started a new syllable (한ㅡㄹ for 한글). Chromium and
+    // Electron do the same inside `ensureSession`'s validAttributesForMarkedText.
+    //
+    // So while a `handle()` runs, the session work of both calls is queued (the
+    // `super` calls still happen at once) and runs when the outermost `handle()`
+    // returns. A queued deactivation of the controller that owns the engine is
+    // then held rather than run: an activation of the same controller and client —
+    // or a key arriving for them — shows the field never really lost focus, and
+    // the composition carries on (`InputSession.restorePreeditAfterReactivation`).
+    // Anything else settles it first, as a real focus change: another controller
+    // or client activating, another key target, another deactivation, or time
+    // passing (`scheduleDeferredDeactivation`). It cannot simply be skipped: the
+    // same call from `claimActiveController` or `replaceSession` would commit the
+    // composition into a stale session's client.
+
+    private enum LifecycleCall {
+        case activate(PriTypeInputController, Any?)
+        case deactivate(PriTypeInputController, Any?)
+    }
+
+    private struct PendingDeactivation {
+        let controller: PriTypeInputController
+        let sender: Any?
+        let token: UInt64
+    }
+
+    /// How many `handle()` calls are running (nested ones included). While it is
+    /// above zero, lifecycle calls queue in `deferredLifecycleCalls`.
+    /// - Warning: Access from main thread only (guaranteed by IMK).
+    nonisolated(unsafe) private static var handleDepth = 0
+    nonisolated(unsafe) private static var deferredLifecycleCalls: [LifecycleCall] = []
+    nonisolated(unsafe) private static var pendingDeactivation: PendingDeactivation?
+    nonisolated(unsafe) private static var pendingDeactivationToken: UInt64 = 0
+
+    /// Runs `work` once a held deactivation has waited long enough for its
+    /// activation. `work` settles it if nothing else has. A harness replaces this
+    /// to decide itself when that time has come.
+    /// - Warning: Access from main thread only.
+    nonisolated(unsafe) public static var scheduleDeferredDeactivation: (@escaping @Sendable () -> Void) -> Void = { work in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    /// Route a lifecycle call: queue it while a `handle()` runs, else run it.
+    private static func deliver(_ call: LifecycleCall) {
+        if handleDepth > 0 {
+            deferredLifecycleCalls.append(call)
+        } else {
+            perform(call, nested: false)
+        }
+    }
+
+    /// Run what was queued during the `handle()` that just returned. Calls IMK
+    /// nests inside this replay queue behind it, as they would inside `handle()`.
+    private static func drainDeferredLifecycleCalls() {
+        handleDepth += 1
+        defer { handleDepth -= 1 }
+        while !deferredLifecycleCalls.isEmpty {
+            perform(deferredLifecycleCalls.removeFirst(), nested: true)
+        }
+    }
+
+    private static func perform(_ call: LifecycleCall, nested: Bool) {
+        switch call {
+        case let .deactivate(controller, sender):
+            if let pending = pendingDeactivation, pending.controller !== controller {
+                settlePendingDeactivation()
+            }
+            guard nested, sharedController === controller else {
+                settlePendingDeactivation()
+                controller.endActivation(sender)
+                return
+            }
+            DebugLogger.log("PriTypeInputController: deactivation arrived inside handle(); holding it for a reactivation")
+            pendingDeactivationToken &+= 1
+            let token = pendingDeactivationToken
+            pendingDeactivation = PendingDeactivation(controller: controller, sender: sender, token: token)
+            scheduleDeferredDeactivation { settlePendingDeactivation(token: token) }
+
+        case let .activate(controller, sender):
+            if let pending = pendingDeactivation, pending.controller === controller,
+               let client = sender as? IMKTextInput, controller.session?.matches(client) == true {
+                // Deactivated and activated again: the same field, still composing.
+                pendingDeactivation = nil
+                DebugLogger.log("PriTypeInputController: same client re-activated; continuing the composition")
+                controller.beginActivation(sender)
+                controller.session?.restorePreeditAfterReactivation()
+                return
+            }
+            settlePendingDeactivation()
+            controller.beginActivation(sender)
+        }
+    }
+
+    /// A key for `client` arrived while a deactivation of this controller was
+    /// held: the field is live, so the composition carries on. A key for anything
+    /// else means the deactivation was real.
+    private func resolvePendingDeactivation(keyFrom client: IMKTextInput) {
+        guard let pending = Self.pendingDeactivation else { return }
+        guard pending.controller === self, let session, session.matches(client) else {
+            Self.settlePendingDeactivation()
+            return
+        }
+        Self.pendingDeactivation = nil
+        DebugLogger.log("PriTypeInputController: key arrived for the held client; continuing the composition")
+        session.restorePreeditAfterReactivation()
+    }
+
+    /// Run the held deactivation now (with `token`: only if it is still that one).
+    private static func settlePendingDeactivation(token: UInt64? = nil) {
+        guard let pending = pendingDeactivation, token == nil || pending.token == token else { return }
+        guard handleDepth == 0 || token == nil else {
+            // A timer that fired while a handle() runs: that handle() resolves it.
+            return
+        }
+        pendingDeactivation = nil
+        DebugLogger.log("PriTypeInputController: no reactivation followed; running the held deactivation")
+        pending.controller.endActivation(pending.sender)
+    }
+
     // MARK: - Keystroke Pipeline
 
     override public func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
@@ -429,6 +575,15 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         guard event.type == .keyDown else {
             return false
         }
+
+        // IMK may deliver activateServer/deactivateServer while this is inside a
+        // synchronous call into the host; those wait until it returns.
+        Self.handleDepth += 1
+        defer {
+            Self.handleDepth -= 1
+            if Self.handleDepth == 0 { Self.drainDeferredLifecycleCalls() }
+        }
+        resolvePendingDeactivation(keyFrom: client)
 
         // One interval per keystroke, with the stages below nested inside it, so a
         // slow key can be read as which stage was slow rather than as a total. No
