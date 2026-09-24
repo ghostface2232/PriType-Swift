@@ -138,11 +138,25 @@ public final class IMKHarness {
     /// and the host takes no edits until it is active again. With
     /// `nestedActivation` IMK also delivers `activateServer` before the call
     /// returns; otherwise the test delivers it later with `completeActivation(_:)`.
-    public func churnFocus(of field: Field, during call: FakeTextClient.Reentry, nestedActivation: Bool = true) {
+    /// A host that keeps taking edits (`dropsEdits: false`) models a deactivation
+    /// that is really focus leaving, with the host not yet resigned.
+    public func churnFocus(of field: Field, during call: FakeTextClient.Reentry,
+                           nestedActivation: Bool = true, dropsEdits: Bool = true) {
         field.client.onNext(call) { [weak self] in
-            field.client.ignoresEdits = true
+            field.client.ignoresEdits = dropsEdits
             field.controller.deactivateServer(field.client)
             if nestedActivation { self?.completeActivation(field) }
+        }
+    }
+
+    /// Focus moves to another field behind the same client object while the input
+    /// method is inside `call`: IMK deactivates and re-activates the field's
+    /// controller with the same client, which now fronts a field holding `text`.
+    public func switchField(of field: Field, to text: String, during call: FakeTextClient.Reentry) {
+        field.client.onNext(call) {
+            field.controller.deactivateServer(field.client)
+            field.client.showOtherField(text)
+            field.controller.activateServer(field.client)
         }
     }
 

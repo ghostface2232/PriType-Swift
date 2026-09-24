@@ -94,6 +94,16 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
         log(.host("unmark"))
     }
 
+    /// The client now fronts another field holding `text`, caret at its end. One
+    /// client object stands for every web field in a Chromium window, so focus
+    /// can move between fields with the input method still talking to it.
+    public func showOtherField(_ text: String) {
+        storage = NSMutableString(string: text)
+        selection = NSRange(location: storage.length, length: 0)
+        marked = nil
+        log(.host("other field"))
+    }
+
     /// The host throws its marked text away.
     public func discardMarkedText() {
         if let marked {

@@ -323,10 +323,14 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // Committed before IMK hears of the deactivation, as always; a queued
         // deactivation cannot wait for that, so its commit comes after.
         if Self.handleDepth > 0 {
+            // Where the composition sits in the host, recorded now: once the call
+            // this arrived in returns, the host may front another field.
+            let anchor = Self.sharedController === self && composer.hasActiveComposition
+                ? session?.hostAnchor() : nil
             super.deactivateServer(sender)
-            Self.deliver(.deactivate(self, sender))
+            Self.deliver(.deactivate(self, sender, anchor))
         } else {
-            Self.deliver(.deactivate(self, sender))
+            Self.deliver(.deactivate(self, sender, nil))
             super.deactivateServer(sender)
         }
     }
@@ -451,23 +455,33 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     // So while a `handle()` runs, the session work of both calls is queued (the
     // `super` calls still happen at once) and runs when the outermost `handle()`
     // returns. A queued deactivation of the controller that owns the engine is
-    // then held rather than run: an activation of the same controller and client —
-    // or a key arriving for them — shows the field never really lost focus, and
-    // the composition carries on (`InputSession.restorePreeditAfterReactivation`).
-    // Anything else settles it first, as a real focus change: another controller
-    // or client activating, another key target, another deactivation, or time
-    // passing (`scheduleDeferredDeactivation`). It cannot simply be skipped: the
-    // same call from `claimActiveController` or `replaceSession` would commit the
+    // then held rather than run, with a record of where the composition sat in the
+    // host when it arrived (`InputSession.HostAnchor`). An activation of the same
+    // controller and client — or a key arriving for them — resolves it as churn
+    // IF the host still fronts the same field: the composition carries on
+    // (`InputSession.resumeAfterHeldDeactivation`). The client object alone does
+    // not prove that; every web field in a Chromium window shares one. Anything
+    // else settles it as a real focus change: another controller or client
+    // activating, another key target, another deactivation, or time passing
+    // (`scheduleDeferredDeactivation`). It cannot simply be skipped: the same call
+    // from `claimActiveController` or `replaceSession` would commit the
     // composition into a stale session's client.
+    //
+    // Settling late costs nothing a prompt commit would have saved: the host
+    // stopped taking edits when the deactivation arrived — that is what lost the
+    // ㄱ — so what matters is what it kept. `settleHeldDeactivation` checks that
+    // before the usual finalize, so a syllable the host committed on resigning is
+    // not typed twice.
 
     private enum LifecycleCall {
         case activate(PriTypeInputController, Any?)
-        case deactivate(PriTypeInputController, Any?)
+        case deactivate(PriTypeInputController, Any?, InputSession.HostAnchor?)
     }
 
     private struct PendingDeactivation {
         let controller: PriTypeInputController
         let sender: Any?
+        let anchor: InputSession.HostAnchor?
         let token: UInt64
     }
 
@@ -508,7 +522,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
 
     private static func perform(_ call: LifecycleCall, nested: Bool) {
         switch call {
-        case let .deactivate(controller, sender):
+        case let .deactivate(controller, sender, anchor):
             if let pending = pendingDeactivation, pending.controller !== controller {
                 settlePendingDeactivation()
             }
@@ -520,17 +534,19 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             DebugLogger.log("PriTypeInputController: deactivation arrived inside handle(); holding it for a reactivation")
             pendingDeactivationToken &+= 1
             let token = pendingDeactivationToken
-            pendingDeactivation = PendingDeactivation(controller: controller, sender: sender, token: token)
+            pendingDeactivation = PendingDeactivation(controller: controller, sender: sender, anchor: anchor, token: token)
             scheduleDeferredDeactivation { settlePendingDeactivation(token: token) }
 
         case let .activate(controller, sender):
             if let pending = pendingDeactivation, pending.controller === controller,
                let client = sender as? IMKTextInput, controller.session?.matches(client) == true {
-                // Deactivated and activated again: the same field, still composing.
+                // Deactivated and activated again: churn, if the field is the same.
                 pendingDeactivation = nil
-                DebugLogger.log("PriTypeInputController: same client re-activated; continuing the composition")
+                DebugLogger.log("PriTypeInputController: same client re-activated after a held deactivation")
+                if controller.session?.resumeAfterHeldDeactivation(since: pending.anchor) == false {
+                    controller.endActivation(pending.sender)
+                }
                 controller.beginActivation(sender)
-                controller.session?.restorePreeditAfterReactivation()
                 return
             }
             settlePendingDeactivation()
@@ -539,8 +555,8 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     }
 
     /// A key for `client` arrived while a deactivation of this controller was
-    /// held: the field is live, so the composition carries on. A key for anything
-    /// else means the deactivation was real.
+    /// held: the field is live, and the composition carries on if it is still the
+    /// same field. A key for anything else means the deactivation was real.
     private func resolvePendingDeactivation(keyFrom client: IMKTextInput) {
         guard let pending = Self.pendingDeactivation else { return }
         guard pending.controller === self, let session, session.matches(client) else {
@@ -548,8 +564,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             return
         }
         Self.pendingDeactivation = nil
-        DebugLogger.log("PriTypeInputController: key arrived for the held client; continuing the composition")
-        session.restorePreeditAfterReactivation()
+        DebugLogger.log("PriTypeInputController: key arrived for the held client")
+        if !session.resumeAfterHeldDeactivation(since: pending.anchor) {
+            endActivation(pending.sender)
+        }
     }
 
     /// Run the held deactivation now (with `token`: only if it is still that one).
@@ -561,6 +579,9 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         }
         pendingDeactivation = nil
         DebugLogger.log("PriTypeInputController: no reactivation followed; running the held deactivation")
+        if sharedController === pending.controller {
+            pending.controller.session?.settleHeldDeactivation(since: pending.anchor)
+        }
         pending.controller.endActivation(pending.sender)
     }
 

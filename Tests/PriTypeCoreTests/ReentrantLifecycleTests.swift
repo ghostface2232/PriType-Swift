@@ -59,18 +59,81 @@ struct ReentrantLifecycleTests {
         #expect(field.client.markedText == "글")
     }
 
-    @Test("With no reactivation at all, the held deactivation commits the syllable")
+    @Test("With no reactivation, the held deactivation commits the syllable the host still shows")
     func heldDeactivationTimesOut() {
         let (harness, field) = start()
         defer { harness.finish() }
         harness.type("gks")
-        harness.churnFocus(of: field, during: .insertText, nestedActivation: false)
+        harness.churnFocus(of: field, during: .insertText, nestedActivation: false, dropsEdits: false)
         harness.type("r")
-        field.client.ignoresEdits = false
+        #expect(field.client.markedText == "ㄱ")
         harness.runDeferredDeactivations()
         #expect(field.client.text == "한ㄱ")
         #expect(field.client.markedText == nil)
         #expect(!PriTypeInputController.sharedComposer.hasActiveComposition)
+    }
+
+    @Test("A syllable the host kept on resigning is not committed a second time")
+    func heldDeactivationHostKeptSyllable() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type("gk")
+        harness.churnFocus(of: field, during: .setMarkedText, nestedActivation: false)
+        harness.type("s")                  // 한 is marked, then focus really leaves
+        field.client.unmarkText()          // the host resigns, keeping it as text
+        field.client.ignoresEdits = false  // a duplicate would now land
+        field.client.clearLog()
+        harness.runDeferredDeactivations()
+        #expect(field.client.text == "한", "not 한한")
+        #expect(field.client.calls.isEmpty)
+        #expect(!PriTypeInputController.sharedComposer.hasActiveComposition)
+    }
+
+    @Test("A syllable a resigned host dropped does not follow focus to the next field")
+    func heldDeactivationHostDroppedSyllable() {
+        let (harness, first) = start()
+        defer { harness.finish() }
+        harness.type("gks")
+        harness.churnFocus(of: first, during: .insertText, nestedActivation: false)
+        harness.type("r")                  // the host takes no edits from here on
+        harness.runDeferredDeactivations()
+        // Nothing reaches a host that stopped taking edits when the deactivation
+        // arrived; a prompt commit would have been dropped the same way.
+        #expect(first.client.text == "한")
+        #expect(!PriTypeInputController.sharedComposer.hasActiveComposition)
+        let second = harness.makeField(bundleID: "com.pritype.imk-harness.other")
+        harness.activateAhead(second)
+        harness.type("rk")
+        #expect(second.client.text == "가")
+    }
+
+    @Test("A field switch behind the same client leaves the old composition out of the new field")
+    func fieldSwitchBehindSameClient() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("메모 ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        harness.type("gks")
+        harness.switchField(of: field, to: "검색", during: .insertText)
+        harness.type("r")                  // 한 commits into 메모, then focus moves
+        #expect(field.client.text == "검색", "the ㄱ typed in 메모 stays out of 검색")
+        #expect(field.client.markedText == nil)
+        #expect(!PriTypeInputController.sharedComposer.hasActiveComposition)
+        harness.type("rk")
+        #expect(field.client.text == "검색가")
+    }
+
+    @Test("A field switch behind the same client, seen by the next key, also drops the old composition")
+    func fieldSwitchSeenByNextKey() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("메모 ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        harness.type("gks")
+        harness.churnFocus(of: field, during: .insertText, nestedActivation: false)
+        harness.type("r")
+        field.client.ignoresEdits = false
+        field.client.showOtherField("검색")
+        harness.type("k")
+        #expect(field.client.text == "검색ㅏ", "not 검색가 from the ㄱ typed in 메모")
     }
 
     @Test("A real focus change nested in the commit finishes the key, then commits into the old field")
@@ -115,6 +178,21 @@ struct ReentrantLifecycleTests {
         field.client.ignoresEdits = false
         field.client.discardMarkedText()
         #expect(field.client.text == "가")
+        harness.completeActivation(field)
+        #expect(field.client.text == "가가")
+        #expect(field.client.markedText == "가")
+    }
+
+    @Test("Text already before the caret is not mistaken for a syllable the host committed")
+    func existingTextIsNotTheSyllable() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.insertText("가", replacementRange: NSRange(location: NSNotFound, length: 0))
+        harness.type("r")
+        harness.churnFocus(of: field, during: .setMarkedText, nestedActivation: false)
+        harness.type("k")                  // marks 가 after the 가 already there
+        field.client.ignoresEdits = false
+        field.client.discardMarkedText()
         harness.completeActivation(field)
         #expect(field.client.text == "가가")
         #expect(field.client.markedText == "가")
