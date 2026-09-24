@@ -41,6 +41,11 @@ public class HangulComposer: @unchecked Sendable {
     public var hasActiveComposition: Bool {
         !context.isEmpty()
     }
+
+    /// The live syllable as the host is shown it ("" when nothing is composing).
+    public var preeditForDisplay: String {
+        CompositionHelpers.normalizeJamoForDisplay(context.getPreeditString())
+    }
     
     // MARK: - Dependencies
 

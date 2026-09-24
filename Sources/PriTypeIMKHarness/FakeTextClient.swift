@@ -20,6 +20,8 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
         case host(String)
         /// `overrideKeyboardWithKeyboardNamed:`.
         case overrideKeyboard(String)
+        /// An edit the host ignored because it was not accepting input (`ignoresEdits`).
+        case dropped(String)
 
         public var description: String {
             switch self {
@@ -27,6 +29,7 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
             case .insert(let text): return "insert(\(text))"
             case .host(let action): return "host(\(action))"
             case .overrideKeyboard(let name): return "override(\(name))"
+            case .dropped(let text): return "dropped(\(text))"
             }
         }
     }
@@ -55,6 +58,61 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
     }
 
     public func clearLog() { calls.removeAll() }
+
+    // MARK: Re-entrant calls
+
+    /// The synchronous calls the input method makes into the host during which IMK
+    /// can deliver another controller call — its own `activateServer` or
+    /// `deactivateServer` — before the first one returns.
+    public enum Reentry: Sendable {
+        case insertText, setMarkedText, validAttributes
+    }
+
+    private var reentries: [(Reentry, () -> Void)] = []
+
+    /// Run `body` nested inside the next `call` the input method makes, after the
+    /// host has taken it. Once only; queue several for several calls.
+    public func onNext(_ call: Reentry, run body: @escaping () -> Void) {
+        reentries.append((call, body))
+    }
+
+    private func reenter(_ call: Reentry) {
+        guard let index = reentries.firstIndex(where: { $0.0 == call }) else { return }
+        let body = reentries.remove(at: index).1
+        body()
+    }
+
+    /// While set, the host is between losing and regaining activation and takes no
+    /// edits from the input method: they are logged as `.dropped` and change
+    /// nothing. TextEdit, finishing its activation just after a click, does this.
+    public var ignoresEdits = false
+
+    /// The host ends the composition itself and keeps the marked text as ordinary
+    /// text, as `NSTextView.unmarkText()` does.
+    public func unmarkText() {
+        marked = nil
+        log(.host("unmark"))
+    }
+
+    /// The client now fronts another field holding `text`, caret at its end. One
+    /// client object stands for every web field in a Chromium window, so focus
+    /// can move between fields with the input method still talking to it.
+    public func showOtherField(_ text: String) {
+        storage = NSMutableString(string: text)
+        selection = NSRange(location: storage.length, length: 0)
+        marked = nil
+        log(.host("other field"))
+    }
+
+    /// The host throws its marked text away.
+    public func discardMarkedText() {
+        if let marked {
+            storage.deleteCharacters(in: marked)
+            selection = NSRange(location: marked.location, length: 0)
+            self.marked = nil
+        }
+        log(.host("discard marked"))
+    }
 
     /// Move the caret to `location` without telling the input method, as a
     /// click in the text does when nothing is marked.
@@ -146,19 +204,23 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
 
     public func insertText(_ string: Any!, replacementRange: NSRange) {
         let text = Self.plain(string)
+        guard !ignoresEdits else { return log(.dropped(text)) }
         let inserted = replace(target(for: replacementRange), with: text)
         marked = nil
         selection = NSRange(location: NSMaxRange(inserted), length: 0)
         log(.insert(text))
+        reenter(.insertText)
     }
 
     public func setMarkedText(_ string: Any!, selectionRange: NSRange, replacementRange: NSRange) {
         let text = Self.plain(string)
+        guard !ignoresEdits else { return log(.dropped(text)) }
         let inserted = replace(target(for: replacementRange), with: text)
         marked = inserted.length > 0 ? inserted : nil
         selection = NSRange(location: inserted.location + min(selectionRange.location, inserted.length),
                             length: 0)
         log(.mark(text))
+        reenter(.setMarkedText)
     }
 
     // MARK: IMKTextInput — queries
@@ -212,7 +274,8 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
     public var caretRect = NSRect(x: 400, y: 400, width: 1, height: 18)
 
     public func validAttributesForMarkedText() -> [Any]! {
-        [NSAttributedString.Key.underlineStyle.rawValue,
+        reenter(.validAttributes)
+        return [NSAttributedString.Key.underlineStyle.rawValue,
          NSAttributedString.Key.underlineColor.rawValue,
          NSAttributedString.Key.markedClauseSegment.rawValue]
     }

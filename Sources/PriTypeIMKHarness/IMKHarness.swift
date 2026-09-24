@@ -90,6 +90,9 @@ public final class IMKHarness {
         PriTypeInputController.systemModeReporter = { [weak self] mode in
             self?.reportedModes.append(mode)
         }
+        PriTypeInputController.scheduleDeferredDeactivation = { [weak self] work in
+            self?.deferredDeactivations.append(work)
+        }
         InputModeCoordinator.shared.applyPendingKeyActions()
         let composer = PriTypeInputController.sharedComposer
         composer.setInputMode(.korean)
@@ -125,6 +128,67 @@ public final class IMKHarness {
     public func activateAhead(_ field: Field) {
         field.controller.activateServer(field.client)
         focused = field
+    }
+
+    // MARK: Re-entrant focus changes
+
+    /// The host finishing its own activation while the input method is inside
+    /// `call` (observed: TextEdit, about 250 ms after a click into it): IMK
+    /// delivers `deactivateServer` to the field's controller nested in that call,
+    /// and the host takes no edits until it is active again. With
+    /// `nestedActivation` IMK also delivers `activateServer` before the call
+    /// returns; otherwise the test delivers it later with `completeActivation(_:)`.
+    /// A host that keeps taking edits (`dropsEdits: false`) models a deactivation
+    /// that is really focus leaving, with the host not yet resigned.
+    public func churnFocus(of field: Field, during call: FakeTextClient.Reentry,
+                           nestedActivation: Bool = true, dropsEdits: Bool = true) {
+        field.client.onNext(call) { [weak self] in
+            field.client.ignoresEdits = dropsEdits
+            field.controller.deactivateServer(field.client)
+            if nestedActivation { self?.completeActivation(field) }
+        }
+    }
+
+    /// Focus moves to another field behind the same client object while the input
+    /// method is inside `call`: IMK deactivates and re-activates the field's
+    /// controller with the same client, which now fronts a field holding `text`.
+    public func switchField(of field: Field, to text: String, during call: FakeTextClient.Reentry) {
+        field.client.onNext(call) {
+            field.controller.deactivateServer(field.client)
+            field.client.showOtherField(text)
+            field.controller.activateServer(field.client)
+        }
+    }
+
+    /// IMK activates `field` again, the end of a `churnFocus` whose activation
+    /// was not nested.
+    public func completeActivation(_ field: Field) {
+        field.client.ignoresEdits = false
+        field.controller.activateServer(field.client)
+        focused = field
+    }
+
+    /// A real focus change delivered while the input method is inside `call`
+    /// into `field`: IMK deactivates `field` and activates `other` before the
+    /// call returns.
+    public func moveFocus(from field: Field, to other: Field, during call: FakeTextClient.Reentry) {
+        field.client.onNext(call) { [weak self] in
+            field.controller.deactivateServer(field.client)
+            other.controller.activateServer(other.client)
+            self?.focused = other
+        }
+    }
+
+    /// Deactivations a controller put off, waiting for the activation that
+    /// would show the field never really lost focus.
+    private var deferredDeactivations: [@Sendable () -> Void] = []
+
+    /// Time passes with no activation: run what the controllers scheduled for
+    /// a deactivation they put off.
+    public func runDeferredDeactivations() {
+        let work = deferredDeactivations
+        deferredDeactivations.removeAll()
+        work.forEach { $0() }
     }
 
     /// Focus leaves every field (e.g. another app without text input).
@@ -237,6 +301,7 @@ public final class IMKHarness {
     /// Run everything the key monitor queued, and leave the shared engine idle.
     public func finish() {
         InputModeCoordinator.shared.applyPendingKeyActions()
+        runDeferredDeactivations()
         blur()
         let composer = PriTypeInputController.sharedComposer
         composer.dismissHanjaCandidates(reason: "harness finished")

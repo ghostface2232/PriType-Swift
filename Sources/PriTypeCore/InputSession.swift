@@ -210,6 +210,155 @@ final class InputSession: @unchecked Sendable {
         return true
     }
 
+    // MARK: Held deactivation (see PriTypeInputController, Re-entrant Lifecycle Calls)
+
+    /// Where the composition meets the host's text: the start of the marked text,
+    /// else the caret, and the few characters before it. Recorded when IMK
+    /// deactivates the field in the middle of a keystroke, and compared with the
+    /// host once that deactivation is resolved. The client object alone cannot say
+    /// whether the field is still the same one — every web field in a Chromium
+    /// window shares one — but another field is almost never at the same offset
+    /// behind the same text.
+    struct HostAnchor: Equatable {
+        /// `NSNotFound` when the host would not say.
+        let location: Int
+        let textBefore: String?
+
+        var isKnown: Bool { location != NSNotFound && textBefore != nil }
+    }
+
+    /// Characters before the composition an anchor records.
+    private static let anchorContextLength = 8
+
+    /// Where the composition meets the host's text right now (a few client queries).
+    func hostAnchor() -> HostAnchor {
+        hostAnchor(markedRange: client.markedRange())
+    }
+
+    private func hostAnchor(markedRange marked: NSRange) -> HostAnchor {
+        let location: Int
+        if marked.location != NSNotFound, marked.length > 0 {
+            location = marked.location
+        } else {
+            let selection = client.selectedRange()
+            location = selection.location != NSNotFound && selection.location < 10_000_000
+                ? selection.location : NSNotFound
+        }
+        return HostAnchor(location: location, textBefore: text(before: location, length: Self.anchorContextLength))
+    }
+
+    private func text(before location: Int, length: Int) -> String? {
+        guard location != NSNotFound else { return nil }
+        let start = max(0, location - length)
+        return client.attributedSubstring(from: NSRange(location: start, length: location - start))?.string
+    }
+
+    /// What became of the live syllable in the host while its deactivation was held.
+    private enum HeldPreedit {
+        /// Still marked where it was.
+        case shown
+        /// Where it was, but the host no longer shows it: it dropped the edit or
+        /// its marked text.
+        case lost
+        /// The host committed it itself: it now sits before the caret as plain text.
+        case committedByHost
+        /// The host now fronts another field. `ourMarkThere`: the marked text there
+        /// is the syllable, sent after the switch.
+        case otherField(ourMarkThere: Bool)
+    }
+
+    private func heldPreedit(_ preedit: String, since anchor: HostAnchor?) -> HeldPreedit {
+        let marked = client.markedRange()
+        let hasMarked = marked.location != NSNotFound && marked.length > 0
+        let markedIsPreedit = hasMarked && client.attributedSubstring(from: marked)?.string == preedit
+        if let anchor, anchor.isKnown {
+            let now = hostAnchor(markedRange: marked)
+            if now.isKnown, now != anchor {
+                if !hasMarked, hostCommitted(preedit, at: anchor) { return .committedByHost }
+                return .otherField(ourMarkThere: markedIsPreedit)
+            }
+        }
+        // No anchor, or a host that will not say where it is: nothing shows a
+        // field change, so the field is taken to be the one that was typed in.
+        return markedIsPreedit ? .shown : .lost
+    }
+
+    /// Whether the caret now sits right after `preedit`, at `anchor`, with the
+    /// anchor's own text still before it — the host unmarked the syllable itself.
+    private func hostCommitted(_ preedit: String, at anchor: HostAnchor) -> Bool {
+        guard let before = anchor.textBefore else { return false }
+        let selection = client.selectedRange()
+        let length = preedit.utf16.count
+        guard selection.length == 0, selection.location == anchor.location + length else { return false }
+        return text(before: selection.location, length: before.utf16.count + length) == before + preedit
+    }
+
+    /// Whether the live syllable is shown through marked text, which a host can
+    /// drop or end on its own. Direct-live text is real text; the next key's
+    /// `prepareForInput` verifies it as usual.
+    private var composesInMarkedText: Bool {
+        guard composer.hasActiveComposition, adapter.deliveryMode != .immediate else { return false }
+        if let direct = adapter as? DirectInsertionAdapter { return direct.requiresMarkedTextFinalize }
+        return true
+    }
+
+    /// The deactivation held since `anchor` turned out to be churn: IMK activated
+    /// this client again, or sent it a key. Carry on the composition if the host
+    /// still fronts the same field, showing it the syllable again if the churn
+    /// cost it that; nothing is typed twice when the host committed it itself.
+    ///
+    /// - Returns: `false` when the host now fronts another field. The composition
+    ///   is then dropped from the engine without touching that field (beyond taking
+    ///   back a mark of ours that landed there): the field it was typed in can no
+    ///   longer be reached through this client, and hosts commit the marked text
+    ///   of a field they leave. The caller ends the session as a real deactivation.
+    func resumeAfterHeldDeactivation(since anchor: HostAnchor?) -> Bool {
+        guard composesInMarkedText else { return true }
+        let preedit = composer.preeditForDisplay
+        switch heldPreedit(preedit, since: anchor) {
+        case .shown:
+            return true
+        case .lost:
+            DebugLogger.log("InputSession: the host lost the preedit while inactive; marking it again")
+            adapter.setMarkedText(preedit)
+            return true
+        case .committedByHost:
+            DebugLogger.log("InputSession: the host committed the preedit itself; ending the composition")
+            _ = composer.flushCommitString()
+            return true
+        case .otherField(let ourMarkThere):
+            DebugLogger.log("InputSession: the client now fronts another field; dropping the composition")
+            dropComposition(clearingMark: ourMarkThere)
+            return false
+        }
+    }
+
+    /// The held deactivation was real (another client, time passing). Before the
+    /// usual finalize commits the syllable: when the host committed it itself or
+    /// moved to another field, end the composition here instead, so the finalize
+    /// has nothing left to type twice or into the wrong field.
+    func settleHeldDeactivation(since anchor: HostAnchor?) {
+        guard composesInMarkedText else { return }
+        switch heldPreedit(composer.preeditForDisplay, since: anchor) {
+        case .shown, .lost:
+            break
+        case .committedByHost:
+            DebugLogger.log("InputSession: the host committed the preedit itself; nothing left to finalize")
+            _ = composer.flushCommitString()
+        case .otherField(let ourMarkThere):
+            DebugLogger.log("InputSession: the client now fronts another field; dropping the composition")
+            dropComposition(clearingMark: ourMarkThere)
+        }
+    }
+
+    private func dropComposition(clearingMark: Bool) {
+        if clearingMark {
+            adapter.setMarkedText("")
+        }
+        composer.discardCompositionForPassThrough()
+        (adapter as? DirectInsertionAdapter)?.resetPreeditTracking()
+    }
+
     /// The marked-text finalize, callable against any client. `PriTypeInputController`
     /// uses this directly when IMK hands it a sender that is not this session's client.
     static func finalizeMarkedComposition(
