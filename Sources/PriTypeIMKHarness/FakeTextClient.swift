@@ -278,9 +278,14 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
     /// plausible caret on the main screen, unless a test makes it misreport.
     public var caretRect = NSRect(x: 400, y: 400, width: 1, height: 18)
 
+    /// Whether the field advertises marked-text attributes. Legacy clients
+    /// answer with none.
+    public var advertisesMarkedTextAttributes = true
+
     public func validAttributesForMarkedText() -> [Any]! {
         attributeQueries += 1
         reenter(.validAttributes)
+        guard advertisesMarkedTextAttributes else { return [] }
         return [NSAttributedString.Key.underlineStyle.rawValue,
          NSAttributedString.Key.underlineColor.rawValue,
          NSAttributedString.Key.markedClauseSegment.rawValue]

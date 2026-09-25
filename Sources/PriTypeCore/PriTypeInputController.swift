@@ -169,12 +169,17 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     ///   Finder that is where desktop and rename field are told apart, by the
     ///   coordinates the field reports once it is actually typed into.
     private func ensureSession(for client: IMKTextInput) -> InputSession {
+        let secureInput = Self.globalSecureInput(for: client)
         if let session, session.matches(client) {
-            if session.contextNeedsRefresh || session.context.isLightweight {
+            // Also when a Secure Input warning has come up since the context was
+            // analyzed without asking for the attributes the policy then reads:
+            // the optimistic default must not stand in for the client's answer.
+            if session.contextNeedsRefresh || session.context.isLightweight
+                || (secureInput && !session.context.capabilityProbed) {
                 session.refreshContext(ClientContextDetector.analyze(
                     client: client,
                     knownBundleId: session.context.bundleId,
-                    secureInputActive: Self.globalSecureInput(for: client)))
+                    secureInputActive: secureInput))
                 session.armFocusLossFinalizer()
             }
             return session
@@ -182,7 +187,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
 
         DebugLogger.log("PriTypeInputController: client changed or no session, analyzing (Slow Path)")
         let newSession = replaceSession(client: client, context: ClientContextDetector.analyze(
-            client: client, secureInputActive: Self.globalSecureInput(for: client)))
+            client: client, secureInputActive: secureInput))
         syncRomanKeyboardLayout(for: client)
         return newSession
     }

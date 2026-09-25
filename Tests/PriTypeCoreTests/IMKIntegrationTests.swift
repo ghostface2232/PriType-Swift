@@ -648,6 +648,22 @@ struct IMKIntegrationTests {
         #expect(field.client.text == "하ㄱ")
     }
 
+    @Test("A Secure Input warning that comes up mid-session gets the attributes asked, and fails closed")
+    func secureInputLaterAsks() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.advertisesMarkedTextAttributes = false
+        harness.type("r")
+        #expect(field.client.markedText == "ㄱ")
+        // The warning comes up with no focus change (e.g. Secure Keyboard Entry).
+        field.client.reportsGlobalSecureInput = true
+        field.client.resetQueryCounts()
+        #expect(!harness.type("k").contains(true), "passed through, as SecureInputPolicy decides")
+        #expect(field.client.attributeQueries == 1)
+        harness.type("k")
+        #expect(field.client.attributeQueries == 1, "asked once, then the answer is kept")
+    }
+
     @Test("Finder's first key still asks for the attributes, which tell its desktop from a field")
     func finderFirstKeyAsks() {
         PriTypeInputController.resetSystemModeTracking()

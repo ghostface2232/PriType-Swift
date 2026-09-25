@@ -15,6 +15,11 @@ public struct ClientContext: Sendable {
     /// Whether the client advertises marked-text attributes. Despite the legacy
     /// property name, false does not prove the client cannot accept text.
     public let hasTextInputCapability: Bool
+
+    /// Whether `hasTextInputCapability` is the client's answer rather than an
+    /// assumption. The analysis asks only when the answer is used; a key that
+    /// finds a Secure Input warning up on an unasked context has it asked then.
+    public let capabilityProbed: Bool
     
     /// Whether the client appears to be in a desktop/non-text area (coordinate heuristic)
     public let isLikelyDesktopArea: Bool
@@ -33,10 +38,12 @@ public struct ClientContext: Sendable {
         hasTextInputCapability: Bool,
         isLikelyDesktopArea: Bool,
         isLightweight: Bool = false,
-        documentAccessSafe: Bool = false
+        documentAccessSafe: Bool = false,
+        capabilityProbed: Bool = true
     ) {
         self.bundleId = bundleId
         self.hasTextInputCapability = hasTextInputCapability
+        self.capabilityProbed = capabilityProbed
         self.isLikelyDesktopArea = isLikelyDesktopArea
         self.isLightweight = isLightweight
         self.documentAccessSafe = documentAccessSafe
@@ -216,7 +223,8 @@ public struct ClientContextDetector: Sendable {
             hasTextInputCapability: !isFinder,
             isLikelyDesktopArea: isFinder,
             isLightweight: true,
-            documentAccessSafe: probeDocumentAccessSafe(client, bundleId: bundleId)
+            documentAccessSafe: probeDocumentAccessSafe(client, bundleId: bundleId),
+            capabilityProbed: false
         )
     }
 
@@ -229,7 +237,8 @@ public struct ClientContextDetector: Sendable {
     ///   belongs to one app for its whole life;
     /// - `validAttributesForMarkedText`, only for Finder (desktop detection) or
     ///   while a global Secure Input warning is up: that is the only time
-    ///   `SecureInputPolicy` reads the answer. It is also where Chromium and
+    ///   `SecureInputPolicy` reads the answer. A warning that comes up later in
+    ///   the same session has the controller analyze again (`capabilityProbed`). It is also where Chromium and
     ///   Electron have been seen to nest IMK activation calls. Otherwise the
     ///   field is taken as able to show marked text, which is what the answer
     ///   would only ever have been used to doubt.
@@ -252,7 +261,8 @@ public struct ClientContextDetector: Sendable {
         let isFinder = (bundleId == "com.apple.finder")
 
         var hasTextInputCapability = true
-        if isFinder || secureInputActive {
+        let capabilityProbed = isFinder || secureInputActive
+        if capabilityProbed {
             let validAttrs = client.validAttributesForMarkedText() ?? []
             hasTextInputCapability = !validAttrs.isEmpty
         }
@@ -279,7 +289,8 @@ public struct ClientContextDetector: Sendable {
             bundleId: bundleId,
             hasTextInputCapability: hasTextInputCapability,
             isLikelyDesktopArea: isLikelyDesktopArea,
-            documentAccessSafe: probeDocumentAccessSafe(client, bundleId: bundleId)
+            documentAccessSafe: probeDocumentAccessSafe(client, bundleId: bundleId),
+            capabilityProbed: capabilityProbed
         )
     }
 }
