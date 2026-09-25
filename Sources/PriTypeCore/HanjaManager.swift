@@ -165,8 +165,8 @@ public final class HanjaManager: @unchecked Sendable {
     ///   is still loading on another thread
     public func search(key: String) -> [HanjaEntry] {
         // Jamo consonant → search symbol table instead of hanja dictionary
-        // Normalize: libhangul preedit uses Choseong Jamo (U+1100~), but our
-        // JSON keys use Compatibility Jamo (U+3131~). Convert before lookup.
+        // The composer's preedit is Compatibility Jamo (U+3131~), as are our
+        // JSON keys. Choseong Jamo (U+1100~) is converted, for other callers.
         let normalizedKey: String
         if key.count == 1, let char = key.first, char.isJamoConsonant {
             normalizedKey = key
@@ -255,7 +255,7 @@ extension Character {
     }
     
     /// Returns true if this character is a Hangul Jamo Choseong (initial consonant, U+1100-U+1112)
-    /// These are the "first/last/middle" jamo used internally by libhangul
+    /// The positional jamo of decomposed (NFD) text
     var isChoseongJamo: Bool {
         guard let scalar = unicodeScalars.first else { return false }
         let v = scalar.value

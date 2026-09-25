@@ -5,7 +5,7 @@ import InputMethodKit
 
 // MARK: - HangulComposer
 
-/// Core Hangul composition engine that wraps libhangul
+/// Core Hangul composition, from keystrokes to what the host is shown
 ///
 /// `HangulComposer` handles the complete lifecycle of Hangul text input:
 /// - Converting keystrokes to Hangul syllables
@@ -14,8 +14,9 @@ import InputMethodKit
 /// - Applying Korean or English mode selected by the IMK controller
 ///
 /// ## Overview
-/// The composer uses `libhangul`'s `HangulInputContext` internally to perform
-/// the actual character composition according to Korean keyboard layouts.
+/// The syllable itself is composed by `DubeolsikEngine`, the standard 두벌식
+/// automaton. The composer decides what each key is — a letter, a special key,
+/// a shortcut — and delivers the result through its delegate.
 ///
 /// ## Usage
 /// ```swift
@@ -481,7 +482,7 @@ public class HangulComposer: @unchecked Sendable {
 
     /// Cancels the current composition without committing
     ///
-    /// Resets the libhangul context and clears the marked text display.
+    /// Resets the engine and clears the marked text display.
     /// Use this when the user explicitly cancels input (e.g., pressing Escape).
     ///
     /// - Parameter delegate: The delegate to receive the cleared state

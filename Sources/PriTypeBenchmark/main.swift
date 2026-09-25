@@ -144,7 +144,7 @@ measure("자모 검색 버스트 (ㅁ, 10,000회)", iterations: 10000) {
     _ = manager.search(key: "ㅁ")
 }
 
-// Choseong jamo (U+1100~) - simulating actual libhangul preedit
+// Choseong jamo (U+1100~): the conversion `search(key:)` still offers other callers
 let choseongKeys = ["\u{1100}", "\u{1102}", "\u{1103}", "\u{1105}", "\u{1106}", "\u{1107}",
                      "\u{1109}", "\u{110B}", "\u{110C}", "\u{110E}", "\u{110F}", "\u{1110}",
                      "\u{1111}", "\u{1112}"]
