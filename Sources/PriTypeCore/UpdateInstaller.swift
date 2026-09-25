@@ -57,7 +57,10 @@ public final class UpdateInstaller: @unchecked Sendable {
     /// surprising response from being read into memory whole.
     private static let maximumMetadataSize = 64 * 1024
 
-    private static let packageFileName = "PriTypeV2_Release.pkg"
+    static let packageFileName = "PriTypeV2_Release.pkg"
+    /// The release's signed manifest and its signature, kept beside the package.
+    static let manifestFileName = UpdateChecker.manifestAssetName
+    static let signatureFileName = UpdateChecker.signatureAssetName
 
     /// Where root records how the install went.
     ///
@@ -95,12 +98,16 @@ public final class UpdateInstaller: @unchecked Sendable {
         progress(.verifying)
         let manifestData = try await downloadMetadata(from: assets.manifest)
         let signatureData = try await downloadMetadata(from: assets.signature)
-        let digest = try verify(
+        _ = try Self.verifiedDigest(
             packageURL: packageURL,
             manifest: manifestData,
             signature: signatureData,
-            version: update.version
+            expectedVersion: update.version
         )
+        // Kept beside the package for the authorization child, which trusts
+        // nothing it is handed and verifies all three again itself.
+        try manifestData.write(to: staging.appendingPathComponent(Self.manifestFileName))
+        try signatureData.write(to: staging.appendingPathComponent(Self.signatureFileName))
 
         progress(.awaitingAuthorization)
         // Recorded before the dialog, not after: once the command starts, this
@@ -108,7 +115,7 @@ public final class UpdateInstaller: @unchecked Sendable {
         // an install was attempted in order to report how it went.
         ConfigurationManager.shared.pendingUpdateVersion = update.version
         do {
-            try await launchPrivilegedInstall(packageURL: packageURL, digest: digest)
+            try await launchPrivilegedInstall(staging: staging)
         } catch {
             ConfigurationManager.shared.pendingUpdateVersion = nil
             throw error
@@ -119,11 +126,12 @@ public final class UpdateInstaller: @unchecked Sendable {
     // MARK: - Verification
 
     /// Returns the package digest once the release vouches for it.
-    private func verify(
+    static func verifiedDigest(
         packageURL: URL,
         manifest: Data,
         signature: Data,
-        version: String
+        expectedVersion: String,
+        publicKeyBase64: String = UpdateSignature.releasePublicKeyBase64
     ) throws -> String {
         guard let signatureText = String(bytes: signature, encoding: .utf8) else {
             throw Failure.verification(.badSignature)
@@ -136,11 +144,12 @@ public final class UpdateInstaller: @unchecked Sendable {
         do {
             let verified = try UpdateSignature.verifiedManifest(
                 manifest: manifest,
-                signatureText: signatureText
+                signatureText: signatureText,
+                publicKeyBase64: publicKeyBase64
             )
             try UpdateSignature.check(
                 verified,
-                expectedVersion: version,
+                expectedVersion: expectedVersion,
                 packageDigest: digest,
                 packageSize: size
             )
@@ -165,11 +174,11 @@ public final class UpdateInstaller: @unchecked Sendable {
     /// the digest again there. Verifying a file in a user-writable directory and
     /// then handing that same path to a root installer would leave a window in
     /// which the file could be swapped for another one.
-    private func launchPrivilegedInstall(packageURL: URL, digest: String) async throws {
+    private func launchPrivilegedInstall(staging: URL) async throws {
         guard let executable = Bundle.main.executableURL else {
             throw Failure.authorizationFailed("no executable to ask for authorization")
         }
-        try await Self.authorizeInChild(executable: executable, packagePath: packageURL.path, digest: digest)
+        try await Self.authorizeInChild(executable: executable, staging: staging)
         DebugLogger.log("UpdateInstaller: Install started, awaiting termination")
     }
 
@@ -182,11 +191,12 @@ public final class UpdateInstaller: @unchecked Sendable {
     enum AuthorizationExit: Int32 {
         /// Authorized; root's command is running on its own.
         case started = 0
-        /// Refused or failed; the reason is on standard error.
+        /// Refused, or the staged release did not verify; the reason is on
+        /// standard error.
         case failed = 1
         /// The user closed the dialog.
         case cancelled = 3
-        /// Called with something other than a package path and a digest.
+        /// Called with something other than one staging directory.
         case usage = 64
     }
 
@@ -198,10 +208,10 @@ public final class UpdateInstaller: @unchecked Sendable {
     /// thread. In the input method that thread serves every keystroke of every
     /// app, so while the dialog waited, typing anywhere else went unanswered.
     /// The child is this same executable, so the dialog still names PriType.
-    static func authorizeInChild(executable: URL, packagePath: String, digest: String) async throws {
+    static func authorizeInChild(executable: URL, staging: URL) async throws {
         let process = Process()
         process.executableURL = executable
-        process.arguments = [authorizationArgument, packagePath, digest]
+        process.arguments = [authorizationArgument, staging.path]
         let standardError = Pipe()
         process.standardError = standardError
         process.standardOutput = FileHandle.nullDevice
@@ -244,19 +254,57 @@ public final class UpdateInstaller: @unchecked Sendable {
         exit(exitCode.rawValue)
     }
 
-    /// The child's work: build root's command from the arguments and ask for it.
+    /// The child's work: verify the staged release, then ask to install it.
+    ///
+    /// Anyone who can run PriType can run it with `authorizationArgument`, and
+    /// a dialog that names PriType is one a user trusts. So the child takes
+    /// nothing on its caller's word — not a path to install, not a digest.
+    /// It is given a directory and installs only what verifies there: a
+    /// manifest signed with the release key, for a version newer than the one
+    /// running, describing the package beside it byte for byte. The worst a
+    /// stranger can do with it is offer the user a genuine PriType update.
+    /// Root checks the digest again after copying the package somewhere only
+    /// root can write, so the file cannot be swapped after this check.
     static func authorize(
         arguments: [String],
+        runningVersion: String = AboutInfo.version,
+        channel: ReleaseChannel = AboutInfo.releaseChannel,
+        publicKeyBase64: String = UpdateSignature.releasePublicKeyBase64,
         execute: (String) -> NSDictionary? = executeAppleScript
     ) -> AuthorizationExit {
-        guard arguments.count == 2,
-              arguments[0].hasPrefix("/"),
-              isSHA256Hex(arguments[1]) else {
-            FileHandle.standardError.write(Data("usage: \(authorizationArgument) <package path> <sha256>\n".utf8))
+        guard arguments.count == 1, arguments[0].hasPrefix("/") else {
+            FileHandle.standardError.write(Data("usage: \(authorizationArgument) <staging directory>\n".utf8))
             return .usage
         }
+        let staging = URL(fileURLWithPath: arguments[0], isDirectory: true)
+        let packageURL = staging.appendingPathComponent(packageFileName)
+
+        let digest: String
+        do {
+            let manifest = try readMetadata(staging.appendingPathComponent(manifestFileName))
+            let signature = try readMetadata(staging.appendingPathComponent(signatureFileName))
+            let version = try UpdateSignature.verifiedManifest(
+                manifest: manifest,
+                signatureText: String(bytes: signature, encoding: .utf8) ?? "",
+                publicKeyBase64: publicKeyBase64
+            ).version
+            guard UpdateChecker.offersUpdate(latest: version, current: runningVersion, channel: channel) else {
+                throw Failure.authorizationFailed("\(version) is not newer than the running \(runningVersion)")
+            }
+            digest = try verifiedDigest(
+                packageURL: packageURL,
+                manifest: manifest,
+                signature: signature,
+                expectedVersion: version,
+                publicKeyBase64: publicKeyBase64
+            )
+        } catch {
+            FileHandle.standardError.write(Data("the staged update did not verify: \(error)\n".utf8))
+            return .failed
+        }
+
         let source = authorizationScript(
-            command: installCommand(packagePath: arguments[0], digest: arguments[1]),
+            command: installCommand(packagePath: packageURL.path, digest: digest),
             prompt: L10n.update.authorizationPrompt
         )
         guard let error = execute(source) else { return .started }
@@ -264,6 +312,17 @@ public final class UpdateInstaller: @unchecked Sendable {
         let message = error[NSAppleScript.errorMessage] as? String ?? "\(error)"
         FileHandle.standardError.write(Data((message + "\n").utf8))
         return .failed
+    }
+
+    /// Reads a staged manifest or signature, refusing anything implausibly big.
+    private static func readMetadata(_ url: URL) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let data = try handle.read(upToCount: maximumMetadataSize + 1) ?? Data()
+        guard data.count <= maximumMetadataSize else {
+            throw Failure.download("\(url.lastPathComponent) is larger than \(maximumMetadataSize) bytes")
+        }
+        return data
     }
 
     /// Runs `source`, returning the error `NSAppleScript` reports, if any.
@@ -274,11 +333,6 @@ public final class UpdateInstaller: @unchecked Sendable {
         var error: NSDictionary?
         script.executeAndReturnError(&error)
         return error
-    }
-
-    /// Exactly what `sha256Hex` produces: 64 lowercase hex digits.
-    static func isSHA256Hex(_ value: String) -> Bool {
-        value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 
     /// The command root runs: stage the package where only root can write,
