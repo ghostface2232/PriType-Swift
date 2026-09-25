@@ -385,6 +385,7 @@ public final class IOKitManager: Sendable {
         let isToggleEnabled = toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled
         let isHanjaEnabled = hanjaEnabled ?? config.hanjaEnabled
         let activeTrigger = trigger ?? config.toggleTrigger
+        let pressedAt = eventTime ?? ProcessInfo.processInfo.systemUptime
         let callback: (@Sendable (TimeInterval) -> Void)? = state.withLock { state in
             let action = state.shortcutState.consume(
                 usage: usage, pressed: pressed, device: device,
@@ -393,7 +394,8 @@ public final class IOKitManager: Sendable {
                 toggleEnabled: isToggleEnabled,
                 hanjaEnabled: isHanjaEnabled,
                 trigger: activeTrigger,
-                paused: isPaused
+                paused: isPaused,
+                at: pressedAt
             )
             switch action {
             case .toggle: return state.onToggle
@@ -408,7 +410,6 @@ public final class IOKitManager: Sendable {
         // (`insertText` to the host) and `TISSelectInputSource` inside the IOHID
         // value callback. Those can spin the run loop, which would re-enter this
         // callback part-way through a mode transition.
-        let pressedAt = eventTime ?? ProcessInfo.processInfo.systemUptime
         DispatchQueue.main.async { callback(pressedAt) }
     }
 }

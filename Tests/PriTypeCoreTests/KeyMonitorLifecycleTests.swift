@@ -36,6 +36,48 @@ struct EventTapFailureTrackerTests {
     }
 }
 
+@Suite("Event tap disables")
+struct EventTapDisableTests {
+    @Test("User-input disables are re-enabled every time and never hand off to IOKit")
+    func userInputNeverHandsOff() async throws {
+        let tap = RightCommandSuppressor()
+        let handedOff = HandoffFlag()
+        tap.onTapFailed = { handedOff.set() }
+        let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 54, keyDown: true))
+        for _ in 0..<10 {
+            _ = tap.handleEvent(type: .tapDisabledByUserInput, event: event,
+                toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true, recoveryFlags: 0)
+        }
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        #expect(!handedOff.value)
+    }
+
+    @Test("Repeated timeouts still hand off, once")
+    func timeoutsHandOff() async throws {
+        let tap = RightCommandSuppressor()
+        let handedOff = HandoffFlag()
+        tap.onTapFailed = { handedOff.set() }
+        let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 54, keyDown: true))
+        for _ in 0..<3 {
+            _ = tap.handleEvent(type: .tapDisabledByTimeout, event: event,
+                toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true, recoveryFlags: 0)
+        }
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        #expect(handedOff.value)
+    }
+}
+
+private final class HandoffFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag = false
+    func set() { lock.withLock { flag = true } }
+    var value: Bool { lock.withLock { flag } }
+}
+
 @Suite("Modifier physical state")
 struct ModifierKeyStateTests {
     @Test("Right Command release is detected while Left Command stays held")
@@ -84,6 +126,10 @@ struct ToggleRecoveryEventTests {
     @Test("Holding both Commands preserves left shortcut semantics")
     func bothCommands() throws {
         let tap = RightCommandSuppressor()
+        let press = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 54, keyDown: true))
+        press.flags = CGEventFlags(rawValue: 0x100010)
+        #expect(tap.handleEvent(type: .flagsChanged, event: press,
+            toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true) == nil)
         let key = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 8, keyDown: true))
         key.flags = CGEventFlags(rawValue: 0x100018)
         _ = tap.handleEvent(type: .keyDown, event: key,
@@ -95,6 +141,42 @@ struct ToggleRecoveryEventTests {
         _ = tap.handleEvent(type: .keyDown, event: key,
             toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true)
         #expect(!key.flags.contains(.maskCommand))
+    }
+
+    @Test("A press the tap never saw is the app's: its keys keep the modifier and its release passes")
+    func unseenPressIsTheApps() throws {
+        // The tap started, or was re-enabled, with Right Command already held:
+        // the app saw it go down.
+        let tap = RightCommandSuppressor()
+        let key = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 8, keyDown: true))
+        key.flags = CGEventFlags(rawValue: 0x100010)
+        _ = tap.handleEvent(type: .keyDown, event: key,
+            toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true)
+        #expect(key.flags.contains(.maskCommand), "⌘C stays the shortcut the app expects")
+        let release = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 54, keyDown: false))
+        release.flags = []
+        #expect(tap.handleEvent(type: .flagsChanged, event: release,
+            toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true) != nil,
+            "swallowing it would leave ⌘ stuck down in the app")
+    }
+
+    @Test("After a lost release the next press is still swallowed, so the app never sees half a press")
+    func lostReleaseDoesNotLeakPress() throws {
+        let tap = RightCommandSuppressor()
+        let toggles = ToggleCount()
+        tap.onToggle = { _ in toggles.increment() }
+        let press = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 54, keyDown: true))
+        press.flags = CGEventFlags(rawValue: 0x100010)
+        #expect(tap.handleEvent(type: .flagsChanged, event: press,
+            toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true, trigger: .press) == nil)
+        // Its release never arrives; the next event for the key is a press again.
+        #expect(tap.handleEvent(type: .flagsChanged, event: press,
+            toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true, trigger: .press) == nil)
+        let release = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 54, keyDown: false))
+        release.flags = []
+        #expect(tap.handleEvent(type: .flagsChanged, event: release,
+            toggle: .defaultToggle, hanja: .defaultHanja, toggleEnabled: true, trigger: .press) == nil)
+        #expect(toggles.value == 1, "a repeated DOWN is not a second toggle")
     }
 
     @Test("Later explicit mode selection invalidates a delayed old controller value")
@@ -407,4 +489,11 @@ struct SystemModeEchoFilterTests {
         let echo8 = filter.consumeEcho(of: .english, at: 0.06)
         #expect(echo8)
     }
+}
+
+private final class ToggleCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() { lock.withLock { count += 1 } }
+    var value: Int { lock.withLock { count } }
 }

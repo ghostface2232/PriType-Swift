@@ -73,7 +73,11 @@ struct HIDShortcutState {
     private var lastBindings: [KeyBinding] = []
     private var lastHanja: TimeInterval?
 
-    static func timestamp() -> TimeInterval { Date().timeIntervalSinceReferenceDate }
+    /// Seconds of uptime: monotonic, the clock of `NSEvent.timestamp` and of
+    /// the HID values' own stamps. The wall clock steps with NTP and manual
+    /// changes; stepped back, it debounced every Hanja press and kept a stuck
+    /// key from ever expiring, for as long as the step.
+    static func timestamp() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
 
     /// Drop every press when any keyboard is unplugged. Per-device cleanup would
     /// need the removal callback's device to resolve to the same identity as the
