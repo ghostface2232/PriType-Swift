@@ -85,10 +85,18 @@ public final class IMKHarness {
         return time
     }
 
+    /// Whether macOS has a PriType mode selected. The fields stand for a PriType
+    /// session, so it has unless a test says otherwise (another input source
+    /// chosen, with no field focused).
+    public var priTypeIsSelected = true
+
     public init() {
         clock = max(ProcessInfo.processInfo.systemUptime, Self.issuedClock)
         PriTypeInputController.systemModeReporter = { [weak self] mode in
             self?.reportedModes.append(mode)
+        }
+        PriTypeInputController.priTypeIsSelected = { [weak self] in
+            self?.priTypeIsSelected ?? true
         }
         PriTypeInputController.scheduleDeferredDeactivation = { [weak self] work in
             self?.deferredDeactivations.append(work)

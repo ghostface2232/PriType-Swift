@@ -566,7 +566,27 @@ struct IMKIntegrationTests {
         harness.focus(field)
         harness.type("gk")
         #expect(field.client.text == "하gk")
-        #expect(field.client.calls.contains(.overrideKeyboard("com.apple.keylayout.ABC")))
+        // Whichever Roman layout this machine has enabled: ABC here, U.S. on CI.
+        let enabled = InputSourceManager.shared.enabledKeyboardInputSourceIDs() ?? []
+        if let layout = InputSourceManager.enabledRomanKeyboardLayoutID(in: enabled) {
+            #expect(field.client.calls.contains(.overrideKeyboard(layout)))
+        }
+    }
+
+    @Test("A toggle with no field focused leaves another input source alone")
+    func toggleWithOtherInputSourceSelected() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        // The user picked ABC (or Japanese) from the menu: the field deactivates
+        // exactly as it does when focus leaves every field.
+        harness.blur()
+        harness.priTypeIsSelected = false
+        harness.toggle()
+        #expect(harness.reportedModes.isEmpty, "PriType must not select itself back")
+        harness.priTypeIsSelected = true
+        harness.focus(field)
+        harness.type("gk")
+        #expect(field.client.markedText == "하", "the mode did not change")
     }
 
     @Test("macOS selecting the English mode (Caps Lock) commits and switches")

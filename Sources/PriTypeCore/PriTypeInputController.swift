@@ -270,15 +270,31 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         Self.systemModeReporter(nextMode)
     }
 
+    /// Whether macOS has a PriType mode selected. A harness replaces it: its
+    /// fields stand for a PriType session whatever this machine has selected.
+    /// - Warning: Access from main thread only.
+    nonisolated(unsafe) public static var priTypeIsSelected: () -> Bool = {
+        InputSourceManager.shared.isPriTypeModeSelected()
+    }
+
     /// A toggle with no field to type into: Finder, a web page with no input
     /// focused, or the gap between one field's deactivation and the next one's
     /// activation. The key monitor has already swallowed the key, so dropping the
     /// toggle would leave the user with neither the key nor the switch.
     ///
+    /// Only while PriType is the selected input source. Switching to another
+    /// one (ABC, Japanese) also deactivates the last field and leaves no
+    /// controller, and the report below selects a PriType mode: the toggle key
+    /// would take the user out of the input source they just chose.
+    ///
     /// There is nothing to commit — the deactivation that left no field behind
     /// finalized the composition — and no client to give the Roman layout to:
     /// the next activation does that, as it does after any toggle.
     static func performModeTransitionWithoutField(source: InputModeCoordinator.ToggleSource) {
+        guard priTypeIsSelected() else {
+            DebugLogger.log("PriTypeInputController: ignored toggle with no field; another input source is selected")
+            return
+        }
         let composer = sharedComposer
         let nextMode = composer.inputMode.toggled
         DebugLogger.log("PriTypeInputController: mode transition with no focused field \(composer.inputMode) -> \(nextMode) source=\(source)")
