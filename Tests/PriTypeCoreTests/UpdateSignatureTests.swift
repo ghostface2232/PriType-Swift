@@ -337,3 +337,126 @@ struct UpdateInstallerCommandTests {
         #expect(script.hasSuffix("with administrator privileges"))
     }
 }
+
+// MARK: - Authorization Child Tests
+
+@Suite("UpdateInstaller authorization child")
+struct UpdateAuthorizationChildTests {
+    private static let package = "/Users/someone/Library/Caches/Updates/2.9.0/PriTypeV2_Release.pkg"
+    private static let digest = String(repeating: "ab", count: 32)
+
+    private static func child(_ body: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auth-child-\(UUID().uuidString).sh")
+        try "#!/bin/sh\n\(body)\n".write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        return url
+    }
+
+    private enum Outcome: Equatable {
+        case started
+        case failed(UpdateInstaller.Failure)
+    }
+
+    private static func outcome(of body: String) async throws -> Outcome {
+        let exe = try child(body)
+        defer { try? FileManager.default.removeItem(at: exe) }
+        do {
+            try await UpdateInstaller.authorizeInChild(executable: exe, packagePath: package, digest: digest)
+            return .started
+        } catch let failure as UpdateInstaller.Failure {
+            return .failed(failure)
+        }
+    }
+
+    @Test("An ordinary launch is not treated as the authorization child")
+    func ordinaryLaunchContinues() {
+        // Would call exit() if it matched; returning is the assertion.
+        UpdateInstaller.runAuthorizationIfRequested(arguments: ["PriTypeV2"])
+        UpdateInstaller.runAuthorizationIfRequested(arguments: ["PriTypeV2", "--abc-layout-status"])
+    }
+
+    @Test("The child is handed the package and digest as separate arguments")
+    func childArguments() async throws {
+        let record = FileManager.default.temporaryDirectory.appendingPathComponent("auth-args-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: record) }
+        #expect(try await Self.outcome(of: "printf '%s\\n' \"$@\" > '\(record.path)'") == .started)
+        let lines = try String(contentsOf: record, encoding: .utf8).split(separator: "\n").map(String.init)
+        #expect(lines == [UpdateInstaller.authorizationArgument, Self.package, Self.digest])
+    }
+
+    @Test("Exit statuses map to started, cancelled and failed")
+    func exitStatuses() async throws {
+        #expect(try await Self.outcome(of: "exit 0") == .started)
+        #expect(try await Self.outcome(of: "exit 3") == .failed(.authorizationCancelled))
+        #expect(try await Self.outcome(of: "echo 'The administrator user name or password was incorrect.' >&2; exit 1")
+                == .failed(.authorizationFailed("The administrator user name or password was incorrect.")))
+        #expect(try await Self.outcome(of: "exit 64") == .failed(.authorizationFailed("exit status 64")))
+        // Killed, e.g. by the package's `preinstall`, is not an authorization.
+        #expect(try await Self.outcome(of: "kill -TERM $$") == .failed(.authorizationFailed("killed by signal 15")))
+        #expect(try await Self.outcome(of: "kill -QUIT $$") == .failed(.authorizationFailed("killed by signal 3")))
+    }
+
+    @Test("A child that cannot start is a failure, not a hang")
+    func missingExecutable() async {
+        await #expect(throws: UpdateInstaller.Failure.self) {
+            try await UpdateInstaller.authorizeInChild(
+                executable: URL(fileURLWithPath: "/nonexistent/PriTypeV2"),
+                packagePath: Self.package, digest: Self.digest)
+        }
+    }
+
+    @MainActor
+    @Test("The main thread keeps running while the dialog waits for an answer")
+    func mainThreadStaysFree() async throws {
+        let exe = try Self.child("sleep 0.5; exit 0")
+        defer { try? FileManager.default.removeItem(at: exe) }
+        var ticks = 0
+        let ticker = Task { @MainActor in
+            while !Task.isCancelled {
+                ticks += 1
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+        }
+        try await UpdateInstaller.authorizeInChild(executable: exe, packagePath: Self.package, digest: Self.digest)
+        ticker.cancel()
+        #expect(ticks >= 10, "main ran \(ticks) times during a 0.5 s wait")
+    }
+
+    @Test("The child builds root's command from its two arguments")
+    func childBuildsTheCommand() {
+        var script: String?
+        let exit = UpdateInstaller.authorize(arguments: [Self.package, Self.digest]) { script = $0; return nil }
+        #expect(exit == .started)
+        let expected = UpdateInstaller.authorizationScript(
+            command: UpdateInstaller.installCommand(packagePath: Self.package, digest: Self.digest),
+            prompt: L10n.update.authorizationPrompt)
+        #expect(script == expected)
+    }
+
+    @Test("The child reports a closed dialog and other errors apart")
+    func childErrors() {
+        let cancelled: NSDictionary = [NSAppleScript.errorNumber: -128, NSAppleScript.errorMessage: "User canceled."]
+        #expect(UpdateInstaller.authorize(arguments: [Self.package, Self.digest]) { _ in cancelled } == .cancelled)
+        let refused: NSDictionary = [NSAppleScript.errorNumber: -60005, NSAppleScript.errorMessage: "wrong password"]
+        #expect(UpdateInstaller.authorize(arguments: [Self.package, Self.digest]) { _ in refused } == .failed)
+    }
+
+    @Test("The child asks for nothing unless given an absolute path and a SHA-256")
+    func childRejectsOtherArguments() {
+        for arguments in [
+            [],
+            [Self.package],
+            ["relative/package.pkg", Self.digest],
+            [Self.package, "abc123"],
+            [Self.package, Self.digest.uppercased()],
+            [Self.package, Self.digest + "'; rm -rf /"],
+            [Self.package, Self.digest, "extra"],
+        ] {
+            var asked = false
+            let exit = UpdateInstaller.authorize(arguments: arguments) { _ in asked = true; return nil }
+            #expect(exit == .usage, Comment(rawValue: "\(arguments)"))
+            #expect(!asked)
+        }
+    }
+}

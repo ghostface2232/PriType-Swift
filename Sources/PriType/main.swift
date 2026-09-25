@@ -92,6 +92,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 // ABCLayoutStatusProbe). Answer and exit before AppKit or IMK start.
 ABCLayoutStatusProbe.runIfRequested()
 
+// The in-app update asks for authorization from a child launch of this
+// executable, so the dialog never holds the input method's main thread.
+UpdateInstaller.runAuthorizationIfRequested()
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

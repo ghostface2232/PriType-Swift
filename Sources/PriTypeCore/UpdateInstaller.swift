@@ -165,36 +165,120 @@ public final class UpdateInstaller: @unchecked Sendable {
     /// the digest again there. Verifying a file in a user-writable directory and
     /// then handing that same path to a root installer would leave a window in
     /// which the file could be swapped for another one.
-    @MainActor
     private func launchPrivilegedInstall(packageURL: URL, digest: String) async throws {
-        // The authorization dialog blocks the main thread while it is up, so the
-        // settings window gets a frame to draw "waiting for authorization"
-        // first. Without it the window simply freezes on the previous phase.
-        try? await Task.sleep(nanoseconds: 120_000_000)
+        guard let executable = Bundle.main.executableURL else {
+            throw Failure.authorizationFailed("no executable to ask for authorization")
+        }
+        try await Self.authorizeInChild(executable: executable, packagePath: packageURL.path, digest: digest)
+        DebugLogger.log("UpdateInstaller: Install started, awaiting termination")
+    }
 
-        let source = Self.authorizationScript(
-            command: Self.installCommand(packagePath: packageURL.path, digest: digest),
-            prompt: L10n.update.authorizationPrompt
-        )
+    // MARK: - Authorization Child
 
-        guard let script = NSAppleScript(source: source) else {
-            throw Failure.authorizationFailed("cannot build the install script")
+    /// The argument that makes the executable ask for authorization and exit.
+    public static let authorizationArgument = "--authorize-update-install"
+
+    /// How the authorization child ends.
+    enum AuthorizationExit: Int32 {
+        /// Authorized; root's command is running on its own.
+        case started = 0
+        /// Refused or failed; the reason is on standard error.
+        case failed = 1
+        /// The user closed the dialog.
+        case cancelled = 3
+        /// Called with something other than a package path and a digest.
+        case usage = 64
+    }
+
+    /// Runs the authorization dialog in a child process and waits for it
+    /// without blocking.
+    ///
+    /// `do shell script … with administrator privileges` holds its thread until
+    /// the user answers the dialog, and `NSAppleScript` belongs on the main
+    /// thread. In the input method that thread serves every keystroke of every
+    /// app, so while the dialog waited, typing anywhere else went unanswered.
+    /// The child is this same executable, so the dialog still names PriType.
+    static func authorizeInChild(executable: URL, packagePath: String, digest: String) async throws {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = [authorizationArgument, packagePath, digest]
+        let standardError = Pipe()
+        process.standardError = standardError
+        process.standardOutput = FileHandle.nullDevice
+
+        let (reason, status) = try await withCheckedThrowingContinuation { continuation in
+            process.terminationHandler = { continuation.resume(returning: ($0.terminationReason, $0.terminationStatus)) }
+            do {
+                try process.run()
+            } catch {
+                process.terminationHandler = nil
+                continuation.resume(throwing: Failure.authorizationFailed("cannot start: \(error.localizedDescription)"))
+            }
         }
 
-        var error: NSDictionary?
-        script.executeAndReturnError(&error)
-        if let error {
-            // -128 is the user closing the dialog, which is a decision, not a
-            // fault: the download stays staged and the button stays available.
-            if (error[NSAppleScript.errorNumber] as? Int) == -128 {
-                throw Failure.authorizationCancelled
-            }
-            let message = error[NSAppleScript.errorMessage] as? String ?? "\(error)"
+        // A signal's number is not an exit status: SIGQUIT is 3, like a cancel.
+        switch reason == .exit ? AuthorizationExit(rawValue: status) : nil {
+        case .started:
+            return
+        case .cancelled:
+            // A decision, not a fault: the download stays staged and the button
+            // stays available.
+            throw Failure.authorizationCancelled
+        default:
+            let data = standardError.fileHandleForReading.readDataToEndOfFile()
+            let detail = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let message = !detail.isEmpty ? detail
+                : reason == .exit ? "exit status \(status)" : "killed by signal \(status)"
             DebugLogger.log("UpdateInstaller: Authorization failed - \(message)")
             throw Failure.authorizationFailed(message)
         }
+    }
 
-        DebugLogger.log("UpdateInstaller: Install started, awaiting termination")
+    /// Call first thing in `main.swift`. Asks for authorization and exits when
+    /// this launch is the authorization child; returns for an ordinary launch.
+    public static func runAuthorizationIfRequested(arguments: [String] = CommandLine.arguments) {
+        let arguments = Array(arguments.dropFirst())
+        guard arguments.first == authorizationArgument else { return }
+        let exitCode = authorize(arguments: Array(arguments.dropFirst()))
+        exit(exitCode.rawValue)
+    }
+
+    /// The child's work: build root's command from the arguments and ask for it.
+    static func authorize(
+        arguments: [String],
+        execute: (String) -> NSDictionary? = executeAppleScript
+    ) -> AuthorizationExit {
+        guard arguments.count == 2,
+              arguments[0].hasPrefix("/"),
+              isSHA256Hex(arguments[1]) else {
+            FileHandle.standardError.write(Data("usage: \(authorizationArgument) <package path> <sha256>\n".utf8))
+            return .usage
+        }
+        let source = authorizationScript(
+            command: installCommand(packagePath: arguments[0], digest: arguments[1]),
+            prompt: L10n.update.authorizationPrompt
+        )
+        guard let error = execute(source) else { return .started }
+        if (error[NSAppleScript.errorNumber] as? Int) == -128 { return .cancelled }
+        let message = error[NSAppleScript.errorMessage] as? String ?? "\(error)"
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+        return .failed
+    }
+
+    /// Runs `source`, returning the error `NSAppleScript` reports, if any.
+    static func executeAppleScript(_ source: String) -> NSDictionary? {
+        guard let script = NSAppleScript(source: source) else {
+            return [NSAppleScript.errorMessage: "cannot build the install script"]
+        }
+        var error: NSDictionary?
+        script.executeAndReturnError(&error)
+        return error
+    }
+
+    /// Exactly what `sha256Hex` produces: 64 lowercase hex digits.
+    static func isSHA256Hex(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 
     /// The command root runs: stage the package where only root can write,

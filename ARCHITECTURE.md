@@ -39,6 +39,7 @@ PriTypeV2.app
 ## 시작 순서 (`Sources/PriType/main.swift`)
 
 1. `--abc-layout-status` 인자로 실행되면 ABC 자판 상태만 출력하고 종료한다(`ABCLayoutStatusProbe`, 아래 "입력 소스 관리" 참고).
+   `--authorize-update-install <패키지 경로> <SHA-256>`으로 실행되면 업데이트 설치의 관리자 암호만 묻고 종료 코드로 답한다(아래 "업데이트" 참고).
 2. `IMKServer`를 만든다.
 3. 저장된 키 바인딩을 이관·보정한다(`ConfigurationManager.migrateKeyBindingsIfNeeded`).
 4. 앞에 있는 앱을 추적해 전환 제외 앱을 판정할 준비를 한다(`ToggleExclusionPolicy.start`).
@@ -245,13 +246,15 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 
 `UpdateChecker`가 GitHub Releases API에서 가장 높은 정식 릴리스(초안·사전 릴리스 제외)를 찾아 버전을 비교한다. 마지막 성공 후 24시간이 지나야 다시 확인한다. 새 버전이 있으면 `UpdateNotifier`가 알림을 보내고, 누르면 릴리스 페이지를 연다. 알림 권한은 처음 보낼 때 요청한다.
 
+설정 창의 "업데이트 설치"는 패키지를 내려받아 서명을 확인한 뒤 관리자 권한으로 설치한다(`UpdateInstaller`). 암호 창을 띄우는 `do shell script … with administrator privileges`는 사용자가 답할 때까지 호출한 스레드를 붙잡으므로, 입력기 안에서 부르지 않고 자기 실행 파일을 `--authorize-update-install`로 다시 띄워 그 자식이 묻게 한다. 입력기는 자식의 종료를 비동기로 기다리므로 암호 창이 떠 있어도 키 입력은 계속 처리된다. 같은 실행 파일이라 암호 창은 PriType의 요청으로 보인다. 종료 코드 0은 설치 시작, 3은 취소, 1은 실패(이유는 표준 오류)다.
+
 ## 동시성
 
 | 스레드 | 하는 일 |
 |---|---|
 | 메인 | IMK 콜백 전부, 조합기, 후보창·설정 창(AppKit·SwiftUI), `NSWorkspace` 알림, IOKit 대체 경로의 HID 콜백, 권한 확인 타이머 |
 | 이벤트 탭(`com.pritype.eventtap`) | CGEventTap 콜백. 전환·한자 동작을 기록하고, 후보창 키를 가로채고, 수정키를 떼어 낸다 |
-| 백그라운드 | 한자 사전 미리 매핑, 업데이트 확인, ABC 상태 확인용 하위 프로세스, 디버그 로그 기록 |
+| 백그라운드 | 한자 사전 미리 매핑, 업데이트 확인, ABC 상태 확인·업데이트 암호 요청용 하위 프로세스, 디버그 로그 기록 |
 
 탭 스레드가 **자기 것으로 쓰는** 가변 상태는 모두 `Guarded`(`Guarded.swift`) 안에 있다. 재귀 잠금 하나를 감싼 상자이고, 그 여섯 타입이 `Sendable`을 검사받아 만족하게 해 주는 유일한 `@unchecked` 자리다.
 
