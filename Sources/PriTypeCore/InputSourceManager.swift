@@ -64,6 +64,14 @@ public final class InputSourceManager: @unchecked Sendable {
         return true
     }
 
+    /// Whether the input source macOS has selected is one of PriType's modes.
+    /// False when TIS cannot say.
+    public func isPriTypeModeSelected() -> Bool {
+        guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
+              let id = stringProperty(current, kTISPropertyInputSourceID) else { return false }
+        return id.hasPrefix(Self.priTypeBundleID)
+    }
+
     private func priTypeModeSource(english: Bool) -> TISInputSource? {
         enabledKeyboardSources()?.first { source in
             guard let id = stringProperty(source, kTISPropertyInputSourceID),

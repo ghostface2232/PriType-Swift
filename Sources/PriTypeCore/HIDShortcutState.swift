@@ -119,9 +119,11 @@ struct HIDShortcutState {
             pendingToggle = nil
             toggleTap.interrupt()
         }
+        // A combo needs exactly its modifiers, as on the CGEventTap path: ⌃Space
+        // must not take ⌃⌥Space or ⌃⌘Space from macOS.
         func matches(_ binding: KeyBinding) -> Bool {
             HIDKeyMapping.usages[binding.keyCode] == usage
-                && flags & binding.modifiers == binding.modifiers
+                && (binding.modifiers == 0 || flags == binding.modifiers)
         }
         if toggleEnabled && matches(toggle) {
             if toggle.isModifierKey && trigger == .tapAlone {

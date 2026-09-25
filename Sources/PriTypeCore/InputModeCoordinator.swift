@@ -238,12 +238,11 @@ public final class InputModeCoordinator: @unchecked Sendable {
             return
         }
 
-        guard let controller = PriTypeInputController.sharedController else {
-            DebugLogger.log("InputModeCoordinator: ignored custom toggle because no active controller exists")
-            return
+        if let controller = PriTypeInputController.sharedController {
+            controller.performPriTypeModeTransition(source: source)
+        } else {
+            PriTypeInputController.performModeTransitionWithoutField(source: source)
         }
-
-        controller.performPriTypeModeTransition(source: source)
     }
 }
 

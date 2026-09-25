@@ -462,7 +462,7 @@ public final class RightCommandSuppressor: Sendable {
                 } else {
                     // Combo toggle (e.g., Control+Space, Option+G)
                     let requiredFlags = CGEventFlags(rawValue: toggleBinding.modifiers)
-                    if Self.hasRequiredModifiers(flags: event.flags, required: requiredFlags) {
+                    if Self.hasExactModifiers(flags: event.flags, required: requiredFlags) {
                         if isAutorepeat { return nil }
                         DebugLogger.log("RightCommandSuppressor: Combo toggle (\(toggleBinding.displayName)) - TOGGLE triggered")
                         triggerToggle(state, event)
@@ -475,7 +475,7 @@ public final class RightCommandSuppressor: Sendable {
             // A matching toggle already returned above. Sharing a physical key is
             // valid when the two bindings require different modifiers.
             if priTypeHanjaEnabled && keyCode == hanjaBinding.keyCode && !hanjaBinding.isModifierKey {
-                if hanjaBinding.isModifierOnly || Self.hasRequiredModifiers(flags: event.flags, required: CGEventFlags(rawValue: hanjaBinding.modifiers)) {
+                if hanjaBinding.isModifierOnly || Self.hasExactModifiers(flags: event.flags, required: CGEventFlags(rawValue: hanjaBinding.modifiers)) {
                     if isAutorepeat { return nil }
                     DebugLogger.log("RightCommandSuppressor: Regular key hanja (\(hanjaBinding.displayName)) - HANJA")
                     triggerHanjaLookup(state, event)
@@ -483,6 +483,20 @@ public final class RightCommandSuppressor: Sendable {
                 }
             }
             
+            // A modifier whose press PriType swallowed never went down as far as
+            // the app knows, so keys typed while it is held must not carry it:
+            // Right ⌘ + C types c, and a digit rolled over the Hanja key picks a
+            // candidate instead of typing ⌥1 (¡). Before the candidate routing,
+            // which leaves every modifier chord to the app.
+            if priTypeToggleEnabled && toggleTrigger == .press && state.toggleModifierIsDown && toggleBinding.isModifierKey {
+                event.flags = Self.removing(toggleBinding.keyCode, from: event.flags)
+                DebugLogger.log("RightCommandSuppressor: Key with toggle modifier - stripped modifier (normal input)")
+            }
+            if priTypeHanjaEnabled && state.hanjaModifierIsDown && hanjaBinding.isModifierKey
+                && hanjaBinding.isModifierOnly && hanjaBinding.keyCode != toggleBinding.keyCode {
+                event.flags = Self.removing(hanjaBinding.keyCode, from: event.flags)
+            }
+
             // Candidate keys while the Hanja window is up. Routed here rather than
             // through IMK because some clients (Terminal) never pass Escape, the
             // arrows or Return to the input method once nothing is marked.
@@ -504,20 +518,6 @@ public final class RightCommandSuppressor: Sendable {
                     break
                 }
             }
-
-            // When toggle modifier is held, strip its modifier from key events
-            // This makes keys act as regular character input, not shortcuts
-            if priTypeToggleEnabled && toggleTrigger == .press && state.toggleModifierIsDown && toggleBinding.isModifierKey {
-                let modifierMask = Self.modifierMask(for: toggleBinding.keyCode)
-                var newFlags = event.flags
-                newFlags.remove(CGEventFlags(rawValue: ModifierKeyState.mask(for: toggleBinding.keyCode)))
-                if !ModifierKeyState.isDown(ModifierKeyState.opposite(toggleBinding.keyCode), flags: event.flags.rawValue) {
-                    newFlags.remove(modifierMask)
-                }
-                event.flags = newFlags
-                DebugLogger.log("RightCommandSuppressor: Key with toggle modifier - stripped modifier (normal input)")
-                return Unmanaged.passUnretained(event)
-            }
         }
         
         return Unmanaged.passUnretained(event)
@@ -537,10 +537,26 @@ public final class RightCommandSuppressor: Sendable {
         }
     }
     
-    /// Check if event flags contain required modifier flags
-    private static func hasRequiredModifiers(flags: CGEventFlags, required: CGEventFlags) -> Bool {
-        return flags.intersection(required) == required
+    /// `flags` without the modifier of `keyCode`: its side's device bit, and the
+    /// shared bit too unless the other side's key is also down.
+    private static func removing(_ keyCode: Int64, from flags: CGEventFlags) -> CGEventFlags {
+        var newFlags = flags
+        newFlags.remove(CGEventFlags(rawValue: ModifierKeyState.mask(for: keyCode)))
+        if !ModifierKeyState.isDown(ModifierKeyState.opposite(keyCode), flags: flags.rawValue) {
+            newFlags.remove(modifierMask(for: keyCode))
+        }
+        return newFlags
     }
+
+    /// Whether a combo binding's modifiers are exactly the ones held. A superset
+    /// is another shortcut: ⌃Space must not take ⌃⌥Space (next input source) or
+    /// ⌃⌘Space (emoji). Caps Lock and Fn are state rather than part of a
+    /// shortcut, and bindings are recorded without them.
+    static func hasExactModifiers(flags: CGEventFlags, required: CGEventFlags) -> Bool {
+        flags.intersection(shortcutModifiers) == required.intersection(shortcutModifiers)
+    }
+
+    static let shortcutModifiers: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift]
 
     /// Where the most recent toggle came from.
     ///

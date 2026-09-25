@@ -100,6 +100,85 @@ struct ShortcutRoutingTests {
         }
         #expect(actions.snapshot == ["toggle"])
     }
+
+    @Test("A combo binding fires only on exactly its modifiers")
+    func comboNeedsExactModifiers() throws {
+        let tap = RightCommandSuppressor()
+        tap.onToggle = { _ in }
+        tap.onHanjaLookup = { _ in }
+        let toggle = KeyBinding(keyCode: 49, modifiers: CGEventFlags.maskControl.rawValue, displayName: "Control Space")
+        let hanja = KeyBinding(keyCode: 49, modifiers: CGEventFlags.maskAlternate.rawValue, displayName: "Option Space")
+        func swallowed(_ flags: CGEventFlags) throws -> Bool {
+            let space = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 49, keyDown: true))
+            space.flags = flags
+            return tap.handleEvent(type: .keyDown, event: space, toggle: toggle, hanja: hanja,
+                                   toggleEnabled: true, hanjaEnabled: true, excludedOverride: false) == nil
+        }
+        #expect(try swallowed(.maskControl))
+        #expect(try swallowed(.maskAlternate))
+        // macOS's own: next input source, emoji & symbols, and the rest belong
+        // to the app. A superset of the binding's modifiers is another shortcut.
+        #expect(try !swallowed([.maskControl, .maskAlternate]))
+        #expect(try !swallowed([.maskControl, .maskCommand]))
+        #expect(try !swallowed([.maskControl, .maskShift]))
+        // Lock and function state are not part of a shortcut.
+        #expect(try swallowed([.maskControl, .maskAlphaShift]))
+        #expect(try swallowed([.maskControl, .maskSecondaryFn]))
+    }
+
+    @Test("Keys typed while the Hanja modifier is held lose it, and a digit reaches the candidates")
+    func hanjaModifierIsStripped() throws {
+        let tap = RightCommandSuppressor()
+        tap.onToggle = { _ in }
+        tap.onHanjaLookup = { _ in }
+        let rightOption = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue
+                                       | ModifierKeyState.mask(for: 61))
+        let press = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 61, keyDown: true))
+        press.type = .flagsChanged
+        press.flags = rightOption
+        #expect(tap.handleEvent(type: .flagsChanged, event: press, toggle: .defaultToggle, hanja: .defaultHanja,
+                                toggleEnabled: true, hanjaEnabled: true, trigger: .press,
+                                excludedOverride: false) == nil, "the press is swallowed")
+
+        // Rolled over before the release: the app was never shown ⌥ going down.
+        let letter = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true))
+        letter.flags = rightOption
+        #expect(tap.handleEvent(type: .keyDown, event: letter, toggle: .defaultToggle, hanja: .defaultHanja,
+                                toggleEnabled: true, hanjaEnabled: true, trigger: .press,
+                                excludedOverride: false) != nil)
+        #expect(!letter.flags.contains(.maskAlternate))
+        #expect(!ModifierKeyState.isDown(61, flags: letter.flags.rawValue))
+
+        // With candidates showing, the digit picks one instead of typing ¡.
+        HanjaCandidateWindow.setShownPageCandidates(9)
+        defer { HanjaCandidateWindow.setShownPageCandidates(0) }
+        let one = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 18, keyDown: true))
+        one.flags = rightOption
+        #expect(tap.handleEvent(type: .keyDown, event: one, toggle: .defaultToggle, hanja: .defaultHanja,
+                                toggleEnabled: true, hanjaEnabled: true, trigger: .press,
+                                excludedOverride: false) == nil, "consumed by the candidate window")
+    }
+
+    @Test("Left Option held with the Hanja key survives the stripping")
+    func otherOptionKept() throws {
+        let tap = RightCommandSuppressor()
+        tap.onToggle = { _ in }
+        tap.onHanjaLookup = { _ in }
+        let both = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue
+                                | ModifierKeyState.mask(for: 61) | ModifierKeyState.mask(for: 58))
+        let press = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 61, keyDown: true))
+        press.type = .flagsChanged
+        press.flags = both
+        _ = tap.handleEvent(type: .flagsChanged, event: press, toggle: .defaultToggle, hanja: .defaultHanja,
+                            toggleEnabled: true, hanjaEnabled: true, trigger: .press, excludedOverride: false)
+        let letter = try #require(CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true))
+        letter.flags = both
+        _ = tap.handleEvent(type: .keyDown, event: letter, toggle: .defaultToggle, hanja: .defaultHanja,
+                            toggleEnabled: true, hanjaEnabled: true, trigger: .press, excludedOverride: false)
+        #expect(letter.flags.contains(.maskAlternate), "left ⌥ is the user's own")
+        #expect(!ModifierKeyState.isDown(61, flags: letter.flags.rawValue))
+        #expect(ModifierKeyState.isDown(58, flags: letter.flags.rawValue))
+    }
 }
 
 @Suite("Hanja conversion off")

@@ -132,6 +132,18 @@ struct IOKitShortcutRoutingTests {
         #expect(press(&state, HIDUsage.space, true, toggle: controlSpaceBinding, hanja: rightOptionBinding) == .toggle)
     }
 
+    @Test("A combo binding fires only on exactly its modifiers")
+    func comboNeedsExactModifiers() {
+        var state = HIDShortcutState()
+        // ⌃⌥Space is macOS's "next input source", not the ⌃Space binding.
+        #expect(press(&state, HIDUsage.leftControl, true, toggle: controlSpaceBinding, hanja: rightOptionBinding) == nil)
+        #expect(press(&state, HIDUsage.leftShift, true, toggle: controlSpaceBinding, hanja: rightOptionBinding) == nil)
+        #expect(press(&state, HIDUsage.space, true, toggle: controlSpaceBinding, hanja: rightOptionBinding) == nil)
+        #expect(press(&state, HIDUsage.space, false, toggle: controlSpaceBinding, hanja: rightOptionBinding) == nil)
+        #expect(press(&state, HIDUsage.leftShift, false, toggle: controlSpaceBinding, hanja: rightOptionBinding) == nil)
+        #expect(press(&state, HIDUsage.space, true, toggle: controlSpaceBinding, hanja: rightOptionBinding) == .toggle)
+    }
+
     @Test("Different modifiers on Space dispatch the matching action")
     func sharedPhysicalKey() {
         var state = HIDShortcutState()
