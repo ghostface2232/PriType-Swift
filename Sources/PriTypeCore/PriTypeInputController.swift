@@ -251,7 +251,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
 
     public func performPriTypeModeTransition(source: InputModeCoordinator.ToggleSource) {
         guard let session else {
-            DebugLogger.log("PriTypeInputController: no current session for mode transition (\(source))")
+            Self.performModeTransitionWithoutField(source: source)
             return
         }
 
@@ -268,6 +268,23 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // the composer has already switched, so a slow or failing selection
         // cannot delay the next keystroke. See InputSourceManager.
         Self.systemModeReporter(nextMode)
+    }
+
+    /// A toggle with no field to type into: Finder, a web page with no input
+    /// focused, or the gap between one field's deactivation and the next one's
+    /// activation. The key monitor has already swallowed the key, so dropping the
+    /// toggle would leave the user with neither the key nor the switch.
+    ///
+    /// There is nothing to commit — the deactivation that left no field behind
+    /// finalized the composition — and no client to give the Roman layout to:
+    /// the next activation does that, as it does after any toggle.
+    static func performModeTransitionWithoutField(source: InputModeCoordinator.ToggleSource) {
+        let composer = sharedComposer
+        let nextMode = composer.inputMode.toggled
+        DebugLogger.log("PriTypeInputController: mode transition with no focused field \(composer.inputMode) -> \(nextMode) source=\(source)")
+        composer.clearLocalBuffer()
+        composer.setInputMode(nextMode)
+        systemModeReporter(nextMode)
     }
 
     // A custom toggle switches the composer synchronously and then reports the
@@ -349,10 +366,11 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         if Self.sharedController === self {
             composer.dismissHanjaCandidates(reason: "focus change")
         }
-        // NOTE: Do NOT clear localTextBuffer here: same-app Hanja lookups need it
-        // after a reactivation. Cross-app leaking is prevented by the composer:
-        // `markKeystroke` empties the buffer on the first keystroke in another
-        // app, and `handleHanjaLookup` ignores a buffer typed in another app.
+        // NOTE: Do NOT clear localTextBuffer here: a Hanja lookup back in the same
+        // field needs it after a reactivation. Leaking into another field is
+        // prevented by the composer: `markKeystroke` empties the buffer on the
+        // first keystroke in another field, and `handleHanjaLookup` ignores a
+        // buffer typed in another field.
         // Keep the session alive — async Hanja callbacks need the adapter, and a
         // handle() arriving before the next activateServer needs the context. But:
         // - disarm the focus-loss observer: the composer is shared, so a stale
@@ -660,7 +678,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         #endif
 
         // 3. Mark keystroke with current app's bundleId for cross-app hanja validation
-        composer.markKeystroke(bundleId: session.context.bundleId)
+        composer.markKeystroke(bundleId: session.context.bundleId, client: session.client)
 
         // 4. DYNAMIC CHECK: Secure Input (password fields) — raw pass-through.
         // A client IPC when a global secure-input warning is up, so it is timed

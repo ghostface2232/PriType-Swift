@@ -667,24 +667,31 @@ public class HangulComposer: @unchecked Sendable {
     /// Used to prevent cross-app hanja leaking: if the current app differs from
     /// the app that populated localTextBuffer, the buffer is considered stale.
     private var lastInputBundleId: String = ""
-    
-    /// Record which app the current keystroke is from (called from handle via controller)
+
+    /// The client (text field) the last keystroke went to. Weak, and compared by
+    /// identity: a field that has gone away must not be mistaken for a new one
+    /// that happens to reuse its address.
+    private weak var lastInputClient: AnyObject?
+
+    /// Record which field the current keystroke is from (called from handle via controller)
     ///
-    /// A keystroke in another app empties the buffer: what it holds was typed
+    /// A keystroke in another field empties the buffer: what it holds was typed
     /// there. Leaving a field commits its syllable and keeps it as the buffer's
-    /// last character, and once this records the new app `isBufferFromApp`
+    /// last character, and once this records the new field `isBuffer(from:client:)`
     /// would vouch for that stranger, so a lookup would join it to the word
-    /// typed here (…한 in one app, 국 in the next → 韓國).
-    public func markKeystroke(bundleId: String) {
-        if bundleId != lastInputBundleId {
+    /// typed here (…한 in one field, 국 in the next → 韓國). The app alone does
+    /// not tell fields apart: two fields of one window are one app.
+    public func markKeystroke(bundleId: String, client: AnyObject? = nil) {
+        if bundleId != lastInputBundleId || client !== lastInputClient {
             localTextBuffer = ""
         }
         lastInputBundleId = bundleId
+        lastInputClient = client
     }
-    
-    /// Check if the buffer belongs to the given app
-    public func isBufferFromApp(_ bundleId: String) -> Bool {
-        return !lastInputBundleId.isEmpty && lastInputBundleId == bundleId
+
+    /// Whether the buffer was typed in `client` of the app `bundleId`.
+    public func isBuffer(from bundleId: String, client: AnyObject?) -> Bool {
+        !lastInputBundleId.isEmpty && lastInputBundleId == bundleId && client === lastInputClient
     }
     
     // MARK: - Hanja Lookup
@@ -752,12 +759,15 @@ public class HangulComposer: @unchecked Sendable {
         let preeditStr = CompositionHelpers.convertAndNormalize(preedit)
         let hadPreedit = !preeditStr.isEmpty
 
-        // The buffer counts only if it was filled in the app that has focus now.
+        // The buffer counts only if it was filled in the field that has focus now.
         // Use NSWorkspace as the primary source of truth for frontmost app, because
         // cachedContext might be stale if the user clicked a non-text area in a new app.
+        // A click into another field of the same app, with no key typed there yet,
+        // changes the client but not the app.
         let currentBundleId = frontmostBundleID()
             ?? PriTypeInputController.sharedController?.cachedContext?.bundleId ?? ""
-        let buffer = isBufferFromApp(currentBundleId) ? localTextBuffer : ""
+        let currentClient = PriTypeInputController.sharedController?.currentClient as AnyObject?
+        let buffer = isBuffer(from: currentBundleId, client: currentClient) ? localTextBuffer : ""
 
         let searchStage = recording
             ? Signposts.hanja.beginInterval(Signposts.HanjaStage.dictionarySearch, id: lookupID) : nil

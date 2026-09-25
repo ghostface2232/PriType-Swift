@@ -552,6 +552,23 @@ struct IMKIntegrationTests {
         #expect(field.client.text == "ㅁa")
     }
 
+    @Test("A toggle with no text field focused still switches the mode")
+    func toggleWithNoFocusedField() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type("gk")
+        // Finder, a web page with no input focused: IMK deactivated the last field
+        // and activated none. The event tap has already swallowed the key.
+        harness.blur()
+        #expect(field.client.text == "하")
+        harness.toggle()
+        #expect(harness.reportedModes == [.english])
+        harness.focus(field)
+        harness.type("gk")
+        #expect(field.client.text == "하gk")
+        #expect(field.client.calls.contains(.overrideKeyboard("com.apple.keylayout.ABC")))
+    }
+
     @Test("macOS selecting the English mode (Caps Lock) commits and switches")
     func systemModeSwitch() {
         let (harness, field) = start()
@@ -714,6 +731,53 @@ struct IMKIntegrationTests {
         harness.candidates.choose(1)
         #expect(second.client.text == offered.hanja)
         #expect(first.client.text == "한")
+    }
+
+    @Test("A lookup in another field of the same app never joins the last syllable of the previous one",
+          arguments: [false, true])
+    func hanjaIgnoresPreviousField(activatesAhead: Bool) throws {
+        let (harness, first) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "한"))
+        let second = harness.makeField()   // same app
+        if activatesAhead {
+            // IMK activates the new field first; the old one hears of the click
+            // and its deactivation only afterwards, no longer owning the engine.
+            harness.activateAhead(second)
+            first.controller.commitComposition(first.client)
+            first.controller.deactivateServer(first.client)
+        } else {
+            harness.focus(second)
+        }
+        #expect(first.client.text == "한")
+        harness.type(Dubeolsik.keys(for: "국"))
+        harness.pressHanjaKey()
+        let offered = try #require(harness.candidates.entries.first)
+        #expect(offered.hangul == "국", "not 韓國 from 한 + 국")
+        harness.candidates.choose(1)
+        #expect(second.client.text == offered.hanja)
+        #expect(first.client.text == "한")
+    }
+
+    @Test("A lookup right after clicking into another field reads that field, not the last one's buffer")
+    func hanjaAfterClickIntoOtherField() throws {
+        let (harness, first) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "대한"))
+        let second = harness.makeField()   // same app
+        harness.focus(second)
+        #expect(first.client.text == "대한")
+        harness.type(Dubeolsik.keys(for: "요"))
+        // A click back into the first field commits 요, which stays in the buffer.
+        // Nothing is typed here before the Hanja key, so no keystroke has told
+        // the buffer that the field changed.
+        harness.focus(first)
+        #expect(second.client.text == "요")
+        harness.pressHanjaKey()
+        let offered = try #require(harness.candidates.entries.first)
+        #expect(offered.hangul == "대한", "read from this field, not 요 from the other one")
+        harness.candidates.choose(1)
+        #expect(first.client.text == offered.hanja)
     }
 
     @Test("Candidates close when another field activates before the old one deactivates")
