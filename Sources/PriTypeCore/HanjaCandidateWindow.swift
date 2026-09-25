@@ -592,12 +592,10 @@ private struct HanjaCandidateRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
-                Spacer(minLength: 12)
-
-                // Where a menu item shows its shortcut: the reading.
-                Text(entry.hangul)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
+                // No reading column: a Hanja is one syllable, so a candidate's
+                // length already says how much of the typed text it replaces
+                // (大韓民國, 民國, 國), and the meaning repeats the reading.
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 3)
