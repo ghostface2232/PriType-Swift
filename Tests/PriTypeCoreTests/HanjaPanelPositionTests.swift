@@ -117,6 +117,17 @@ struct HanjaCandidateReadingTests {
         #expect(shows("구천", "龜川洞"))
     }
 
+    @Test("The reading takes the meaning's place, ahead of any meaning")
+    func readingInTheMeaningsPlace() {
+        func detail(_ hangul: String, _ hanja: String, _ meaning: String) -> String {
+            HanjaCandidateWindow.detail(for: HanjaEntry(hangul: hangul, hanja: hanja, meaning: meaning))
+        }
+        #expect(detail("가가와현", "香川縣", "") == "가가와현")
+        #expect(detail("구천", "龜川洞", "지명") == "구천 · 지명")
+        #expect(detail("사", "四", "넉 사, 넷 사") == "넉 사, 넷 사")
+        #expect(detail("민국", "民國", "") == "", "its length already says it")
+    }
+
     @Test("Every entry the dictionary maps other than one to one shows its reading")
     func dictionaryMismatchesShowReading() throws {
         HanjaManager.shared.loadIfNeeded()

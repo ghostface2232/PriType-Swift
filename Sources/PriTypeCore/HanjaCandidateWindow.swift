@@ -465,6 +465,13 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         entry.hangul.count != entry.hanja.count
     }
 
+    /// What a row shows after its Hanja: the meaning, led by the reading where
+    /// the row shows it (`가가와현`, `구천 · 지명`).
+    static func detail(for entry: HanjaEntry) -> String {
+        guard showsReading(for: entry) else { return entry.meaning }
+        return entry.meaning.isEmpty ? entry.hangul : "\(entry.hangul) · \(entry.meaning)"
+    }
+
     /// Vertical clearance between the caret line and the panel.
     static let verticalGap: CGFloat = 6
 
@@ -600,21 +607,12 @@ private struct HanjaCandidateRow: View {
                     .fixedSize()
                     .frame(minWidth: 24, alignment: .leading)
 
-                Text(entry.meaning)
+                Text(HanjaCandidateWindow.detail(for: entry))
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
-
-                // Where a menu item shows its shortcut: the reading, only when
-                // the candidate's length does not already say it.
-                if HanjaCandidateWindow.showsReading(for: entry) {
-                    Text(entry.hangul)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.tertiary)
-                        .padding(.leading, 12)
-                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 3)
