@@ -147,13 +147,7 @@ public final class RightCommandSuppressor: Sendable {
     /// - Returns: `true` if CGEventTap was created successfully, `false` otherwise
     @discardableResult
     public func start() -> Bool {
-        // The IOKit fallback stops first, and outside this lock: the tap must be
-        // the keys' only producer from its first event — both acting on one
-        // press toggles twice — and closing the HID manager is a blocking IPC
-        // to hidd, which must never run under the lock every keystroke waits on.
-        // If the tap then fails to start, the caller brings IOKit back.
-        IOKitManager.shared.stop()
-        return state.withLock { startLocked($0) }
+        state.withLock { startLocked($0) }
     }
 
     /// The body of `start()`, with the lock already held.
@@ -165,6 +159,9 @@ public final class RightCommandSuppressor: Sendable {
     private func startLocked(_ state: State) -> Bool {
         if state.eventTap != nil && !state.isRunning { stopLocked(state) }
         guard state.eventTap == nil else {
+            // Enforce single ownership even if another caller redundantly starts the
+            // primary monitor after an IOKit fallback was active.
+            IOKitManager.shared.stop()
             DebugLogger.log("RightCommandSuppressor: Already running")
             return true
         }
@@ -224,6 +221,15 @@ public final class RightCommandSuppressor: Sendable {
             return false
         }
         state.tapThread = thread
+
+        // The hand-over from IOKit, at the last moment and not before: the
+        // fallback keeps watching the keys until the tap is ready to, so a press
+        // in between is seen by exactly one of them — never by neither (a gap
+        // while the tap was being prepared) nor by both (a double toggle). The
+        // close is a blocking IPC to hidd, and it runs under this lock; that is
+        // safe only because the tap is still disabled, so no keystroke is
+        // waiting on this lock yet.
+        IOKitManager.shared.stop()
         CGEvent.tapEnable(tap: tap, enable: true)
         
         let config = ConfigurationManager.shared
