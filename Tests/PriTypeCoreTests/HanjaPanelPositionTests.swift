@@ -102,3 +102,29 @@ struct HanjaCandidateRoutingTests {
                                 hanja: .defaultHanja, toggleEnabled: true, excludedOverride: false) != nil)
     }
 }
+
+@Suite("Hanja candidate reading")
+struct HanjaCandidateReadingTests {
+    @Test("The reading shows only where the Hanja's length does not say what it replaces")
+    func readingOnlyWhenLengthsDiffer() {
+        func shows(_ hangul: String, _ hanja: String) -> Bool {
+            HanjaCandidateWindow.showsReading(for: HanjaEntry(hangul: hangul, hanja: hanja, meaning: ""))
+        }
+        #expect(!shows("대한민국", "大韓民國"))
+        #expect(!shows("국", "國"))
+        #expect(!shows("ㅁ", "♥"), "a jamo symbol stands for its one jamo")
+        #expect(shows("가가와현", "香川縣"), "five syllables replaced by three characters")
+        #expect(shows("구천", "龜川洞"))
+    }
+
+    @Test("Every entry the dictionary maps other than one to one shows its reading")
+    func dictionaryMismatchesShowReading() throws {
+        HanjaManager.shared.loadIfNeeded()
+        let mismatched = [("가가와현", "香川縣"), ("가고시마현", "鹿児島縣"), ("나가사키현", "長崎縣")]
+        for (hangul, hanja) in mismatched {
+            let entries = HanjaManager.shared.search(key: hangul)
+            let entry = try #require(entries.first { $0.hanja == hanja }, "\(hangul) → \(hanja) is in hanja.dat")
+            #expect(HanjaCandidateWindow.showsReading(for: entry))
+        }
+    }
+}

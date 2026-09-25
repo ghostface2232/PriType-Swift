@@ -453,6 +453,18 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         return image
     }
 
+    /// Whether a candidate's row shows its reading.
+    ///
+    /// Almost never: a Hanja is one syllable, so a candidate's length already
+    /// says how much of the typed text it replaces (大韓民國, 民國, 國 for
+    /// 대한민국), and a syllable's meaning repeats its reading (넉 사). But a
+    /// selection replaces `hangul`, and 52 dictionary entries do not map one to
+    /// one — 가가와현 to 香川縣, 가고시마현 to 鹿児島縣, most with no meaning —
+    /// where the Hanja alone would suggest fewer syllables than it replaces.
+    static func showsReading(for entry: HanjaEntry) -> Bool {
+        entry.hangul.count != entry.hanja.count
+    }
+
     /// Vertical clearance between the caret line and the panel.
     static let verticalGap: CGFloat = 6
 
@@ -593,10 +605,16 @@ private struct HanjaCandidateRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
-                // No reading column: a Hanja is one syllable, so a candidate's
-                // length already says how much of the typed text it replaces
-                // (大韓民國, 民國, 國), and the meaning repeats the reading.
                 Spacer(minLength: 0)
+
+                // Where a menu item shows its shortcut: the reading, only when
+                // the candidate's length does not already say it.
+                if HanjaCandidateWindow.showsReading(for: entry) {
+                    Text(entry.hangul)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 12)
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 3)
