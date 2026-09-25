@@ -70,18 +70,21 @@ xattr -cr "$PAYLOAD_DIR/$APP_BUNDLE" 2>/dev/null || true
 
 # Code Signing the App
 echo "[3/6] Code Signing the .app bundle..."
-if [ "$APP_SIGN_IDENTITY" = "-" ]; then
-    echo "Using ad-hoc signature"
-    codesign --force --sign - "$PAYLOAD_DIR/$APP_BUNDLE"
-elif [[ "$APP_SIGN_IDENTITY" == "Developer ID Application:"* ]]; then
-    echo "Using App Identity: $APP_SIGN_IDENTITY"
-    codesign --force --options runtime --timestamp --sign "$APP_SIGN_IDENTITY" "$PAYLOAD_DIR/$APP_BUNDLE"
-else
+# Hardened runtime with every identity, ad-hoc included. PriType holds
+# Accessibility and Input Monitoring; without it dyld honours
+# DYLD_INSERT_LIBRARIES, and injected code would run with those grants.
+SIGN_ARGS=(--force --options runtime --sign "$APP_SIGN_IDENTITY")
+if [[ "$APP_SIGN_IDENTITY" == "Developer ID Application:"* ]]; then
     # Apple's timestamp service only accepts Apple-issued certificates.
-    echo "Using App Identity: $APP_SIGN_IDENTITY"
-    codesign --force --sign "$APP_SIGN_IDENTITY" "$PAYLOAD_DIR/$APP_BUNDLE"
+    SIGN_ARGS+=(--timestamp)
 fi
+echo "Using App Identity: $APP_SIGN_IDENTITY"
+codesign "${SIGN_ARGS[@]}" "$PAYLOAD_DIR/$APP_BUNDLE"
 codesign --verify --strict --verbose=2 "$PAYLOAD_DIR/$APP_BUNDLE"
+if ! codesign --display --verbose=1 "$PAYLOAD_DIR/$APP_BUNDLE" 2>&1 | grep -q '^CodeDirectory .*flags=.*runtime'; then
+    echo "Error: $APP_BUNDLE is not signed with the hardened runtime" >&2
+    exit 1
+fi
 codesign --display --requirements - "$PAYLOAD_DIR/$APP_BUNDLE" 2>&1 | grep designated || true
 
 # Building the PKG
