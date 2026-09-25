@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 보안 (업데이트 설치 로그와 앱 서명 — 2026-09-25)
+- 앱 안 업데이트가 root 권한으로 쓰는 설치 로그를 사용자 캐시(`~/Library/Caches/…/install.log`)에서 `/private/var/log/pritype-update.log`로 옮겼습니다. root가 사용자 소유 디렉터리의 경로로 출력을 보내면, 사용자 권한으로 도는 어떤 프로세스든 그 자리에 심볼릭 링크를 심어 root가 다른 파일을 덮어쓰거나 원하는 곳에 파일을 만들게 할 수 있었습니다. 이제 root가 쓰는 곳은 모두 root만 쓸 수 있는 디렉터리입니다.
+- 앱을 모든 서명 방식(ad-hoc, 자체 서명 인증서 포함)에서 hardened runtime으로 서명합니다. 전에는 Developer ID일 때만 켜져 있어서, 배포된 앱에 `DYLD_INSERT_LIBRARIES`로 라이브러리를 주입할 수 있었고, 주입된 코드는 PriType이 받은 손쉬운 사용·입력 모니터링 권한을 그대로 썼습니다. 릴리스 빌드는 이 플래그가 빠지면 실패합니다.
+
 ### 수정 (설치 후 입력기가 사라짐 — 2026-09-20)
 - 설치된 빌드보다 낮은 버전의 PKG를 설치하면 입력기가 통째로 사라지던 문제를 수정했습니다. macOS 설치 관리자는 설치된 번들이 더 새것이면 페이로드를 건너뛰는데, PriType의 `preinstall`은 그 판단이 내려지기 전에 이미 기존 앱을 지웁니다. 그래서 설치는 "성공"으로 끝나고 `/Library/Input Methods`는 빈 채로 남았습니다. 베타를 쓰다 안정판으로 돌아올 때 실제로 일어납니다. 이제 PKG에서 이 버전 검사를 끕니다. `preinstall`이 어차피 기존 설치를 지우므로 검사가 지켜 주는 것은 없었습니다.
 

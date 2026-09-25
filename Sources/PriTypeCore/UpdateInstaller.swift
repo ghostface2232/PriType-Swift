@@ -58,7 +58,16 @@ public final class UpdateInstaller: @unchecked Sendable {
     private static let maximumMetadataSize = 64 * 1024
 
     private static let packageFileName = "PriTypeV2_Release.pkg"
-    static let installLogFileName = "install.log"
+
+    /// Where root records how the install went.
+    ///
+    /// A directory only root can write, because root is what opens it. The log
+    /// used to sit next to the download in the user's caches, and a redirection
+    /// by root into a user-owned directory follows whatever the user put there: a
+    /// symlink planted at the log's path had root truncate and overwrite the file
+    /// it pointed to, and a directory swapped for a symlink had root create files
+    /// wherever it led. Readable by everyone, as the rest of `/var/log` is.
+    static let installLogPath = "/private/var/log/pritype-update.log"
 
     // MARK: - Install
 
@@ -99,11 +108,7 @@ public final class UpdateInstaller: @unchecked Sendable {
         // an install was attempted in order to report how it went.
         ConfigurationManager.shared.pendingUpdateVersion = update.version
         do {
-            try await launchPrivilegedInstall(
-                packageURL: packageURL,
-                digest: digest,
-                logURL: staging.appendingPathComponent(Self.installLogFileName)
-            )
+            try await launchPrivilegedInstall(packageURL: packageURL, digest: digest)
         } catch {
             ConfigurationManager.shared.pendingUpdateVersion = nil
             throw error
@@ -161,18 +166,14 @@ public final class UpdateInstaller: @unchecked Sendable {
     /// then handing that same path to a root installer would leave a window in
     /// which the file could be swapped for another one.
     @MainActor
-    private func launchPrivilegedInstall(packageURL: URL, digest: String, logURL: URL) async throws {
+    private func launchPrivilegedInstall(packageURL: URL, digest: String) async throws {
         // The authorization dialog blocks the main thread while it is up, so the
         // settings window gets a frame to draw "waiting for authorization"
         // first. Without it the window simply freezes on the previous phase.
         try? await Task.sleep(nanoseconds: 120_000_000)
 
         let source = Self.authorizationScript(
-            command: Self.installCommand(
-                packagePath: packageURL.path,
-                digest: digest,
-                logPath: logURL.path
-            ),
+            command: Self.installCommand(packagePath: packageURL.path, digest: digest),
             prompt: L10n.update.authorizationPrompt
         )
 
@@ -202,7 +203,11 @@ public final class UpdateInstaller: @unchecked Sendable {
     /// It ends detached (`&`) with its output redirected, because `do shell
     /// script` waits for the output to close and the package kills PriType
     /// while the installer is still running.
-    static func installCommand(packagePath: String, digest: String, logPath: String) -> String {
+    ///
+    /// The package path is the only user-controlled path in it, and root only
+    /// reads it. Everything root writes is in a directory only root can write:
+    /// its own staging directory, and `installLogPath`.
+    static func installCommand(packagePath: String, digest: String) -> String {
         """
         ( staging=$(/usr/bin/mktemp -d /private/tmp/pritype-update.XXXXXX) || exit 70
           /bin/cp \(shellQuoted(packagePath)) "$staging/package.pkg" \
@@ -210,7 +215,7 @@ public final class UpdateInstaller: @unchecked Sendable {
         && /usr/sbin/installer -pkg "$staging/package.pkg" -target /
           status=$?
           /bin/rm -rf "$staging"
-          echo "status=$status" ) > \(shellQuoted(logPath)) 2>&1 &
+          echo "status=$status" ) > \(shellQuoted(installLogPath)) 2>&1 &
         """
     }
 
@@ -333,9 +338,8 @@ public final class UpdateInstaller: @unchecked Sendable {
                 body: String(format: L10n.update.installedBody, runningVersion)
             )
         } else {
-            // The log is the only account of what root actually did, and it is
-            // gone as soon as the staging directory is.
-            let log = installLog(for: pending) ?? "(no log)"
+            // The log is the only account of what root actually did.
+            let log = installLog() ?? "(no log)"
             DebugLogger.log("UpdateInstaller: Update to \(pending) did not land. installer log: \(log)")
             UpdateNotifier.shared.notifyInstallResult(
                 title: L10n.update.installIncompleteTitle,
@@ -363,13 +367,9 @@ public final class UpdateInstaller: @unchecked Sendable {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    /// The log the privileged command wrote for `version`, if it left one.
-    static func installLog(for version: String) -> String? {
-        guard let directory = try? updatesDirectory() else { return nil }
-        let log = directory
-            .appendingPathComponent(version, isDirectory: true)
-            .appendingPathComponent(installLogFileName)
-        guard let data = FileManager.default.contents(atPath: log.path) else { return nil }
+    /// The log the last privileged install wrote, if there is one.
+    static func installLog() -> String? {
+        guard let data = FileManager.default.contents(atPath: installLogPath) else { return nil }
         return String(bytes: data, encoding: .utf8)
     }
 }

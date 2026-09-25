@@ -267,8 +267,7 @@ struct UpdateInstallerCommandTests {
     func commandChecksDigestAsRoot() {
         let command = UpdateInstaller.installCommand(
             packagePath: "/Users/someone/Library/Caches/Updates/2.9.0/PriTypeV2_Release.pkg",
-            digest: "abc123",
-            logPath: "/Users/someone/Library/Caches/Updates/2.9.0/install.log"
+            digest: "abc123"
         )
 
         // Root copies the file out of the user-writable directory first, so the
@@ -286,12 +285,30 @@ struct UpdateInstallerCommandTests {
     func quotingResistsInjection() {
         let command = UpdateInstaller.installCommand(
             packagePath: "/tmp/evil'; rm -rf / #.pkg",
-            digest: "abc123",
-            logPath: "/tmp/log"
+            digest: "abc123"
         )
 
         #expect(command.contains("'/tmp/evil'\\''; rm -rf / #.pkg'"))
         #expect(!command.contains("; rm -rf / #.pkg'\n"))
+    }
+
+    @Test("Root writes its log only where no one but root can plant a symlink")
+    func logLivesInRootOnlyDirectory() throws {
+        let command = UpdateInstaller.installCommand(
+            packagePath: "/Users/someone/Library/Caches/Updates/2.9.0/PriTypeV2_Release.pkg",
+            digest: "abc123"
+        )
+        #expect(command.hasSuffix("> '\(UpdateInstaller.installLogPath)' 2>&1 &"))
+
+        // Checked on this machine's filesystem rather than by the path's look: a
+        // directory someone else can write lets them replace the log with a
+        // symlink, and root's redirection would follow it.
+        let directory = (UpdateInstaller.installLogPath as NSString).deletingLastPathComponent
+        let attributes = try FileManager.default.attributesOfItem(atPath: directory)
+        #expect(attributes[.type] as? FileAttributeType == .typeDirectory)
+        #expect((attributes[.ownerAccountID] as? NSNumber)?.intValue == 0)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0o777
+        #expect(permissions & 0o022 == 0, "group or others can write \(directory)")
     }
 
     @Test("AppleScript quoting escapes what would end the literal")
