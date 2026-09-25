@@ -4,7 +4,7 @@
 
 ## 개요
 
-PriType은 InputMethodKit(IMK) 입력기 하나로 한글과 영문을 모두 처리한다. macOS에는 입력 소스 하나(`com.pritype.inputmethod.v2`)와 그 아래 입력 모드 두 개(한국어, 영문)로 등록된다. 한글은 libhangul-swift로 조합하고, 영문 모드에서는 키를 조합 없이 앱에 그대로 넘긴다. 한/영 전환은 macOS 입력 소스 전환이 아니라 PriType 내부의 모드 전환이며, 전환키는 전역 이벤트 탭으로 감지한다.
+PriType은 InputMethodKit(IMK) 입력기 하나로 한글과 영문을 모두 처리한다. macOS에는 입력 소스 하나(`com.pritype.inputmethod.v2`)와 그 아래 입력 모드 두 개(한국어, 영문)로 등록된다. 한글은 자체 두벌식 자동자(`DubeolsikEngine`)로 조합하고, 영문 모드에서는 키를 조합 없이 앱에 그대로 넘긴다. 한/영 전환은 macOS 입력 소스 전환이 아니라 PriType 내부의 모드 전환이며, 전환키는 전역 이벤트 탭으로 감지한다.
 
 ```
 앱 (IMK 클라이언트)
@@ -17,7 +17,7 @@ PriTypeV2.app
                 InputSession                   클라이언트, 컨텍스트, 전달 어댑터, 조합 종료 단일 경로
                   │
                   ▼
-                HangulComposer                 공유 하나, libhangul-swift로 조합
+                HangulComposer                 공유 하나, DubeolsikEngine으로 조합
                   ├─ HanjaManager / HanjaDictionary   메모리 매핑 한자 사전
                   └─ HanjaCandidateWindow              후보창 (NSPanel)
 
@@ -76,7 +76,16 @@ keyDown ──► PriTypeInputController.handle(event, client)
   - Space: 조합을 확정하고 공백을 넣는다. macOS의 "스페이스를 두 번 눌러 마침표 추가"가 켜져 있으면 한글 뒤의 빠른 두 번째 공백을 ". "로 바꾼다(`TextConvenienceHandler`, 0.45초 이내).
   - 방향키, Tab: 확정하고 앱으로 넘긴다.
   - Backspace: 조합 중이면 자모를 하나 지운다. 마지막 자모를 지울 때는 그 자모를 확정하고 키를 앱에 넘겨 앱이 직접 지우게 한다. macOS 27의 Apple 두벌식과 같은 순서이며, 조합 취소를 확정으로 처리하는 Figma에서 자모가 남지 않게 한다.
-- 나머지는 libhangul로 조합하고, 확정 문자열과 조합 문자열을 어댑터에 전달한다. 음절이 넘어갈 때는 항상 앞 음절을 확정한 뒤 새 조합을 표시한다.
+- 글자 키는 QWERTY 글자로 `DubeolsikEngine`에 넘기고, 확정된 음절과 조합 중인 음절을 어댑터에 전달한다. 음절이 넘어갈 때는 항상 앞 음절을 확정한 뒤 새 조합을 표시한다. 글자 키가 아닌 키의 문자는 조합을 확정한 뒤 출력 가능한 ASCII만 넣는다.
+
+### 조합 엔진 (`DubeolsikEngine`)
+
+표준 두벌식(KS X 5002)만 구현한 값 타입이다. 키 처리에 할당·잠금·Foundation을 쓰지 않는다.
+
+- 겹모음 7개(ㅘ ㅙ ㅚ ㅝ ㅞ ㅟ ㅢ)와 겹받침 11개만 만든다. ㅐ ㅒ ㅔ ㅖ ㄲ ㅆ는 자기 키로만 나오므로 ㅏ+ㅣ는 ㅏㅣ, 갓+ㅅ은 갓ㅅ이다. 모음 뒤 자음은 다음 음절을 시작한다(모아치기 없음, ㅏ+ㄴ → ㅏ나).
+- 모음이 오면 받침(겹받침이면 뒤쪽)이 다음 음절로 넘어간다: 닭+ㅏ → 달가, 받침 ㄲ·ㅆ는 통째로 넘어간다.
+- 출력은 늘 완성형 음절이나 호환 자모 한 글자다. 따라서 NFC이고, 변환이나 정규화가 필요 없다.
+- 백스페이스는 자모가 아니라 키 하나를 되돌린다. 음절의 키마다 상태를 쌓아 두고(한 음절은 최대 5키, 괅) 하나씩 꺼낸다. 한 키로 친 ㅐ는 통째로 지워지고, ㅗ+ㅏ로 친 ㅘ는 ㅗ로 돌아가며, 닭은 달이 된다.
 
 ### 조합 종료 단일 경로 (`InputSession.finalize(reason:)`)
 
@@ -161,7 +170,7 @@ Caps Lock, 입력 메뉴, 그리고 4단계 통보에 대한 응답이 모두 �
 ### 검색
 
 - 단어 단위(`searchWord(endingWith:)`): 조합 중인 글자와 로컬 입력 버퍼(없으면 앱이 알려 주는 커서 앞 글자)에서 끝의 한글 음절을 최대 10개 모은다. 가장 긴 끝말부터 한 음절까지 차례로 사전을 찾는다. "대한민국" → 大韓民國, 民國, 國….
-- 자모 특수문자: 자음 하나를 조합 중일 때는 `jamo_symbols.json`(자음 14개, 특수문자 390개)에서 찾는다. libhangul이 주는 초성 자모(U+1100~)는 호환 자모(U+3131~)로 바꿔 찾는다.
+- 자모 특수문자: 자음 하나를 조합 중일 때는 `jamo_symbols.json`(자음 14개, 특수문자 390개)에서 찾는다. 조합 중인 자음은 호환 자모(U+3131~)로 온다. 초성 자모(U+1100~)로 검색해도 호환 자모로 바꿔 찾는다.
 - 입력 버퍼는 같은 입력칸(앱과 클라이언트 객체)에서 친 것만 쓴다. 다른 입력칸에서 키를 치면 비워진다(입력칸을 떠날 때 확정한 마지막 음절이 다음 입력칸의 단어에 붙지 않게). 한자키를 누른 입력칸이 마지막으로 키를 친 입력칸과 다르면 버퍼를 보지 않고 커서 앞 글자를 읽는다. 클라이언트는 약한 참조로 기억해, 사라진 입력칸의 주소를 재사용한 새 입력칸을 같은 것으로 보지 않는다. 크롬 창의 웹 입력칸들은 클라이언트 객체 하나를 공유하므로 그 사이의 이동은 구분하지 못한다. 방향키, Tab, Return, 단축키, 모드 전환, 클릭 확정, 후보창 밖 클릭 때도 비워진다.
 
 ### 선택과 교체
@@ -258,7 +267,6 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `InputModeCoordinator.pendingActions` | 탭 스레드가 기록한 전환·한자 동작 대기열 |
 | `HanjaManager.condition` | 사전 로딩 상태. 미리 매핑만 기다리고 검색은 기다리지 않는다. 매핑된 사전 자체는 읽기 전용이다 |
 | `HanjaCandidateWindow.pageCandidatesState` | 탭이 읽는, 현재 쪽의 후보 수(0이면 창이 닫힘) |
-| libhangul `ThreadSafeHangulInputContext` | 조합 엔진 내부 상태 |
 
 **잠금 순서.** 탭 콜백은 이벤트 하나를 처리하는 동안 자기 잠금을 계속 쥐고 있고, 그 안에서 다른 잠금 여섯 개를 잡는다.
 
@@ -284,7 +292,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | 타깃 | 종류 | 역할 |
 |---|---|---|
 | `PriType` | 실행 파일 | 앱 진입점(`main.swift`). 번들에서는 `PriTypeV2` |
-| `PriTypeCore` | 라이브러리 | 입력기 로직 전부. 외부 의존성은 libhangul-swift 하나이며 테스트한 리비전에 고정한다 |
+| `PriTypeCore` | 라이브러리 | 입력기 로직 전부. 외부 의존성이 없다. libhangul-swift는 테스트 타깃만 쓴다(한자 사전을 libhangul `HanjaTable`과 대조) |
 | `PriTypeIMKHarness` | 라이브러리 | 실제 `PriTypeInputController`를 가짜 입력창(`FakeTextClient`)에 연결해 키를 흘려 넣는 통합 테스트 도구. 한자 후보창은 `FakeCandidatePresenter`가 대신해 후보를 기록하고 선택·클릭을 흉내 낸다. `Dubeolsik`은 한글 문장을 두벌식 키로 바꾼다 |
 | `PriTypeHanjaCompiler` | 실행 파일 | `hanja.txt` → `hanja.dat` 컴파일 |
 | `PriTypeBenchmark` | 실행 파일 | 한자 사전·검색, 자모 검색, 동시성, 좌표 검증, 타이핑 경로 지연 측정([BENCHMARK.md](BENCHMARK.md)) |
@@ -304,7 +312,8 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `SecureInputPolicy` | Secure Input 통과 판정 |
 | `HangulComposer` | 한글 조합, 특수 키, 로컬 입력 버퍼, 한자 검색과 교체. `inputMode`가 한/영 상태의 유일한 원본이다 |
 | `HangulComposerTypes` | `HangulComposerDelegate` 프로토콜, `InputMode` |
-| `CompositionHelpers` | libhangul 출력(UCSChar 배열)을 NFC 문자열로 변환 |
+| `DubeolsikEngine` | 표준 두벌식 조합 자동자 |
+| `CompositionHelpers` | 호스트가 가진 분해형(NFD) 음절 판별(백스페이스 재조합용) |
 | `TextConvenienceHandler` | 한글 조합 중 더블스페이스 마침표 |
 | `KeyCode` | 키 코드 상수, `QwertyKeyMap`(글자 키 위치 → QWERTY 글자, 숫자·문장부호 키 → US 문자), `LatinLayoutObserver`(글자 키에 문장부호를 둔 배열 감지) |
 | `InputModeCoordinator` | 전환·한자 동작의 키 순서 대기열, `SystemModeEchoFilter`, `DeferredInputMode` |
@@ -327,7 +336,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `UpdateChecker`, `UpdateNotifier`, `ReleaseChannel` | 업데이트 확인, 알림, 정식·베타 채널 판정 |
 | `AboutInfo` | 버전 정보, 정보 창 |
 | `L10n` | 한국어·영어 문자열 |
-| `PriTypeConfig` | 상수: 자판 ID `"2"`(두벌식), Finder 바탕화면 판정 50pt, 설정 창 크기, 더블스페이스 0.45초, 디버그 로그 경로 |
+| `PriTypeConfig` | 상수: Finder 바탕화면 판정 50pt, 설정 창 크기, 더블스페이스 0.45초, 디버그 로그 경로 |
 | `DebugLogger` | 디버그 빌드: `~/Library/Logs/PriType/pritype_debug.log`(5MB에서 교체). 민감한 내용은 가린다. 컨트롤러마다 처음 200개 키 입력의 키 코드를 기록하므로, 실기기 테스트 뒤에는 로그를 지운다. 릴리스 빌드: 빈 함수 |
 
 ## 테스트

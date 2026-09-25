@@ -170,7 +170,7 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
     private static let unusableSelectionLimit = 3
 
     /// Whether the caret sits right after text this input method wrote. Everything
-    /// it writes is precomposed (`CompositionHelpers.convertAndNormalize`), so the
+    /// it writes is precomposed (`DubeolsikEngine` emits nothing else), so the
     /// character before the caret cannot be a decomposed syllable and the host need
     /// not be asked at all — which covers the most common Backspace of all, the one
     /// that undoes what was just typed. One Backspace consumes it: what stands

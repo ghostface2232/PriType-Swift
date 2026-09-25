@@ -21,18 +21,14 @@ let package = Package(
             targets: ["PriTypeDeviceCheckCLI"]),
     ],
     dependencies: [
-        // Pinned to the revision PriType is tested against. The newest tag,
-        // v3.0.3, predates 43 commits PriType builds on, and `main` has since
-        // moved to data-driven keyboards that nothing here has run with. Move
-        // this pin deliberately, after the tests pass.
+        // Tests only: the Hanja dictionary is checked against libhangul's own
+        // reading of the same hanja.txt. Composition is PriType's own
+        // (`DubeolsikEngine`); nothing PriType ships links this.
         .package(url: "https://github.com/Meapri/libhangul-swift", revision: "57168458d07b21cffd28afb674a7b177fc9084a5"),
     ],
     targets: [
         .target(
             name: "PriTypeCore",
-            dependencies: [
-                .product(name: "LibHangul", package: "libhangul-swift")
-            ],
             resources: [
                 .process("Resources")
             ],
@@ -45,10 +41,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "PriType",
-            dependencies: [
-                "PriTypeCore",
-                .product(name: "LibHangul", package: "libhangul-swift")
-            ],
+            dependencies: ["PriTypeCore"],
             linkerSettings: [
                 .unsafeFlags(["-framework", "InputMethodKit"])
             ]
