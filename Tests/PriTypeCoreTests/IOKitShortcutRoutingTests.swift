@@ -393,6 +393,25 @@ struct IOKitShortcutRoutingTests {
                 "the fallback can only order against a keystroke if it says when the key was pressed")
     }
 
+    @Test("The fallback times its rules by the keys' own clock, not the wall clock")
+    func rulesUseEventTime() async {
+        let manager = IOKitManager()
+        let actions = ShortcutActions()
+        manager.onRightOptionHanja = { _ in actions.record("hanja") }
+        // Two Hanja presses a second apart by their HID stamps, delivered back to
+        // back. The debounce is half a second; a clock read at delivery would see
+        // them as simultaneous (and a wall clock stepped back, as later still).
+        for (pressedAt, pressed) in [(100.0, true), (100.1, false), (101.0, true), (101.1, false)] {
+            manager.handleKeyboardEvent(usage: HIDUsage.rightOption, pressed: pressed, eventTime: pressedAt,
+                                        toggle: f13Binding, hanja: rightOptionBinding,
+                                        toggleEnabled: true, paused: false)
+        }
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        #expect(actions.snapshot == ["hanja", "hanja"])
+    }
+
     @Test("A HID timestamp converts onto NSEvent's clock")
     func hidTimestampsAreUptimeSeconds() {
         // Both are mach absolute time since boot, which is what makes them
