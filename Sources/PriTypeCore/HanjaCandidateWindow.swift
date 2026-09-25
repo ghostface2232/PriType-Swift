@@ -453,6 +453,29 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         return image
     }
 
+    /// Whether a candidate's row shows its reading.
+    ///
+    /// When nothing else in the row says what it is or how much it replaces:
+    /// - the meaning is empty, as it is for most word entries (民國 would show
+    ///   nothing but its Hanja);
+    /// - the entry does not map one Hanja to one syllable, which 52 do —
+    ///   가가와현 to 香川縣, 구천 to 龜川洞. A selection replaces the whole
+    ///   reading, and the Hanja alone would suggest fewer syllables.
+    ///
+    /// Otherwise a Hanja is one syllable, so the candidate's length already
+    /// says how much of the typed text it replaces (大韓民國, 國), and a
+    /// syllable's meaning repeats its reading (넉 사).
+    static func showsReading(for entry: HanjaEntry) -> Bool {
+        entry.meaning.isEmpty || entry.hangul.count != entry.hanja.count
+    }
+
+    /// What a row shows after its Hanja: the meaning, led by the reading where
+    /// the row shows it (`민국`, `가가와현`, `구천 · 지명`).
+    static func detail(for entry: HanjaEntry) -> String {
+        guard showsReading(for: entry) else { return entry.meaning }
+        return entry.meaning.isEmpty ? entry.hangul : "\(entry.hangul) · \(entry.meaning)"
+    }
+
     /// Vertical clearance between the caret line and the panel.
     static let verticalGap: CGFloat = 6
 
@@ -580,24 +603,20 @@ private struct HanjaCandidateRow: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
 
-                // Hanja: one character, or a whole word that must not be clipped
+                // Hanja: one character, or a whole word that must not be clipped.
+                // Left-aligned, so a single character starts where 大韓民國 does.
                 Text(entry.hanja)
                     .font(.system(size: 17))
                     .foregroundStyle(.primary)
                     .fixedSize()
-                    .frame(minWidth: 24, alignment: .center)
+                    .frame(minWidth: 24, alignment: .leading)
 
-                Text(entry.meaning)
+                Text(HanjaCandidateWindow.detail(for: entry))
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
-                Spacer(minLength: 12)
-
-                // Where a menu item shows its shortcut: the reading.
-                Text(entry.hangul)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 3)

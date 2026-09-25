@@ -102,3 +102,41 @@ struct HanjaCandidateRoutingTests {
                                 hanja: .defaultHanja, toggleEnabled: true, excludedOverride: false) != nil)
     }
 }
+
+@Suite("Hanja candidate reading")
+struct HanjaCandidateReadingTests {
+    @Test("The reading shows where nothing else says what the row is or replaces")
+    func readingWhenNothingElseSaysIt() {
+        func shows(_ hangul: String, _ hanja: String, _ meaning: String) -> Bool {
+            HanjaCandidateWindow.showsReading(for: HanjaEntry(hangul: hangul, hanja: hanja, meaning: meaning))
+        }
+        #expect(!shows("대한민국", "大韓民國", "대한민국"))
+        #expect(!shows("국", "國", "나라 국"))
+        #expect(!shows("ㅁ", "♥", "검은 하트"), "a jamo symbol stands for its one jamo")
+        #expect(shows("민국", "民國", ""), "no meaning to say what it is")
+        #expect(shows("가가와현", "香川縣", ""), "five syllables replaced by three characters")
+        #expect(shows("구천", "龜川洞", "지명"))
+    }
+
+    @Test("The reading takes the meaning's place, ahead of any meaning")
+    func readingInTheMeaningsPlace() {
+        func detail(_ hangul: String, _ hanja: String, _ meaning: String) -> String {
+            HanjaCandidateWindow.detail(for: HanjaEntry(hangul: hangul, hanja: hanja, meaning: meaning))
+        }
+        #expect(detail("가가와현", "香川縣", "") == "가가와현")
+        #expect(detail("구천", "龜川洞", "지명") == "구천 · 지명")
+        #expect(detail("사", "四", "넉 사, 넷 사") == "넉 사, 넷 사")
+        #expect(detail("민국", "民國", "") == "민국")
+    }
+
+    @Test("Every entry the dictionary maps other than one to one shows its reading")
+    func dictionaryMismatchesShowReading() throws {
+        HanjaManager.shared.loadIfNeeded()
+        let mismatched = [("가가와현", "香川縣"), ("가고시마현", "鹿児島縣"), ("나가사키현", "長崎縣")]
+        for (hangul, hanja) in mismatched {
+            let entries = HanjaManager.shared.search(key: hangul)
+            let entry = try #require(entries.first { $0.hanja == hanja }, "\(hangul) → \(hanja) is in hanja.dat")
+            #expect(HanjaCandidateWindow.showsReading(for: entry))
+        }
+    }
+}
