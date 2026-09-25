@@ -580,12 +580,13 @@ private struct HanjaCandidateRow: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
 
-                // Hanja: one character, or a whole word that must not be clipped
+                // Hanja: one character, or a whole word that must not be clipped.
+                // Left-aligned, so a single character starts where 大韓民國 does.
                 Text(entry.hanja)
                     .font(.system(size: 17))
                     .foregroundStyle(.primary)
                     .fixedSize()
-                    .frame(minWidth: 24, alignment: .center)
+                    .frame(minWidth: 24, alignment: .leading)
 
                 Text(entry.meaning)
                     .font(.system(size: 13))
