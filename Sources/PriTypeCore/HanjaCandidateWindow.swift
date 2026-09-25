@@ -455,18 +455,22 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
 
     /// Whether a candidate's row shows its reading.
     ///
-    /// Almost never: a Hanja is one syllable, so a candidate's length already
-    /// says how much of the typed text it replaces (大韓民國, 民國, 國 for
-    /// 대한민국), and a syllable's meaning repeats its reading (넉 사). But a
-    /// selection replaces `hangul`, and 52 dictionary entries do not map one to
-    /// one — 가가와현 to 香川縣, 가고시마현 to 鹿児島縣, most with no meaning —
-    /// where the Hanja alone would suggest fewer syllables than it replaces.
+    /// When nothing else in the row says what it is or how much it replaces:
+    /// - the meaning is empty, as it is for most word entries (民國 would show
+    ///   nothing but its Hanja);
+    /// - the entry does not map one Hanja to one syllable, which 52 do —
+    ///   가가와현 to 香川縣, 구천 to 龜川洞. A selection replaces the whole
+    ///   reading, and the Hanja alone would suggest fewer syllables.
+    ///
+    /// Otherwise a Hanja is one syllable, so the candidate's length already
+    /// says how much of the typed text it replaces (大韓民國, 國), and a
+    /// syllable's meaning repeats its reading (넉 사).
     static func showsReading(for entry: HanjaEntry) -> Bool {
-        entry.hangul.count != entry.hanja.count
+        entry.meaning.isEmpty || entry.hangul.count != entry.hanja.count
     }
 
     /// What a row shows after its Hanja: the meaning, led by the reading where
-    /// the row shows it (`가가와현`, `구천 · 지명`).
+    /// the row shows it (`민국`, `가가와현`, `구천 · 지명`).
     static func detail(for entry: HanjaEntry) -> String {
         guard showsReading(for: entry) else { return entry.meaning }
         return entry.meaning.isEmpty ? entry.hangul : "\(entry.hangul) · \(entry.meaning)"
