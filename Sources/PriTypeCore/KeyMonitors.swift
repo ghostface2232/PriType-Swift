@@ -13,6 +13,11 @@ public enum KeyMonitors {
     private static var accessibilityPoll: Timer?
     /// Waits for Input Monitoring when the IOKit fallback needs it.
     private static var inputMonitoringPoll: Timer?
+    /// Brings the event tap back after a handoff to IOKit.
+    private static var tapRetry: Timer?
+
+    /// How long the IOKit fallback runs before the event tap is tried again.
+    static let tapRetryInterval: TimeInterval = 60
 
     /// Start the event tap, or IOKit when the tap cannot run. Without
     /// Accessibility, wait for the grant and start then. Safe to call again.
@@ -46,6 +51,23 @@ public enum KeyMonitors {
         }
     }
 
+    /// Try the event tap again after a while; `start()` hands back to IOKit if it
+    /// still cannot run. One pending retry at a time.
+    private static func retryTapLater() {
+        tapRetry?.invalidate()
+        let timer = Timer(timeInterval: tapRetryInterval, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                tapRetry = nil
+                guard !RightCommandSuppressor.shared.isRunning else { return }
+                DebugLogger.log("Retrying the event tap after an IOKit handoff")
+                start()
+            }
+        }
+        timer.tolerance = 10
+        RunLoop.main.add(timer, forMode: .common)
+        tapRetry = timer
+    }
+
     /// Poll for the grant: there is no notification for it. One poll at a time.
     private static func waitForAccessibility() {
         guard accessibilityPoll == nil else { return }
@@ -61,7 +83,15 @@ public enum KeyMonitors {
     /// Hand key monitoring to IOKit. It needs Input Monitoring; when that is
     /// missing, `start()` prompts (first time only) and this waits for the grant
     /// instead of leaving the toggle and Hanja keys dead until the next launch.
+    ///
+    /// Never for good: the tap is retried after `tapRetryInterval`. The tap is
+    /// handed off when the system keeps disabling it for timeouts, and those are
+    /// stalls of the whole machine (wake, memory pressure) — the callback itself
+    /// takes well under a microsecond. The fallback cannot swallow keys (Right ⌘
+    /// + C both toggles and copies) and needs Input Monitoring, which is rarely
+    /// granted, so it is a bridge over the stall, not a new home.
     private static func startIOKitFallback() {
+        retryTapLater()
         IOKitManager.shared.onRightCommandToggle = { eventTime in
             InputModeCoordinator.shared.requestToggle(source: .iokitFallback, eventTime: eventTime)
         }
