@@ -31,7 +31,25 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
     public static let shared = HanjaCandidateWindow()
     
     private var window: NSWindow?
-    private var contentContainer: NSView?
+
+    /// The candidates' one SwiftUI host, made with the panel and kept with it.
+    /// A page, a new lookup, hiding and showing again only replace its root
+    /// view, which SwiftUI diffs into the views it already has. Building a new
+    /// host every time cost 20–30 ms of main-thread layout per show and per page
+    /// — keys queue behind it — and freed only about 0.7 MB when discarded.
+    private var hostView: NSHostingView<HanjaCandidateView>?
+
+    /// Where the lookup's caret is, so every page is placed against it.
+    private var cursorRect: NSRect = .zero
+
+    /// The widest page of this lookup so far. Pages never get narrower within a
+    /// lookup, so flipping through them does not make the panel jump.
+    private var lookupWidth: CGFloat = 0
+
+    /// Counts lookups. The hover belongs to one lookup: a row the pointer was
+    /// over when the last one closed must not come back lit.
+    private var lookupNumber = 0
+
     private var candidates: [HanjaEntry] = []
     private var currentPage = 0
     private let pageSize = 9
@@ -99,6 +117,9 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
     ) {
         self.candidates = entries
         self.currentPage = 0
+        self.cursorRect = cursorRect
+        self.lookupWidth = 0
+        self.lookupNumber &+= 1
         self.onSelect = onSelect
         self.onDismiss = onDismiss
         self.onClickOutside = onClickOutside
@@ -113,7 +134,7 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         if let existing = window as? NSPanel {
             panel = existing
         } else {
-            panel = NSPanel(
+            panel = CandidatePanel(
                 contentRect: NSRect(x: 0, y: 0, width: 320, height: 0),
                 styleMask: [.nonactivatingPanel, .fullSizeContentView],
                 backing: .buffered,
@@ -128,27 +149,40 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
             panel.isReleasedWhenClosed = false
             
-            // Create persistent Liquid Glass container on Tahoe, with a
-            // vibrancy fallback for Sonoma/Sequoia.
+            let host = NSHostingView(rootView: HanjaCandidateView.empty)
+            // The panel is sized here (`updateContent`), from the host's
+            // intrinsic size. Its min/max constraints are off: they would size
+            // the panel to each page and shrink it back below the width this
+            // lookup has reached.
+            host.sizingOptions = [.intrinsicContentSize]
+
+            // The backdrop of the system's context menus, as a real one is
+            // built: on macOS 26 and later an `NSGlassEffectView` with the
+            // menu's radius (read from an `NSPopupMenuWindow`), before that the
+            // `.menu` material. The glass only looks like a menu's in a window
+            // drawn as active — see `CandidatePanel`.
             if #available(macOS 26.0, *) {
                 let glass = NSGlassEffectView()
-                glass.cornerRadius = 10
+                glass.cornerRadius = Self.cornerRadius
+                glass.contentView = host
                 panel.contentView = glass
-                self.contentContainer = glass
             } else {
-                let visualEffectView = NSVisualEffectView()
-                visualEffectView.material = .popover
-                visualEffectView.blendingMode = .behindWindow
-                visualEffectView.state = .active
-                panel.contentView = visualEffectView
-                self.contentContainer = visualEffectView
+                let backdrop = NSVisualEffectView()
+                backdrop.material = .menu
+                backdrop.blendingMode = .behindWindow
+                backdrop.state = .active
+                backdrop.maskImage = Self.roundedMask(radius: Self.cornerRadius)
+                host.frame = backdrop.bounds
+                host.autoresizingMask = [.width, .height]
+                backdrop.addSubview(host)
+                panel.contentView = backdrop
             }
-            
+            self.hostView = host
+
             self.window = panel
         }
         
         updateContent()
-        positionWindow(near: cursorRect)
         panel.orderFrontRegardless()
         watchClicks()
 
@@ -197,28 +231,16 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         dismissCallback?()
     }
 
-    /// Everything closing the window undoes, on every path. The panel itself is
-    /// kept for the next lookup, but not the candidates' SwiftUI tree: it is
-    /// rebuilt on every show, so holding the last one between lookups only
-    /// keeps its views and glass layers in memory.
+    /// Everything closing the window undoes, on every path. The panel and its
+    /// host are kept for the next lookup; the host keeps drawing the last page
+    /// while hidden, which nothing sees. It is not emptied here: a click on a
+    /// candidate gets here from inside that candidate's button action, and the
+    /// view handling the event must outlive it.
     @MainActor
     private func hide() {
         Self.setShownPageCandidates(0)
         stopWatchingClicks()
         window?.orderOut(nil)
-        // Later, not now: a click on a candidate gets here from inside that
-        // candidate's button action, and the hosting view must outlive the
-        // event it is handling. Skipped if a new lookup has shown the panel.
-        DispatchQueue.main.async { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.window?.isVisible != true else { return }
-                if #available(macOS 26.0, *), let glass = self.contentContainer as? NSGlassEffectView {
-                    glass.contentView = nil
-                } else {
-                    self.contentContainer?.subviews.forEach { $0.removeFromSuperview() }
-                }
-            }
-        }
         candidates = []
         currentPage = 0
         onSelect = nil
@@ -353,47 +375,34 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         hide()
     }
 
+    /// Draw the current page into the kept host, size the panel to it and
+    /// place it against the lookup's caret. Placed on every page, not only on
+    /// show: a wider page must be clamped to the screen too.
     @MainActor
     private func updateContent() {
-        guard let window = window else { return }
-        
+        guard let window, let hostView else { return }
+
         let startIndex = currentPage * pageSize
         let endIndex = min(startIndex + pageSize, candidates.count)
         let pageEntries = Array(candidates[startIndex..<endIndex])
         let totalPages = (candidates.count + pageSize - 1) / pageSize
         Self.setShownPageCandidates(pageEntries.count)
-        
-        let view = HanjaCandidateView(
+
+        hostView.rootView = HanjaCandidateView(
+            lookup: lookupNumber,
             entries: pageEntries,
-            startNumber: 1,
             currentPage: currentPage + 1,
             totalPages: totalPages,
             onSelect: { [weak self] index in
-                let globalIndex = (self?.currentPage ?? 0) * (self?.pageSize ?? 9) + index
-                self?.selectCandidate(at: globalIndex)
+                guard let self else { return }
+                self.selectCandidate(at: self.currentPage * self.pageSize + index)
             }
         )
-        
-        let hostView = NSHostingView(rootView: view)
-        hostView.frame.size = hostView.fittingSize
-        
-        // Update Liquid Glass/vibrancy container content
-        if #available(macOS 26.0, *), let glassContainer = contentContainer as? NSGlassEffectView {
-            glassContainer.contentView = hostView
-            glassContainer.frame.size = hostView.fittingSize
-        } else if let contentContainer {
-            contentContainer.subviews.forEach { $0.removeFromSuperview() }
-            contentContainer.addSubview(hostView)
-            hostView.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                hostView.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
-                hostView.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
-                hostView.topAnchor.constraint(equalTo: contentContainer.topAnchor),
-                hostView.bottomAnchor.constraint(equalTo: contentContainer.bottomAnchor)
-            ])
-            contentContainer.frame.size = hostView.fittingSize
-        }
-        window.setContentSize(hostView.fittingSize)
+
+        let fitting = hostView.intrinsicContentSize
+        lookupWidth = max(lookupWidth, fitting.width)
+        window.setContentSize(NSSize(width: lookupWidth, height: fitting.height))
+        positionWindow(near: cursorRect)
     }
     
     @MainActor
@@ -421,6 +430,27 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
         }
 
         window.setFrameOrigin(origin)
+    }
+
+    /// Corner radius of the system's menus: larger since macOS 26.
+    static var cornerRadius: CGFloat {
+        if #available(macOS 26.0, *) { return 12 }
+        return 6
+    }
+
+    /// A stretchable rounded-rectangle mask for the pre-26 backdrop. A
+    /// `.behindWindow` effect view clips its blur to this, and the window
+    /// shadow follows its shape.
+    static func roundedMask(radius: CGFloat) -> NSImage {
+        let edge = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
     }
 
     /// Vertical clearance between the caret line and the panel.
@@ -473,97 +503,132 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
 // MARK: - SwiftUI Candidate View
 
 private struct HanjaCandidateView: View {
+    /// Which lookup this page belongs to; a new one clears the hover.
+    let lookup: Int
     let entries: [HanjaEntry]
-    let startNumber: Int
     let currentPage: Int
     let totalPages: Int
     let onSelect: (Int) -> Void
-    
+
+    /// The row under the pointer. Held here rather than in each row so a new
+    /// lookup can clear it without rebuilding the rows (`.id` would, at ~10 ms
+    /// a show); a page flip keeps it, as the pointer has not moved.
+    @State private var hoveredIndex: Int?
+
+    /// What the host starts with, before its first page.
+    static let empty = HanjaCandidateView(lookup: 0, entries: [], currentPage: 1, totalPages: 1, onSelect: { _ in })
+
     var body: some View {
+        // Laid out like a context menu: rows inset from the edge by the width
+        // of their highlight, no rule between rows, one before the footer.
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
                 HanjaCandidateRow(
-                    number: startNumber + index,
+                    number: index + 1,
                     entry: entry,
-                    onSelect: { onSelect(index) }
+                    isHovered: hoveredIndex == index,
+                    onSelect: { onSelect(index) },
+                    onHover: { hovering in
+                        if hovering {
+                            hoveredIndex = index
+                        } else if hoveredIndex == index {
+                            hoveredIndex = nil
+                        }
+                    }
                 )
-                
-                if index < entries.count - 1 {
-                    Divider()
-                        .opacity(0.15)
-                        .padding(.horizontal, 8)
-                }
             }
-            
+
             if totalPages > 1 {
-                Divider()
-                    .opacity(0.2)
-                
-                HStack {
-                    Spacer()
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(height: 1)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+
+                HStack(spacing: 6) {
                     Text("\(currentPage) / \(totalPages)")
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
                     Text("▲▼ 페이지 이동")
-                        .font(.system(size: 10, weight: .regular, design: .rounded))
-                        .foregroundStyle(.quaternary)
-                    Spacer()
                 }
-                .padding(.vertical, 4)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 3)
             }
         }
-        .padding(.vertical, 4)
-        .frame(minWidth: 240)
+        .padding(5)
+        .frame(minWidth: 220)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onChange(of: lookup) {
+            hoveredIndex = nil
+        }
     }
 }
 
 private struct HanjaCandidateRow: View {
     let number: Int
     let entry: HanjaEntry
+    let isHovered: Bool
     let onSelect: () -> Void
-    
-    @State private var isHovered = false
-    
+    let onHover: (Bool) -> Void
+
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: 8) {
-                // Number badge
+            HStack(spacing: 10) {
                 Text("\(number)")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(.system(size: 12))
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
-                    .frame(width: 18, height: 18)
-                    .background(Circle().fill(.primary.opacity(0.06)))
-                
+
                 // Hanja: one character, or a whole word that must not be clipped
                 Text(entry.hanja)
-                    .font(.system(size: 18, weight: .medium))
+                    .font(.system(size: 17))
                     .foregroundStyle(.primary)
                     .fixedSize()
-                    .frame(minWidth: 28, alignment: .center)
-                
-                // Meaning
+                    .frame(minWidth: 24, alignment: .center)
+
                 Text(entry.meaning)
-                    .font(.system(size: 13, weight: .regular, design: .rounded))
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                
-                Spacer()
-                
-                // Hangul key
+
+                Spacer(minLength: 12)
+
+                // Where a menu item shows its shortcut: the reading.
                 Text(entry.hangul)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .font(.system(size: 12))
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(isHovered ? AnyShapeStyle(.primary.opacity(0.06)) : AnyShapeStyle(Color.clear))
+                    .fill(isHovered ? AnyShapeStyle(.primary.opacity(0.08)) : AnyShapeStyle(Color.clear))
             )
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            isHovered = hovering
-        }
+        .onHover(perform: onHover)
     }
+}
+
+/// The candidates' window, drawn as an active one.
+///
+/// Liquid Glass renders differently in an active window and an inactive one:
+/// inactive, it lays a grey veil over whatever is behind it. An input method's
+/// panel belongs to an app that is never active — it must not take focus from
+/// the field being typed in — so its glass always had that veil, and read as
+/// murky grey where a context menu is clear. The system's own menu window
+/// (`NSPopupMenuWindow`) answers this by reporting an active appearance
+/// whatever its key state, which is all that sets its glass apart from ours:
+/// compared over the same backdrops, same class, style, tint and radius, this
+/// is the difference that makes them match.
+///
+/// These are AppKit's private hooks, overridden by name. On a system without
+/// them they are simply never called and the panel falls back to the inactive
+/// look; nothing else depends on them. Focus is unaffected: the panel stays
+/// non-activating and never becomes key.
+private final class CandidatePanel: NSPanel {
+    @objc func _hasActiveAppearanceIgnoringKeyFocus() -> Bool { true }
+    @objc func _hasActiveAppearance() -> Bool { true }
 }

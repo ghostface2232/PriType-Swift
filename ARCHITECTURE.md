@@ -179,7 +179,9 @@ Caps Lock, 입력 메뉴, 그리고 4단계 통보에 대한 응답이 모두 �
 
 ### 후보창 (`HanjaCandidateWindow`)
 
-- `NSPanel`(비활성, 모든 Spaces, 화면 보호기 위 레벨)에 SwiftUI로 그린다. macOS 26부터는 Liquid Glass 배경이다. 한 쪽에 9개씩 보여 준다.
+- `NSPanel`(비활성, 모든 Spaces, 화면 보호기 위 레벨)에 SwiftUI로 그린다. 한 쪽에 9개씩 보여 준다.
+- 모양은 시스템 컨텍스트 메뉴와 같다. macOS 26부터는 메뉴 창(`NSPopupMenuWindow`)과 같은 `NSGlassEffectView`(모서리 12pt), 그 전에는 `.menu` 재질이다. Liquid Glass는 비활성 창에서 회색 막을 씌워 그리는데, 입력기의 패널은 활성 앱이 될 수 없으므로 늘 그 모습이었다. 메뉴 창처럼 키 상태와 무관하게 활성 모습으로 그리도록 AppKit의 비공개 메서드 두 개(`_hasActiveAppearance`, `_hasActiveAppearanceIgnoringKeyFocus`)를 재정의한다(`CandidatePanel`). 없는 시스템에서는 호출되지 않을 뿐이다. 같은 배경 위에서 실제 메뉴와 비교해 맞췄다.
+- SwiftUI 호스트는 패널과 함께 한 번 만들어 계속 쓴다. 쪽이 바뀌거나 새로 조회하면 `rootView`만 바꾼다(창 열기·쪽 넘김이 매번 새로 만들 때보다 2~4배 빠르다). 크기는 호스트의 intrinsic size로 코드가 정하고, 한 조회 안에서는 폭이 줄지 않으며, 쪽마다 커서 기준으로 다시 배치해 넓어진 쪽도 화면 안에 들게 한다.
 - 키
   - 1~9: 선택
   - Return: 쪽의 첫 후보 선택
