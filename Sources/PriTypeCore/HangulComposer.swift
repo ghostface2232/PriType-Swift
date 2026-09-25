@@ -1,9 +1,7 @@
 import Cocoa
-import LibHangul
 import InputMethodKit
 
-// Protocol and InputMode are now in HangulComposerTypes.swift
-// Helper functions are now in CompositionHelpers.swift
+// Protocol and InputMode are in HangulComposerTypes.swift
 
 // MARK: - HangulComposer
 
@@ -39,12 +37,12 @@ public class HangulComposer: @unchecked Sendable {
 
     /// Whether the underlying Hangul engine currently has active composition.
     public var hasActiveComposition: Bool {
-        !context.isEmpty()
+        engine.isComposing
     }
 
     /// The live syllable as the host is shown it ("" when nothing is composing).
     public var preeditForDisplay: String {
-        CompositionHelpers.normalizeJamoForDisplay(context.getPreeditString())
+        engine.composing.map(String.init) ?? ""
     }
     
     // MARK: - Dependencies
@@ -76,22 +74,11 @@ public class HangulComposer: @unchecked Sendable {
         }
     }
     
-    // MARK: - libhangul Context
-    // 두벌식 표준 is the only supported layout, so the context is created once.
-    private let context = ThreadSafeHangulInputContext(keyboard: PriTypeConfig.defaultKeyboardId)
+    // MARK: - Engine
 
-    /// Replays keystrokes to find which of them make up the live syllable.
-    private let replayContext = ThreadSafeHangulInputContext(keyboard: PriTypeConfig.defaultKeyboardId)
-
-    /// The keystrokes that typed the live syllable, oldest first. Backspace
-    /// drops the last one and replays the rest, so it undoes a keystroke rather
-    /// than a jamo: ㅐ typed with one key goes whole, ㅗ+ㅏ steps back to ㅗ.
-    /// libhangul's own backspace splits every compound jamo it can (ㅐ → ㅏ,
-    /// ㅆ → ㅅ) however it was typed.
-    private var syllableKeys: [Character] = []
-
-    /// A 두벌식 syllable takes at most five keys (괅 = ㄱ ㅗ ㅏ ㄹ ㄱ).
-    private static let maxSyllableKeys = 5
+    /// The 두벌식 automaton holding the syllable being typed. 두벌식 표준 is the
+    /// only supported layout.
+    private var engine = DubeolsikEngine()
 
     /// Whether the key handled before the current one was a Backspace. The
     /// decomposed-syllable rewrite needs it to tell a host that ignored the last
@@ -129,11 +116,6 @@ public class HangulComposer: @unchecked Sendable {
                 configuration.doubleSpacePeriodEnabled
             }
         )
-        // 모아치기 off: a consonant after a lone vowel starts the next syllable
-        // (ㅏ + ㄴ → ㅏ나), as in the standard 두벌식, instead of joining it (나).
-        for engine in [context, replayContext] {
-            engine.setOption(.autoReorder, value: false)
-        }
         DebugLogger.log("HangulComposer init")
     }
 
@@ -167,7 +149,7 @@ public class HangulComposer: @unchecked Sendable {
 
         DebugLogger.log("setInputMode called externally: \(mode)")
 
-        if let delegate = lastDelegate, !context.isEmpty() {
+        if let delegate = lastDelegate, engine.isComposing {
             commitComposition(delegate: delegate)
             DebugLogger.log("Composition committed before explicit mode switch")
         }
@@ -191,7 +173,7 @@ public class HangulComposer: @unchecked Sendable {
     private func handleSpecialKey(keyCode: UInt16, followsBackspace: Bool, delegate: HangulComposerDelegate) -> Bool? {
         // Return / Enter
         if keyCode == KeyCode.return || keyCode == KeyCode.numpadEnter {
-            let hadComposition = !context.isEmpty()
+            let hadComposition = engine.isComposing
             commitComposition(delegate: delegate)
             if hadComposition {
                 delegate.setMarkedText("")
@@ -210,7 +192,7 @@ public class HangulComposer: @unchecked Sendable {
         
         // Escape - only consume if there's an active composition to cancel
         if keyCode == KeyCode.escape {
-            if !context.isEmpty() {
+            if engine.isComposing {
                 DebugLogger.log("Escape -> cancel composition")
                 cancelComposition(delegate: delegate)
                 localTextBuffer = ""
@@ -222,7 +204,7 @@ public class HangulComposer: @unchecked Sendable {
         
         // Space - handle double-space period
         if keyCode == KeyCode.space {
-            guard !context.isEmpty() || !localTextBuffer.isEmpty else {
+            guard engine.isComposing || !localTextBuffer.isEmpty else {
                 textConvenience.resetSpaceState()
                 return false
             }
@@ -262,10 +244,9 @@ public class HangulComposer: @unchecked Sendable {
         
         // Backspace
         if keyCode == KeyCode.backspace {
-            if !context.isEmpty() {
-                let before = context.getPreeditString()
-                removeLastKeystroke()
-                if context.isEmpty() {
+            if let before = engine.composing {
+                engine.backspace()
+                if !engine.isComposing {
                     // The last jamo is going. Commit it and let the host delete it
                     // with its own deleteBackward, instead of cancelling the marked
                     // text with setMarkedText(""). That is what Apple's Korean IME
@@ -275,16 +256,13 @@ public class HangulComposer: @unchecked Sendable {
                     // jamo behind ("요" + ⌫⌫ → "ㅇ"). The end result is the same
                     // everywhere else. Not added to localTextBuffer: the host
                     // removes it right away.
-                    let jamo = CompositionHelpers.normalizeJamoForDisplay(before)
-                    if !jamo.isEmpty {
-                        delegate.insertText(jamo)
-                    }
+                    delegate.insertText(String(before))
                     // The host deletes that jamo, so what ends up before the caret
                     // is whatever preceded the composition — not our own output.
                     delegate.forgetLastPrecomposedSyllable()
                     return false
                 }
-                updateComposition(delegate: delegate)
+                delegate.setMarkedText(engine.composing.map(String.init) ?? "")
                 return true
             }
             if !localTextBuffer.isEmpty { localTextBuffer.removeLast() }
@@ -295,124 +273,29 @@ public class HangulComposer: @unchecked Sendable {
         return nil  // Not a special key
     }
     
-    /// Process a single character through the Hangul engine
-    /// - Parameter composes: whether the character came from a letter-key
-    ///   position. A character from any other key is never handed to the engine,
-    ///   so a layout that puts a letter there (AZERTY "m") cannot produce a jamo.
-    /// - Returns: `true` if the character was processed, `false` if skipped
-    private func processCharacter(_ char: Unicode.Scalar, composes: Bool, delegate: HangulComposerDelegate) -> Bool {
+    /// Type the character of a key that carries no jamo: commit the syllable
+    /// being typed, then insert the character if it is printable ASCII.
+    /// - Returns: `true` if the character was inserted, `false` if skipped
+    private func processCharacter(_ char: Unicode.Scalar, delegate: HangulComposerDelegate) -> Bool {
         let charCode = UInt32(char.value)
-        
+
         // Skip non-printable characters
         if KeyCode.shouldPassThrough(charCode) {
             return false
         }
-        
-        if composes && !context.isEmpty() && breaksOffFromSyllable(Character(char)) {
+
+        if engine.isComposing {
             commitComposition(delegate: delegate)
         }
 
-        // Primary attempt
-        if composes && context.process(Character(char)) {
-            recordKeystroke(Character(char))
-            updateComposition(delegate: delegate)
-            return true
-        }
-        
-        // Failure case - try committing first then retry
-        DebugLogger.log("Process failed")
-        
-        if !context.isEmpty() {
-            commitComposition(delegate: delegate)
-        }
-        
-        // Retry with clean context
-        if composes && context.process(Character(char)) {
-            DebugLogger.log("Retry success")
-            recordKeystroke(Character(char))
-            updateComposition(delegate: delegate)
-            return true
-        }
-        
-        // Still failed - insert printable ASCII directly
         if KeyCode.isPrintableASCII(charCode) {
-            DebugLogger.log("Retry failed, inserting printable char")
             delegate.insertText(String(char))
             appendToBuffer(String(char))
             return true
         }
-        
-        DebugLogger.log("Retry failed, skipping non-printable char")
+
+        DebugLogger.log("Skipping a character that is not printable ASCII")
         return false
-    }
-    
-    /// Remembers a keystroke the engine took, keeping only the ones behind the
-    /// live syllable: the longest recent run that types it again from scratch.
-    /// Keys from before a commit, reset or syllable split never survive this,
-    /// so no other path has to clear `syllableKeys`.
-    private func recordKeystroke(_ key: Character) {
-        syllableKeys.append(key)
-        let preedit = context.getPreeditString()
-        guard !preedit.isEmpty else {
-            syllableKeys = []
-            return
-        }
-        for count in stride(from: min(syllableKeys.count, Self.maxSyllableKeys), through: 1, by: -1) {
-            let run = syllableKeys.suffix(count)
-            if replay(run, into: replayContext) == preedit {
-                syllableKeys = Array(run)
-                return
-            }
-        }
-        syllableKeys = []
-    }
-
-    /// Whether `key` must start a new syllable although libhangul would join it
-    /// to the live one. Its tables hold combinations the standard 두벌식 does not
-    /// have: ㅏ ㅑ ㅓ ㅕ + ㅣ (아 + ㅣ → 애) and a doubled final ㄱ or ㅅ (각 + ㄱ → 갂,
-    /// 갓 + ㅅ → 갔). There, ㅐ ㅒ ㅔ ㅖ ㄲ ㅆ come only from their own keys.
-    private func breaksOffFromSyllable(_ key: Character) -> Bool {
-        guard let last = syllableKeys.last else { return false }
-        // Shift types the same ㅏ ㅑ ㅓ ㅕ ㅣ, so the vowels match either case.
-        // It does not for ㄱ and ㅅ (R and T are ㄲ and ㅆ).
-        switch (last.lowercased(), key.lowercased()) {
-        case ("k", "l"), ("i", "l"), ("j", "l"), ("u", "l"):
-            return true
-        default:
-            break
-        }
-        switch (last, key) {
-        case ("r", "r"), ("t", "t"):
-            // A consonant after the vowel is the final one.
-            return syllableKeys.count >= 3
-        default:
-            return false
-        }
-    }
-
-    /// Undoes the last keystroke of the live syllable.
-    private func removeLastKeystroke() {
-        let preedit = context.getPreeditString()
-        guard !syllableKeys.isEmpty, replay(syllableKeys[...], into: replayContext) == preedit else {
-            // Out of step with the engine; fall back to its jamo-wise backspace.
-            syllableKeys = []
-            _ = context.backspace()
-            return
-        }
-        syllableKeys.removeLast()
-        context.reset()
-        _ = replay(syllableKeys[...], into: context)
-    }
-
-    /// Types `keys` into a reset `engine` and returns the preedit, or `nil` if
-    /// the keys do not make a single syllable.
-    private func replay(_ keys: ArraySlice<Character>, into engine: ThreadSafeHangulInputContext) -> [UCSChar]? {
-        engine.reset()
-        for key in keys where !engine.process(key) {
-            return nil
-        }
-        guard engine.getCommitString().isEmpty else { return nil }
-        return engine.getPreeditString()
     }
 
     /// Handle a keyboard event
@@ -459,7 +342,7 @@ public class HangulComposer: @unchecked Sendable {
             // Text this keystroke commits is precomposed already, and a host that
             // answers from before the commit would describe a document that no
             // longer exists — so the rewrite only runs when nothing was composing.
-            let wasComposing = !context.isEmpty()
+            let wasComposing = engine.isComposing
             if wasComposing {
                 commitComposition(delegate: delegate)
                 delegate.setMarkedText("")
@@ -500,7 +383,7 @@ public class HangulComposer: @unchecked Sendable {
         if !event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
              // Commit any in-progress composition first. Otherwise marked text stays
              // live and the host app ignores or misapplies the shortcut (e.g. Cmd+←).
-             if !context.isEmpty() {
+             if engine.isComposing {
                  commitComposition(delegate: delegate)
                  delegate.setMarkedText("")
              }
@@ -518,7 +401,6 @@ public class HangulComposer: @unchecked Sendable {
         let shifted = event.modifierFlags.contains(.shift)
         latinLayout.observe(keyCode: keyCode, characters: event.characters)
         let letter = QwertyKeyMap.character(for: keyCode, shifted: shifted)
-        let composes = letter != nil
         let positional = letter ?? (latinLayout.displacesPunctuation
             ? QwertyKeyMap.punctuation(for: keyCode, shifted: shifted)
             : nil)
@@ -538,7 +420,7 @@ public class HangulComposer: @unchecked Sendable {
             let firstCharCode = UInt32(firstScalar.value)
             if KeyCode.shouldPassThrough(firstCharCode) {
                 DebugLogger.log("Non-printable key detected, passing to system")
-                if !context.isEmpty() {
+                if engine.isComposing {
                     commitComposition(delegate: delegate)
                     delegate.setMarkedText("")
                 }
@@ -549,73 +431,52 @@ public class HangulComposer: @unchecked Sendable {
             }
         }
         
+        // A letter key types its jamo; a key that carries none types its character.
+        if let key = letter?.first, let step = engine.type(key) {
+            updateComposition(step, delegate: delegate)
+            return true
+        }
+
         var handledAtLeastOnce = false
-        
         for char in inputCharacters.unicodeScalars {
-            if processCharacter(char, composes: composes, delegate: delegate) {
+            if processCharacter(char, delegate: delegate) {
                 handledAtLeastOnce = true
             }
         }
-        
+
         // If we processed anything, we return true to stop system from handling duplicates.
         return handledAtLeastOnce
     }
-    
-    /// Updates the marked text and commits any finalized text
-    ///
-    /// This method retrieves the current preedit (composition in progress) and commit
-    /// strings from libhangul, then updates the delegate accordingly:
-    /// - Committed text is inserted immediately
-    /// - Preedit text replaces the current marked text
-    ///
-    /// - Parameter delegate: The delegate to receive composition updates
-    private func updateComposition(delegate: HangulComposerDelegate) {
-        let preedit = context.getPreeditString()
-        let commit = context.getCommitString()
 
-        // ORDERING INVARIANT (load-bearing — do not reorder):
-        // commit (insertText) MUST happen BEFORE the preedit update (setMarkedText).
-        // This is the macOS equivalent of the Windows Korean IME model — only the
-        // single in-progress syllable is ever "marked", and the previous syllable is
-        // committed the instant libhangul emits it on a syllable boundary. Reordering
-        // (mark-before-commit) reintroduces stale-cursor preedit (cf. kitty #4219) and
-        // breaks the experimental DirectInsertionAdapter, which relies on insertText
-        // arriving first to finalize the live preedit before the new one is rendered.
-        // See Docs/KoreanWindowsInputFeasibility.md (Phase 0/1).
-        if !commit.isEmpty {
-            let finalStr = CompositionHelpers.convertAndNormalize(commit)
-            delegate.insertText(finalStr)
-            appendToBuffer(finalStr)
+    /// Delivers what a key did to the syllable: the syllable it completed, then
+    /// the one being typed.
+    ///
+    /// ORDERING INVARIANT (load-bearing — do not reorder):
+    /// commit (insertText) MUST happen BEFORE the preedit update (setMarkedText).
+    /// This is the macOS equivalent of the Windows Korean IME model — only the
+    /// single in-progress syllable is ever "marked", and the previous syllable is
+    /// committed the instant it is complete, on a syllable boundary. Reordering
+    /// (mark-before-commit) reintroduces stale-cursor preedit (cf. kitty #4219) and
+    /// breaks the experimental DirectInsertionAdapter, which relies on insertText
+    /// arriving first to finalize the live preedit before the new one is rendered.
+    /// See Docs/KoreanWindowsInputFeasibility.md (Phase 0/1).
+    private func updateComposition(_ step: DubeolsikEngine.Step, delegate: HangulComposerDelegate) {
+        if let committed = step.committed {
+            let text = String(committed)
+            delegate.insertText(text)
+            appendToBuffer(text)
         }
-
-        // Update preedit text (the single live syllable).
-        if !preedit.isEmpty {
-            let preeditStr = CompositionHelpers.normalizeJamoForDisplay(preedit)
-            delegate.setMarkedText(preeditStr)
-        } else {
-             delegate.setMarkedText("")
-        }
+        delegate.setMarkedText(step.composing.map(String.init) ?? "")
     }
-    
-    /// Commits the current composition by flushing the libhangul context
-    ///
-    /// Flushes all pending text from the context and inserts it as finalized text.
-    /// The committed string is normalized using precomposed canonical mapping to
-    /// ensure proper Unicode representation.
-    ///
-    /// - Parameter delegate: The delegate to receive the committed text
-    private func commitComposition(delegate: HangulComposerDelegate) {
-        // Flush context
-        let flushed = context.flush()
-        let commitStr = CompositionHelpers.convertToString(flushed)
 
-        if !commitStr.isEmpty {
-            // insertText replaces the marked text automatically
-            let finalStr = CompositionHelpers.convertAndNormalize(flushed)
-            delegate.insertText(finalStr)
-            appendToBuffer(finalStr)
-            DebugLogger.logSensitive("commitComposition inserted", sensitiveContent: "'\(commitStr)'")
-        }
+    /// Commits the syllable being typed, if any: `insertText` replaces the marked
+    /// text with it.
+    private func commitComposition(delegate: HangulComposerDelegate) {
+        guard let syllable = engine.flush() else { return }
+        let text = String(syllable)
+        delegate.insertText(text)
+        appendToBuffer(text)
+        DebugLogger.logSensitive("commitComposition inserted", sensitiveContent: "'\(text)'")
     }
 
     /// Cancels the current composition without committing
@@ -625,24 +486,20 @@ public class HangulComposer: @unchecked Sendable {
     ///
     /// - Parameter delegate: The delegate to receive the cleared state
     private func cancelComposition(delegate: HangulComposerDelegate) {
-        context.reset()
+        engine.reset()
         delegate.setMarkedText("")
         // Do NOT clear localTextBuffer on cancel, as previously committed text is still valid context
     }
     
-    /// Flush any in-progress composition and return its committed NFC string ("" if none).
+    /// Flush any in-progress composition and return its committed string ("" if none).
     ///
     /// Nothing is sent to a client: the caller (`InputSession.finalize`) delivers
     /// the text itself, or — in direct insertion — knows it is already there.
     public func flushCommitString() -> String {
-        guard !context.isEmpty() else { return "" }
-        let flushed = context.flush()
-        let committed = CompositionHelpers.convertAndNormalize(flushed)
-        if let lastChar = committed.last, lastChar.isHangulChar {
-            localTextBuffer = String(lastChar)
-        } else {
-            localTextBuffer = ""
-        }
+        guard let syllable = engine.flush() else { return "" }
+        let committed = String(syllable)
+        // What the engine holds is always Hangul: a syllable or a lone jamo.
+        localTextBuffer = committed
         return committed
     }
     
@@ -658,7 +515,7 @@ public class HangulComposer: @unchecked Sendable {
     /// trigger host-app warning beeps, so this reset intentionally has no delegate.
     public func discardCompositionForPassThrough() {
         previousKeyWasBackspace = false
-        context.reset()
+        engine.reset()
         localTextBuffer = ""
         textConvenience.resetSpaceState()
     }
@@ -755,8 +612,7 @@ public class HangulComposer: @unchecked Sendable {
         // Look up the word ending at the caret. Text comes from OWNED state first
         // (preedit, then localTextBuffer). Reading the host's text is the last
         // resort: in Chromium/Electron it picks up text that wasn't just typed.
-        let preedit = context.getPreeditString()
-        let preeditStr = CompositionHelpers.convertAndNormalize(preedit)
+        let preeditStr = engine.composing.map(String.init) ?? ""
         let hadPreedit = !preeditStr.isEmpty
 
         // The buffer counts only if it was filled in the field that has focus now.
@@ -920,19 +776,5 @@ public class HangulComposer: @unchecked Sendable {
     /// the full coordinate strategy chain live in `CursorRectResolver`.
     public static func isValidCursorRect(_ rect: NSRect) -> Bool {
         CursorRectResolver.isValidCursorRect(rect)
-    }
-}
-
-// MARK: - Character Extension for Hangul detection
-extension Character {
-    var isHangulChar: Bool {
-        guard let scalar = unicodeScalars.first else { return false }
-        // Hangul Syllables: U+AC00 - U+D7A3
-        // Hangul Jamo: U+1100 - U+11FF
-        // Hangul Compatibility Jamo: U+3130 - U+318F
-        let v = scalar.value
-        return (v >= 0xAC00 && v <= 0xD7A3) ||
-               (v >= 0x1100 && v <= 0x11FF) ||
-               (v >= 0x3130 && v <= 0x318F)
     }
 }

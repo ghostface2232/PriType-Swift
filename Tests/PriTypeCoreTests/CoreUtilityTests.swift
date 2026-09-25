@@ -25,53 +25,6 @@ struct CompositionHelpersTests {
         #expect(find("\u{11A8}") == nil, "A final alone")
         #expect(find("😀\u{1100}\u{1161}")! == (2, "가"), "An astral character before the syllable")
     }
-    
-    @Test("Convert empty array returns empty string")
-    func convertEmptyArray() {
-        #expect(CompositionHelpers.convertToString([]) == "")
-    }
-    
-    @Test("Convert single Hangul syllable code point")
-    func convertSingleCodePoint() {
-        #expect(CompositionHelpers.convertToString([0xAC00]) == "가")
-    }
-    
-    @Test("Convert multiple Hangul code points")
-    func convertMultipleCodePoints() {
-        #expect(CompositionHelpers.convertToString([0xD55C, 0xAE00]) == "한글")
-    }
-    
-    @Test("Convert ASCII code points")
-    func convertASCIICodePoints() {
-        #expect(CompositionHelpers.convertToString([0x41, 0x42, 0x43]) == "ABC")
-    }
-    
-    @Test("Invalid surrogate code points are filtered out")
-    func convertInvalidCodePointsFiltered() {
-        #expect(CompositionHelpers.convertToString([0xD800]) == "")
-    }
-    
-    @Test("Normalize empty Jamo array")
-    func normalizeEmptyArray() {
-        #expect(CompositionHelpers.normalizeJamoForDisplay([]) == "")
-    }
-    
-    @Test("Normalize full syllable preserves it")
-    func normalizeSyllable() {
-        #expect(CompositionHelpers.normalizeJamoForDisplay([0xAC00]) == "가")
-    }
-
-    @Test("Initial, medial and final jamo all display as compatibility jamo")
-    func normalizeJamoPositions() {
-        // libhangul's preedit carries positional jamo (U+1100…); the marked text
-        // shows the compatibility forms (U+3131…), whichever slot the jamo is in.
-        #expect(CompositionHelpers.normalizeJamoForDisplay([0x1100]) == "\u{3131}")  // ᄀ → ㄱ
-        #expect(CompositionHelpers.normalizeJamoForDisplay([0x1112]) == "\u{314E}")  // ᄒ → ㅎ
-        #expect(CompositionHelpers.normalizeJamoForDisplay([0x1161]) == "\u{314F}")  // ᅡ → ㅏ
-        #expect(CompositionHelpers.normalizeJamoForDisplay([0x1175]) == "\u{3163}")  // ᅵ → ㅣ
-        #expect(CompositionHelpers.normalizeJamoForDisplay([0x11A8]) == "\u{3131}")  // ᆨ → ㄱ
-        #expect(CompositionHelpers.normalizeJamoForDisplay([0x11C2]) == "\u{314E}")  // ᇂ → ㅎ
-    }
 }
 
 // MARK: - InputMode Tests
@@ -99,7 +52,6 @@ struct PriTypeConfigTests {
     
     @Test("Default values are sensible")
     func defaultValues() {
-        #expect(PriTypeConfig.defaultKeyboardId == "2")
         #expect(PriTypeConfig.finderDesktopThreshold == 50)
         #expect(PriTypeConfig.doubleSpaceThreshold > 0)
         #expect(PriTypeConfig.doubleSpaceThreshold < 1.0)

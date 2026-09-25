@@ -9,9 +9,6 @@ public struct PriTypeConfig: Sendable {
     public static let logPath = NSString(string: "~/Library/Logs/PriType/pritype_debug.log").expandingTildeInPath
     #endif
     
-    /// Keyboard identifier of the only supported layout (두벌식 표준)
-    public static let defaultKeyboardId = "2"
-    
     // MARK: - Finder Detection
     
     /// Finder 데스크톱 감지를 위한 좌표 임계값 (Points)

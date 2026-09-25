@@ -12,7 +12,7 @@
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
-PriType은 Swift와 InputMethodKit으로 만든 macOS용 한글 입력기입니다. 한글 조합 엔진은 [libhangul-swift](https://github.com/Meapri/libhangul-swift)를 사용합니다.
+PriType은 Swift와 InputMethodKit으로 만든 macOS용 한글 입력기입니다. 한글 조합은 표준 두벌식을 직접 구현한 작은 엔진(`DubeolsikEngine`)이 맡습니다.
 
 ## 특징
 

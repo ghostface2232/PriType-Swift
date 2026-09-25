@@ -1,6 +1,5 @@
 import Cocoa
 import InputMethodKit
-import LibHangul
 import Carbon.HIToolbox
 
 /// Thin IMK edge of the input pipeline.
