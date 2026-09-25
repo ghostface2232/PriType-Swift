@@ -337,3 +337,214 @@ struct UpdateInstallerCommandTests {
         #expect(script.hasSuffix("with administrator privileges"))
     }
 }
+
+// MARK: - Authorization Child Tests
+
+@Suite("UpdateInstaller authorization child")
+struct UpdateAuthorizationChildTests {
+    private static let signingKey = Curve25519.Signing.PrivateKey()
+    private static var publicKey: String { signingKey.publicKey.rawRepresentation.base64EncodedString() }
+
+    /// A staging directory as `install` leaves it: the package, its manifest
+    /// and the manifest's signature.
+    private struct Staged {
+        let directory: URL
+        let package: Data
+        var packagePath: String { directory.appendingPathComponent(UpdateInstaller.packageFileName).path }
+        var digest: String { SHA256.hash(data: package).map { String(format: "%02x", $0) }.joined() }
+    }
+
+    private static func staged(
+        version: String = "99.0.0",
+        signedBy key: Curve25519.Signing.PrivateKey = signingKey,
+        describing described: Data? = nil
+    ) throws -> Staged {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auth-staging-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let package = Data((0..<4096).map { _ in UInt8.random(in: 0...255) })
+        let staged = Staged(directory: directory, package: package)
+        try package.write(to: URL(fileURLWithPath: staged.packagePath))
+
+        let facts = described ?? package
+        let fields: [String: Any] = [
+            "version": version,
+            "sha256": SHA256.hash(data: facts).map { String(format: "%02x", $0) }.joined(),
+            "size": facts.count,
+        ]
+        let manifest = try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
+        try manifest.write(to: directory.appendingPathComponent(UpdateInstaller.manifestFileName))
+        try Data(key.signature(for: manifest).base64EncodedString().utf8)
+            .write(to: directory.appendingPathComponent(UpdateInstaller.signatureFileName))
+        return staged
+    }
+
+    /// Runs the child's work against `staged`, recording whether it asked.
+    private static func authorize(
+        _ arguments: [String],
+        running: String = "2.9.0"
+    ) -> (exit: UpdateInstaller.AuthorizationExit, script: String?) {
+        var script: String?
+        let exit = UpdateInstaller.authorize(
+            arguments: arguments, runningVersion: running, channel: .stable, publicKeyBase64: publicKey
+        ) { script = $0; return nil }
+        return (exit, script)
+    }
+
+    private static func child(_ body: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auth-child-\(UUID().uuidString).sh")
+        try "#!/bin/sh\n\(body)\n".write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        return url
+    }
+
+    private enum Outcome: Equatable {
+        case started
+        case failed(UpdateInstaller.Failure)
+    }
+
+    private static let stagingURL = URL(fileURLWithPath: "/Users/someone/Library/Caches/Updates/99.0.0", isDirectory: true)
+
+    private static func outcome(of body: String) async throws -> Outcome {
+        let exe = try child(body)
+        defer { try? FileManager.default.removeItem(at: exe) }
+        do {
+            try await UpdateInstaller.authorizeInChild(executable: exe, staging: stagingURL)
+            return .started
+        } catch let failure as UpdateInstaller.Failure {
+            return .failed(failure)
+        }
+    }
+
+    // MARK: Parent
+
+    @Test("An ordinary launch is not treated as the authorization child")
+    func ordinaryLaunchContinues() {
+        // Would call exit() if it matched; returning is the assertion.
+        UpdateInstaller.runAuthorizationIfRequested(arguments: ["PriTypeV2"])
+        UpdateInstaller.runAuthorizationIfRequested(arguments: ["PriTypeV2", "--abc-layout-status"])
+    }
+
+    @Test("The child is handed the staging directory and nothing else")
+    func childArguments() async throws {
+        let record = FileManager.default.temporaryDirectory.appendingPathComponent("auth-args-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: record) }
+        #expect(try await Self.outcome(of: "printf '%s\\n' \"$@\" > '\(record.path)'") == .started)
+        let lines = try String(contentsOf: record, encoding: .utf8).split(separator: "\n").map(String.init)
+        #expect(lines == [UpdateInstaller.authorizationArgument, Self.stagingURL.path])
+    }
+
+    @Test("Exit statuses map to started, cancelled and failed")
+    func exitStatuses() async throws {
+        #expect(try await Self.outcome(of: "exit 0") == .started)
+        #expect(try await Self.outcome(of: "exit 3") == .failed(.authorizationCancelled))
+        #expect(try await Self.outcome(of: "echo 'The administrator user name or password was incorrect.' >&2; exit 1")
+                == .failed(.authorizationFailed("The administrator user name or password was incorrect.")))
+        #expect(try await Self.outcome(of: "exit 64") == .failed(.authorizationFailed("exit status 64")))
+        // Killed, e.g. by the package's `preinstall`, is not an authorization.
+        #expect(try await Self.outcome(of: "kill -TERM $$") == .failed(.authorizationFailed("killed by signal 15")))
+        #expect(try await Self.outcome(of: "kill -QUIT $$") == .failed(.authorizationFailed("killed by signal 3")))
+    }
+
+    @Test("A child that cannot start is a failure, not a hang")
+    func missingExecutable() async {
+        await #expect(throws: UpdateInstaller.Failure.self) {
+            try await UpdateInstaller.authorizeInChild(
+                executable: URL(fileURLWithPath: "/nonexistent/PriTypeV2"), staging: Self.stagingURL)
+        }
+    }
+
+    @MainActor
+    @Test("The main thread keeps running while the dialog waits for an answer")
+    func mainThreadStaysFree() async throws {
+        let exe = try Self.child("sleep 0.5; exit 0")
+        defer { try? FileManager.default.removeItem(at: exe) }
+        var ticks = 0
+        let ticker = Task { @MainActor in
+            while !Task.isCancelled {
+                ticks += 1
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+        }
+        try await UpdateInstaller.authorizeInChild(executable: exe, staging: Self.stagingURL)
+        ticker.cancel()
+        #expect(ticks >= 10, "main ran \(ticks) times during a 0.5 s wait")
+    }
+
+    // MARK: Child
+
+    @Test("A signed, newer release is installed by the digest the child computed")
+    func genuineReleaseIsOffered() throws {
+        let staged = try Self.staged()
+        defer { try? FileManager.default.removeItem(at: staged.directory) }
+        let (exit, script) = Self.authorize([staged.directory.path])
+        #expect(exit == .started)
+        #expect(script == UpdateInstaller.authorizationScript(
+            command: UpdateInstaller.installCommand(packagePath: staged.packagePath, digest: staged.digest),
+            prompt: L10n.update.authorizationPrompt))
+    }
+
+    @Test("A package no release key signed is never offered to root")
+    func unsignedPackageIsRefused() throws {
+        // What a stranger running PriType could stage: their own package with a
+        // manifest that matches it, signed by a key of their own.
+        let staged = try Self.staged(signedBy: Curve25519.Signing.PrivateKey())
+        defer { try? FileManager.default.removeItem(at: staged.directory) }
+        let (exit, script) = Self.authorize([staged.directory.path])
+        #expect(exit == .failed)
+        #expect(script == nil)
+    }
+
+    @Test("A package other than the one the manifest describes is refused")
+    func swappedPackageIsRefused() throws {
+        let staged = try Self.staged(describing: Data("the genuine release".utf8))
+        defer { try? FileManager.default.removeItem(at: staged.directory) }
+        let (exit, script) = Self.authorize([staged.directory.path])
+        #expect(exit == .failed)
+        #expect(script == nil)
+    }
+
+    @Test("A genuine release no newer than the running one is refused")
+    func downgradeIsRefused() throws {
+        for version in ["2.9.0", "2.8.0"] {
+            let staged = try Self.staged(version: version)
+            defer { try? FileManager.default.removeItem(at: staged.directory) }
+            let (exit, script) = Self.authorize([staged.directory.path], running: "2.9.0")
+            #expect(exit == .failed, Comment(rawValue: version))
+            #expect(script == nil)
+        }
+    }
+
+    @Test("A directory without the release's manifest is refused")
+    func missingManifestIsRefused() throws {
+        let staged = try Self.staged()
+        defer { try? FileManager.default.removeItem(at: staged.directory) }
+        try FileManager.default.removeItem(at: staged.directory.appendingPathComponent(UpdateInstaller.manifestFileName))
+        let (exit, script) = Self.authorize([staged.directory.path])
+        #expect(exit == .failed)
+        #expect(script == nil)
+    }
+
+    @Test("The child reports a closed dialog and other errors apart")
+    func childErrors() throws {
+        let staged = try Self.staged()
+        defer { try? FileManager.default.removeItem(at: staged.directory) }
+        func exit(_ error: NSDictionary) -> UpdateInstaller.AuthorizationExit {
+            UpdateInstaller.authorize(
+                arguments: [staged.directory.path], runningVersion: "2.9.0", channel: .stable,
+                publicKeyBase64: Self.publicKey) { _ in error }
+        }
+        #expect(exit([NSAppleScript.errorNumber: -128, NSAppleScript.errorMessage: "User canceled."]) == .cancelled)
+        #expect(exit([NSAppleScript.errorNumber: -60005, NSAppleScript.errorMessage: "wrong password"]) == .failed)
+    }
+
+    @Test("The child asks for nothing unless given one absolute directory")
+    func childRejectsOtherArguments() {
+        for arguments in [[], ["relative/staging"], ["/tmp/a", "/tmp/b"], ["/tmp/x.pkg", String(repeating: "ab", count: 32)]] {
+            let (exit, script) = Self.authorize(arguments)
+            #expect(exit == .usage, Comment(rawValue: "\(arguments)"))
+            #expect(script == nil)
+        }
+    }
+}
