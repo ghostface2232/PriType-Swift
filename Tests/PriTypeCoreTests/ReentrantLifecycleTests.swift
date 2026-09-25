@@ -202,8 +202,11 @@ struct ReentrantLifecycleTests {
     func churnInsideAnalysisDirectInsertion() {
         let (harness, field) = start(bundleID: "com.nousresearch.hermes")
         defer { harness.finish() }
+        // The analysis asks for the attributes only under a Secure Input warning.
+        field.client.reportsGlobalSecureInput = true
         harness.churnFocus(of: field, during: .validAttributes)
         harness.type("gks")
+        #expect(field.client.attributeQueries > 0, "the churn ran inside the analysis")
         #expect(field.client.text == "한", "not ㅎ한 from a second session's adapter")
         harness.type("rmf")
         #expect(field.client.text == "한글")
@@ -213,8 +216,10 @@ struct ReentrantLifecycleTests {
     func churnInsideAnalysisMarkedText() {
         let (harness, field) = start()
         defer { harness.finish() }
+        field.client.reportsGlobalSecureInput = true
         harness.churnFocus(of: field, during: .validAttributes)
         harness.type("gksrmf")
+        #expect(field.client.attributeQueries > 0, "the churn ran inside the analysis")
         #expect(field.client.text == "한글")
         #expect(field.client.markedText == "글")
     }

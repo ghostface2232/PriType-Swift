@@ -310,7 +310,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `InputSession` | 세션 하나의 클라이언트, 컨텍스트, 전달 어댑터, 중복 키 상태, 포커스 상실 감시. 조합 종료 단일 경로 |
 | `TextDelivery` | 전달 방식 결정과 어댑터 3종, 조합 밑줄 속성 |
 | `DirectInsertionPlanner` | 직접 삽입의 교체 범위 계산과 검증, 짧은 간격의 중복 키 판정 |
-| `ClientContextDetector` | 클라이언트 분석(`ClientContext`). 활성화 때는 클라이언트 IPC를 거의 하지 않는 가벼운 분석, 첫 키에서 전체 분석. 앱별 호환 정책(`ClientCompatibilityPolicy`) |
+| `ClientContextDetector` | 클라이언트 분석(`ClientContext`). 활성화 때는 번들 ID만 묻는 가벼운 분석, 포커스 변경·클릭 뒤 첫 키에서 다시 분석한다. 첫 키의 분석은 답을 쓰는 질문만 한다: 번들 ID는 세션이 이미 알면 다시 묻지 않고, `validAttributesForMarkedText`는 Finder이거나 전역 Secure Input 경고가 켜져 있을 때만 묻는다(그 밖에는 쓰이지 않는다). 묻지 않은 문맥에서 나중에 경고가 켜지면(입력칸 이동 없이 켜지는 보안 키보드 입력 등) 그 키에서 한 번 다시 분석한다(`capabilityProbed`). 그래서 보통의 첫 키는 호스트에 추가 동기 호출을 하지 않는다. 앱별 호환 정책(`ClientCompatibilityPolicy`) |
 | `SecureInputPolicy` | Secure Input 통과 판정 |
 | `HangulComposer` | 한글 조합, 특수 키, 로컬 입력 버퍼, 한자 검색과 교체. `inputMode`가 한/영 상태의 유일한 원본이다 |
 | `HangulComposerTypes` | `HangulComposerDelegate` 프로토콜, `InputMode` |

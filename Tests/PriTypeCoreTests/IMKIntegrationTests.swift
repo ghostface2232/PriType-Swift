@@ -617,6 +617,65 @@ struct IMKIntegrationTests {
 
     // MARK: Focus
 
+    @Test("The first key after a focus change or a click asks the host nothing it does not use")
+    func firstKeyAsksNothingUnused() {
+        let (harness, first) = start()
+        defer { harness.finish() }
+        harness.type("gk")
+        let second = harness.makeField()
+        func firstKey(in field: IMKHarness.Field, after event: () -> Void) {
+            event()
+            field.client.resetQueryCounts()
+            harness.type("r")
+            #expect(field.client.attributeQueries == 0)
+            #expect(field.client.bundleQueries == 0, "the session already knows its app")
+        }
+        firstKey(in: second) { harness.focus(second) }
+        firstKey(in: second) { harness.click() }
+        firstKey(in: first) { harness.focus(first) }
+    }
+
+    @Test("Under a Secure Input warning the first key still asks what the policy needs")
+    func firstKeyUnderSecureInputAsks() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type("gk")
+        field.client.reportsGlobalSecureInput = true
+        harness.click()
+        field.client.resetQueryCounts()
+        harness.type("r")
+        #expect(field.client.attributeQueries == 1)
+        #expect(field.client.text == "하ㄱ")
+    }
+
+    @Test("A Secure Input warning that comes up mid-session gets the attributes asked, and fails closed")
+    func secureInputLaterAsks() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.advertisesMarkedTextAttributes = false
+        harness.type("r")
+        #expect(field.client.markedText == "ㄱ")
+        // The warning comes up with no focus change (e.g. Secure Keyboard Entry).
+        field.client.reportsGlobalSecureInput = true
+        field.client.resetQueryCounts()
+        #expect(!harness.type("k").contains(true), "passed through, as SecureInputPolicy decides")
+        #expect(field.client.attributeQueries == 1)
+        harness.type("k")
+        #expect(field.client.attributeQueries == 1, "asked once, then the answer is kept")
+    }
+
+    @Test("Finder's first key still asks for the attributes, which tell its desktop from a field")
+    func finderFirstKeyAsks() {
+        PriTypeInputController.resetSystemModeTracking()
+        let harness = IMKHarness()
+        defer { harness.finish() }
+        let finder = harness.makeField(bundleID: "com.apple.finder")
+        harness.focus(finder)
+        finder.client.resetQueryCounts()
+        harness.type("r")
+        #expect(finder.client.attributeQueries == 1)
+    }
+
     @Test("Moving focus commits into the field being left, never the new one")
     func focusSwitchCommitsToOldField() {
         let (harness, first) = start()
