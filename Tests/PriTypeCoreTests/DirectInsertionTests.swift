@@ -567,7 +567,8 @@ struct LegacyClientFocusRecoveryTests {
         #expect(session.context.bundleId == client.bundleIdentifier())
         for _ in 0..<3 {
             session.markContextStale()
-            session.refreshContext(ClientContextDetector.analyze(client: client))
+            // Read only under a Secure Input warning: the one time it is used.
+            session.refreshContext(ClientContextDetector.analyze(client: client, secureInputActive: true))
             #expect(!session.context.hasTextInputCapability)
             #expect(!SecureInputPolicy.shouldPassThrough(SecureInputSignals(
                 bundleId: session.context.bundleId,

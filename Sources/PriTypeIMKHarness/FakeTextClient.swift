@@ -152,6 +152,9 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
     /// count is the IPC cost a host pays for a keystroke.
     public private(set) var selectionQueries = 0
     public private(set) var substringQueries = 0
+    /// Context questions: `validAttributesForMarkedText` and `bundleIdentifier`.
+    public private(set) var attributeQueries = 0
+    public private(set) var bundleQueries = 0
 
     /// What a query sees: the live state, or the frozen snapshot when lagging.
     private var reported: (text: NSString, selection: NSRange) {
@@ -161,6 +164,8 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
     public func resetQueryCounts() {
         selectionQueries = 0
         substringQueries = 0
+        attributeQueries = 0
+        bundleQueries = 0
     }
 
     /// Select `range`, as dragging over the text does.
@@ -274,6 +279,7 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
     public var caretRect = NSRect(x: 400, y: 400, width: 1, height: 18)
 
     public func validAttributesForMarkedText() -> [Any]! {
+        attributeQueries += 1
         reenter(.validAttributes)
         return [NSAttributedString.Key.underlineStyle.rawValue,
          NSAttributedString.Key.underlineColor.rawValue,
@@ -286,7 +292,10 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
 
     public func selectMode(_ modeIdentifier: String!) {}
     public func supportsUnicode() -> Bool { true }
-    public func bundleIdentifier() -> String! { bundleID }
+    public func bundleIdentifier() -> String! {
+        bundleQueries += 1
+        return bundleID
+    }
     public func windowLevel() -> CGWindowLevel { CGWindowLevelForKey(.normalWindow) }
     public func supportsProperty(_ property: TSMDocumentPropertyTag) -> Bool { false }
     public func uniqueClientIdentifierString() -> String! { "\(bundleID).\(ObjectIdentifier(self).hashValue)" }

@@ -35,7 +35,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             IOKitManager.requestAccessibilityPermission()
         }
         KeyMonitors.start()
-        
+
+        // A process's first TIS listing costs 30–60 ms, every later one ~20 µs.
+        // The first one would otherwise land on the first key after the first
+        // switch to English, which installs the Roman layout synchronously
+        // (`syncRomanKeyboardLayout`). Pay it now, while nothing is typed.
+        // What the process sees does not get staler for it: HIToolbox keeps the
+        // list it first read for the life of the process, from whenever that
+        // first read happens (see `ABCLayoutStatusProbe`).
+        DispatchQueue.main.async {
+            _ = InputSourceManager.shared.enabledKeyboardInputSourceIDs()
+        }
+
         // Pre-load Hanja dictionary in background for instant lookup
         if ConfigurationManager.shared.hanjaEnabled {
             HanjaManager.shared.preload()

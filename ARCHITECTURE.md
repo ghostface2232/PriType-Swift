@@ -45,8 +45,9 @@ PriTypeV2.app
 5. 키 모니터를 시작한다(`KeyMonitors.start`, 설정 창의 권한 버튼도 같은 함수를 부른다).
    - 손쉬운 사용 권한이 없으면 시스템 요청 창을 띄우고, 허용될 때까지 1초마다 확인한 뒤 다시 시작한다.
    - `RightCommandSuppressor`(CGEventTap)를 시작한다. 실패하거나 나중에 탭이 반복해서 꺼지면 `IOKitManager`로 넘긴다. IOKit 경로는 입력 모니터링 권한을 확인하고, 없으면 요청한 뒤 허용될 때까지 2초마다 확인한다.
-6. 한자 변환이 켜져 있으면 백그라운드에서 한자 사전을 매핑한다.
-7. 업데이트 알림을 준비하고, 자동 확인이 켜져 있으면 백그라운드에서 새 버전을 확인한다.
+6. 메인 큐가 한가할 때 TIS 입력 소스 목록을 한 번 읽어 둔다. 프로세스의 첫 목록 조회는 30~60ms(이후 약 20μs)라, 그대로 두면 첫 영문 전환 직후의 첫 키가 이 비용을 치른다.
+7. 한자 변환이 켜져 있으면 백그라운드에서 한자 사전을 매핑한다.
+8. 업데이트 알림을 준비하고, 자동 확인이 켜져 있으면 백그라운드에서 새 버전을 확인한다.
 
 ## 키 입력 경로
 
@@ -310,7 +311,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `InputSession` | 세션 하나의 클라이언트, 컨텍스트, 전달 어댑터, 중복 키 상태, 포커스 상실 감시. 조합 종료 단일 경로 |
 | `TextDelivery` | 전달 방식 결정과 어댑터 3종, 조합 밑줄 속성 |
 | `DirectInsertionPlanner` | 직접 삽입의 교체 범위 계산과 검증, 짧은 간격의 중복 키 판정 |
-| `ClientContextDetector` | 클라이언트 분석(`ClientContext`). 활성화 때는 클라이언트 IPC를 거의 하지 않는 가벼운 분석, 첫 키에서 전체 분석. 앱별 호환 정책(`ClientCompatibilityPolicy`) |
+| `ClientContextDetector` | 클라이언트 분석(`ClientContext`). 활성화 때는 번들 ID만 묻는 가벼운 분석, 포커스 변경·클릭 뒤 첫 키에서 다시 분석한다. 첫 키의 분석은 답을 쓰는 질문만 한다: 번들 ID는 세션이 이미 알면 다시 묻지 않고, `validAttributesForMarkedText`는 Finder이거나 전역 Secure Input 경고가 켜져 있을 때만 묻는다(그 밖에는 쓰이지 않는다). 그래서 보통의 첫 키는 호스트에 추가 동기 호출을 하지 않는다. 앱별 호환 정책(`ClientCompatibilityPolicy`) |
 | `SecureInputPolicy` | Secure Input 통과 판정 |
 | `HangulComposer` | 한글 조합, 특수 키, 로컬 입력 버퍼, 한자 검색과 교체. `inputMode`가 한/영 상태의 유일한 원본이다 |
 | `HangulComposerTypes` | `HangulComposerDelegate` 프로토콜, `InputMode` |

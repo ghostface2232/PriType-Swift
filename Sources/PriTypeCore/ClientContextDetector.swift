@@ -222,23 +222,40 @@ public struct ClientContextDetector: Sendable {
 
     /// Analyzes an IMKTextInput client and returns its context
     ///
-    /// - Parameter client: The text input client to analyze
+    /// Every question here is a synchronous call into the host, paid by the
+    /// first key after each focus change or click, so only the ones whose
+    /// answer is used are asked:
+    /// - the bundle id, unless the caller already has it — a client object
+    ///   belongs to one app for its whole life;
+    /// - `validAttributesForMarkedText`, only for Finder (desktop detection) or
+    ///   while a global Secure Input warning is up: that is the only time
+    ///   `SecureInputPolicy` reads the answer. It is also where Chromium and
+    ///   Electron have been seen to nest IMK activation calls. Otherwise the
+    ///   field is taken as able to show marked text, which is what the answer
+    ///   would only ever have been used to doubt.
+    ///
+    /// - Parameters:
+    ///   - client: The text input client to analyze
+    ///   - knownBundleId: the client's bundle id, if the caller already has it
+    ///   - secureInputActive: whether a global Secure Input warning is up now
     /// - Returns: A `ClientContext` containing the analysis results
-    public static func analyze(client: IMKTextInput) -> ClientContext {
-        // 1. FAST PATH: Check active application Bundle ID
-        // Using NSWorkspace is generally faster and safer than generic IPC calls on the client
-        let frontmostApp = NSWorkspace.shared.frontmostApplication
-        var bundleId = client.bundleIdentifier() ?? ""
-        if bundleId.isEmpty, let app = frontmostApp {
-            bundleId = app.bundleIdentifier ?? ""
+    public static func analyze(client: IMKTextInput, knownBundleId: String? = nil,
+                               secureInputActive: Bool = IsSecureEventInputEnabled()) -> ClientContext {
+        var bundleId = knownBundleId ?? ""
+        if bundleId.isEmpty {
+            bundleId = client.bundleIdentifier() ?? ""
         }
-        
+        if bundleId.isEmpty {
+            bundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+        }
+
         let isFinder = (bundleId == "com.apple.finder")
-        
-        // 2. Capabilities Check (Required for both Finder and standard apps)
-        // Check text input capability via validAttributesForMarkedText
-        let validAttrs = client.validAttributesForMarkedText() ?? []
-        let hasTextInputCapability = !validAttrs.isEmpty
+
+        var hasTextInputCapability = true
+        if isFinder || secureInputActive {
+            let validAttrs = client.validAttributesForMarkedText() ?? []
+            hasTextInputCapability = !validAttrs.isEmpty
+        }
         
         // 3. SECURE INPUT CHECK is no longer cached here.
         // It is checked dynamically in PriTypeInputController.handle() for better accuracy.

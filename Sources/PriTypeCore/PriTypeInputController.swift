@@ -171,14 +171,18 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     private func ensureSession(for client: IMKTextInput) -> InputSession {
         if let session, session.matches(client) {
             if session.contextNeedsRefresh || session.context.isLightweight {
-                session.refreshContext(ClientContextDetector.analyze(client: client))
+                session.refreshContext(ClientContextDetector.analyze(
+                    client: client,
+                    knownBundleId: session.context.bundleId,
+                    secureInputActive: Self.globalSecureInput(for: client)))
                 session.armFocusLossFinalizer()
             }
             return session
         }
 
         DebugLogger.log("PriTypeInputController: client changed or no session, analyzing (Slow Path)")
-        let newSession = replaceSession(client: client, context: ClientContextDetector.analyze(client: client))
+        let newSession = replaceSession(client: client, context: ClientContextDetector.analyze(
+            client: client, secureInputActive: Self.globalSecureInput(for: client)))
         syncRomanKeyboardLayout(for: client)
         return newSession
     }
@@ -728,14 +732,18 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         return handled
     }
 
+    /// Whether a global Secure Input warning is up. A client that answers this
+    /// itself does; everyone else gets macOS's answer. See
+    /// `GlobalSecureInputReporting` for why the seam is on the client rather
+    /// than on a global.
+    private static func globalSecureInput(for client: IMKTextInput) -> Bool {
+        (client as? GlobalSecureInputReporting)?.reportsGlobalSecureInput ?? IsSecureEventInputEnabled()
+    }
+
     private func shouldPassThroughSecureInput(client: IMKTextInput, context: ClientContext) -> Bool {
         let bundleId = context.bundleId
         let isSystemSecureClient = SecureInputPolicy.isSystemSecureClient(bundleId)
-        // A client that answers this itself does; everyone else gets macOS's
-        // answer. See `GlobalSecureInputReporting` for why the seam is on the
-        // client rather than on a global.
-        let hasGlobalSecureInput = (client as? GlobalSecureInputReporting)?.reportsGlobalSecureInput
-            ?? IsSecureEventInputEnabled()
+        let hasGlobalSecureInput = Self.globalSecureInput(for: client)
 
         // selectedRange is synchronous client IPC. Probe only when it can change the
         // decision: a global secure-input warning. System
