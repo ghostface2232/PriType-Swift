@@ -54,6 +54,15 @@ public final class InputModeCoordinator: @unchecked Sendable {
     /// to each other: Hanja then toggle must look up in the mode it was pressed in.
     private let pendingActions = OSAllocatedUnfairLock<[PendingAction]>(initialState: [])
 
+    /// The press time of the newest key the key monitor let through to the app.
+    ///
+    /// The event tap sees every keystroke before the app does, on the same thread
+    /// and in the same order as the toggle and Hanja keys. So when an action is
+    /// recorded, this is the key typed just before it — the one that may still be
+    /// on its way to IMK — and `handle()` saying it has arrived is what the action
+    /// waits for, instead of guessing from a fixed delay alone.
+    private let lastPassedKeyTime = OSAllocatedUnfairLock<TimeInterval>(initialState: -.infinity)
+
     /// The app has exactly one of these — `shared`. Tests make their own, because
     /// the ordering this class implements is about timers and threads, and a test
     /// that has to suspend to observe a timer cannot also share its queue with
@@ -74,6 +83,12 @@ public final class InputModeCoordinator: @unchecked Sendable {
         request(.hanja, eventTime: eventTime)
     }
 
+    /// Record a keystroke the key monitor passed on to the app. Callable from any
+    /// thread; the event tap calls it for every key it does not consume.
+    public func notePassedKey(at eventTime: TimeInterval) {
+        lastPassedKeyTime.withLock { $0 = max($0, eventTime) }
+    }
+
     private func request(_ action: KeyAction, eventTime: TimeInterval?) {
         // A press time is what makes an action orderable against keystrokes, and a
         // key monitor always has one. Which thread it calls from does not decide
@@ -84,11 +99,16 @@ public final class InputModeCoordinator: @unchecked Sendable {
             pendingActions.withLock {
                 $0.append(PendingAction(action: action, eventTime: eventTime))
             }
+            // Read on the monitor's thread, where keys and actions are seen in the
+            // order they were pressed.
+            let passedKey = lastPassedKeyTime.withLock { $0 }
+            let awaitedKey = passedKey < eventTime && eventTime - passedKey < Self.inFlightKeyLimit
+                ? passedKey : nil
             if Thread.isMainThread {
-                drainAfterKeyMonitorHop(pressedAt: eventTime)
+                drainAfterKeyMonitorHop(pressedAt: eventTime, awaiting: awaitedKey)
             } else {
                 DispatchQueue.main.async {
-                    self.drainAfterKeyMonitorHop(pressedAt: eventTime)
+                    self.drainAfterKeyMonitorHop(pressedAt: eventTime, awaiting: awaitedKey)
                 }
             }
             return
@@ -128,7 +148,33 @@ public final class InputModeCoordinator: @unchecked Sendable {
     ///
     /// The bound is what keeps a host that never forwards a key to IMK (a shortcut
     /// field, a non-text view) from leaving the toggle pending forever.
+    ///
+    /// Thirty milliseconds covers an ordinary delivery, not a slow one: a host busy
+    /// for longer delivers the earlier key after the action has run, in the new
+    /// mode. When the key monitor saw that key go by (`notePassedKey`), the wait
+    /// therefore goes on, one grace at a time, until `handle()` has it — up to
+    /// `inFlightKeyLimit`.
     static let inFlightKeyGrace: TimeInterval = 0.03
+
+    /// How long after its press a key the monitor passed on is still waited for.
+    /// Past this it is taken never to reach IMK: it went to a view with no input
+    /// method, or a menu took it as a shortcut. Also how far back a passed key
+    /// counts as typed just before an action at all.
+    ///
+    /// A key the host swallows before IMK while a field is active (an ⌃/⌥ menu
+    /// equivalent, a function key, Escape in Terminal with nothing marked) costs
+    /// an action pressed right after it this much latency — and only when no
+    /// key follows, since the next key that does arrive runs the action first.
+    static let inFlightKeyLimit: TimeInterval = 0.25
+
+    /// The clock `inFlightKeyLimit` is measured on: `NSEvent.timestamp`'s.
+    /// Replaced by tests.
+    var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+
+    /// Whether a key can reach `handle()` at all: IMK has a PriType field active.
+    /// With none, keys go to another input source or to no text field, and waiting
+    /// for one only delays the action. Replaced by tests.
+    var keysCanReachHandle: () -> Bool = { PriTypeInputController.sharedController != nil }
 
     /// Hands the deferred drain over instead of scheduling it (tests only).
     ///
@@ -154,7 +200,11 @@ public final class InputModeCoordinator: @unchecked Sendable {
     /// timer armed, and that timer firing would apply an action pressed after it
     /// with none of the wait this exists to give — the reordering it was meant to
     /// prevent, arrived at from the other side.
-    private func drainAfterKeyMonitorHop(pressedAt eventTime: TimeInterval) {
+    ///
+    /// - Parameter awaitedKey: the press time of the key the monitor passed on
+    ///   just before this action, if it did. Until `handle()` has seen it, or it
+    ///   is `inFlightKeyLimit` old, the wait is renewed.
+    private func drainAfterKeyMonitorHop(pressedAt eventTime: TimeInterval, awaiting awaitedKey: TimeInterval?) {
         // `runPendingActions(before:)` runs what was pressed strictly earlier, and
         // this action is the one being waited on, so the bound includes it.
         let throughThisAction = eventTime.nextUp
@@ -162,14 +212,33 @@ public final class InputModeCoordinator: @unchecked Sendable {
             runPendingActions(before: throughThisAction)
             return
         }
+        deferDrain(through: throughThisAction, awaiting: awaitedKey)
+    }
+
+    private func deferDrain(through bound: TimeInterval, awaiting awaitedKey: TimeInterval?) {
         let drain: @Sendable () -> Void = { [self] in
-            runPendingActions(before: throughThisAction)
+            if let awaitedKey, keyIsStillInFlight(awaitedKey), hasPendingAction(before: bound) {
+                deferDrain(through: bound, awaiting: awaitedKey)
+                return
+            }
+            runPendingActions(before: bound)
         }
         guard let deferDrainOverride else {
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.inFlightKeyGrace) { drain() }
             return
         }
         deferDrainOverride(drain)
+    }
+
+    /// Whether the key pressed at `keyTime` may still reach `handle()`.
+    private func keyIsStillInFlight(_ keyTime: TimeInterval) -> Bool {
+        lastHandledKeyTime < keyTime
+            && now() < keyTime + Self.inFlightKeyLimit
+            && keysCanReachHandle()
+    }
+
+    private func hasPendingAction(before bound: TimeInterval) -> Bool {
+        pendingActions.withLock { $0.first.map { $0.eventTime < bound } ?? false }
     }
 
     /// Run key actions recorded off the main thread, in order. Main thread only.

@@ -3,9 +3,10 @@ import Foundation
 /// Loads and searches the Hanja dictionary.
 ///
 /// The dictionary is the compiled `hanja.dat` (see `HanjaDictionary`), memory-mapped
-/// rather than parsed, so loading is a file open and a scan of its offset table.
-/// A search never waits for a load running on another thread: it returns no
-/// entries and the next key press finds the dictionary ready.
+/// rather than parsed, so loading is a file open and a scan of its offset table
+/// (about 1.4 ms). A search that finds another thread loading it waits for that
+/// load, briefly: the Hanja key pressed right after launch would otherwise find no
+/// candidates at all, and a key press gives no second chance.
 public final class HanjaManager: @unchecked Sendable {
 
     public static let shared = HanjaManager()
@@ -17,8 +18,8 @@ public final class HanjaManager: @unchecked Sendable {
         case failed
     }
 
-    /// Guards `state`, `wanted` and `unloads`; waited on only by `loadIfNeeded`,
-    /// never by a search.
+    /// Guards `state`, `wanted` and `unloads`; waited on by `loadIfNeeded`, and by
+    /// a search for at most `loadWaitLimit`.
     private let condition = NSCondition()
     private var state = LoadState.unloaded
     /// Whether Hanja conversion is on, as last said by `preload()` / `unload()`.
@@ -56,14 +57,16 @@ public final class HanjaManager: @unchecked Sendable {
     /// however late the background work runs.
     public func preload() {
         condition.withLock { wanted = true }
-        DispatchQueue.global(qos: .utility).async {
+        // A key press on main may wait for this load, and waiting on a condition
+        // lends it no priority. It takes about 1.4 ms either way.
+        DispatchQueue.global(qos: .userInitiated).async {
             _ = self.dictionary(onlyIfWanted: true)
         }
     }
 
     /// Map the dictionary, or wait for the thread that is mapping it. Blocks;
     /// for tests and tools. The app preloads with `preload()`, and key presses
-    /// go through `search`, which never waits.
+    /// go through `search`, which waits at most `loadWaitLimit`.
     public func loadIfNeeded() {
         guard dictionary() == nil else { return }
         condition.withLock {
@@ -90,12 +93,19 @@ public final class HanjaManager: @unchecked Sendable {
         DebugLogger.log("HanjaManager: Unloaded")
     }
 
-    /// The mapped dictionary. Loads it on this thread when nobody has; returns nil
-    /// without waiting when another thread is loading it. `onlyIfWanted` is the
-    /// preload: it does not start a load once Hanja has been turned off, checked
-    /// in the same critical section as the claim so an `unload()` cannot slip in
-    /// between.
-    private func dictionary(onlyIfWanted: Bool = false) -> HanjaDictionary? {
+    /// How long a search waits for a load running on another thread. Far longer
+    /// than a load takes, and short enough that a load stuck on a slow disk
+    /// costs one late key press, not a frozen one. Tests set their own, so that
+    /// what they check does not depend on how loaded the machine is.
+    var loadWaitLimit: TimeInterval = 0.2
+
+    /// The mapped dictionary. Loads it on this thread when nobody has. When
+    /// another thread is loading it, waits up to `waitLimit` for that load
+    /// (nil: not at all) and returns nil if it has not finished. `onlyIfWanted`
+    /// is the preload: it does not start a load once Hanja has been turned off,
+    /// checked in the same critical section as the claim so an `unload()` cannot
+    /// slip in between.
+    private func dictionary(onlyIfWanted: Bool = false, waitLimit: TimeInterval? = nil) -> HanjaDictionary? {
         let claim: UInt64? = condition.withLock {
             guard case .unloaded = state, wanted || !onlyIfWanted else { return nil }
             state = .loading
@@ -113,6 +123,12 @@ public final class HanjaManager: @unchecked Sendable {
             }
         }
         return condition.withLock {
+            if let waitLimit {
+                let deadline = Date(timeIntervalSinceNow: waitLimit)
+                while case .loading = state {
+                    guard condition.wait(until: deadline) else { break }
+                }
+            }
             if case .loaded(let dictionary) = state { return dictionary }
             return nil
         }
@@ -162,8 +178,12 @@ public final class HanjaManager: @unchecked Sendable {
     /// Search for Hanja entries matching the given Hangul key (exact match)
     /// - Parameter key: Hangul text to search for (e.g., "가") or a jamo consonant (e.g., "ㅁ")
     /// - Returns: Array of Hanja entries, empty if no results or the dictionary
-    ///   is still loading on another thread
+    ///   is still loading on another thread after `loadWaitLimit`
     public func search(key: String) -> [HanjaEntry] {
+        search(key: key, waitingForLoad: true)
+    }
+
+    private func search(key: String, waitingForLoad: Bool) -> [HanjaEntry] {
         // Jamo consonant → search symbol table instead of hanja dictionary
         // The composer's preedit is Compatibility Jamo (U+3131~), as are our
         // JSON keys. Choseong Jamo (U+1100~) is converted, for other callers.
@@ -181,7 +201,7 @@ public final class HanjaManager: @unchecked Sendable {
             return jamoLock.withLock { jamoSymbols[normalizedKey] ?? [] }
         }
 
-        guard let dictionary = dictionary() else {
+        guard let dictionary = dictionary(waitLimit: waitingForLoad ? loadWaitLimit : nil) else {
             DebugLogger.log("HanjaManager: dictionary not ready, no candidates")
             return []
         }
@@ -197,11 +217,16 @@ public final class HanjaManager: @unchecked Sendable {
     /// Each entry's `hangul` is the text it replaces.
     ///
     /// "대한민국" gives 大韓民國, then 民國, then 國 and the other readings of 국.
+    ///
+    /// Only the first search waits for a load in progress: one that has not
+    /// finished by then will not for the shorter endings either.
     public func searchWord(endingWith text: String) -> [HanjaEntry] {
         var word = Substring(Self.trailingHangulWord(in: text))
         var results: [HanjaEntry] = []
+        var waitingForLoad = true
         while !word.isEmpty {
-            results += search(key: String(word))
+            results += search(key: String(word), waitingForLoad: waitingForLoad)
+            waitingForLoad = false
             word = word.dropFirst()
         }
         return results

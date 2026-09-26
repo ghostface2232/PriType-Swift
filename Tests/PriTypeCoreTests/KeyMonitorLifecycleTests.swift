@@ -369,6 +369,86 @@ struct PendingToggleTests {
         #expect(coordinator.pendingActionCount == 0, "nothing is stuck")
     }
 
+    /// A coordinator whose waits are fired by hand, with a key that can reach
+    /// `handle()` and a clock the test sets.
+    private func handDrivenCoordinator(now: TimeInterval) -> (InputModeCoordinator, Box) {
+        let coordinator = InputModeCoordinator()
+        let box = Box()
+        coordinator.performOverride = { box.performed.append($0) }
+        coordinator.deferDrainOverride = { box.waits.append($0) }
+        coordinator.now = { box.now ?? now }
+        coordinator.keysCanReachHandle = { box.fieldIsActive }
+        return (coordinator, box)
+    }
+
+    private final class Box: @unchecked Sendable {
+        var performed: [InputModeCoordinator.KeyAction] = []
+        var waits: [() -> Void] = []
+        var now: TimeInterval?
+        var fieldIsActive = true
+    }
+
+    @Test("A toggle waits past the grace for a key the monitor passed on just before it")
+    func toggleWaitsForAPassedKey() async {
+        let base = ProcessInfo.processInfo.systemUptime + 10
+        let (coordinator, box) = handDrivenCoordinator(now: base + 0.1)
+        // Key A is typed and passed on to the app; the toggle follows 10 ms later,
+        // while A is still on its way to IMK.
+        coordinator.notePassedKey(at: base)
+        requestOffMain(at: [base + 0.01], on: coordinator)
+        await mainQueueTurn()
+        #expect(box.waits.count == 1)
+
+        // The grace ends with A still missing: the wait is renewed, not spent.
+        box.waits[0]()
+        #expect(box.performed.isEmpty, "A must not be handled in the new mode")
+        #expect(box.waits.count == 2)
+
+        // A reaches handle() and is handled in the old mode; the toggle runs next.
+        coordinator.applyPendingKeyActions(before: base)
+        #expect(box.performed.isEmpty)
+        box.waits[1]()
+        #expect(box.performed == [.toggle(.customKey)])
+        #expect(box.waits.count == 2, "nothing left waiting")
+    }
+
+    @Test("A passed key that never reaches IMK holds the toggle only up to the limit")
+    func passedKeyWaitIsBounded() async {
+        let base = ProcessInfo.processInfo.systemUptime + 10
+        let (coordinator, box) = handDrivenCoordinator(now: base + 0.1)
+        coordinator.notePassedKey(at: base)
+        requestOffMain(at: [base + 0.01], on: coordinator)
+        await mainQueueTurn()
+        box.waits[0]()
+        #expect(box.performed.isEmpty)
+        box.now = base + InputModeCoordinator.inFlightKeyLimit
+        box.waits[1]()
+        #expect(box.performed == [.toggle(.customKey)])
+    }
+
+    @Test("With no field active, a passed key is not waited for")
+    func noFieldNoWait() async {
+        let base = ProcessInfo.processInfo.systemUptime + 10
+        let (coordinator, box) = handDrivenCoordinator(now: base + 0.1)
+        box.fieldIsActive = false
+        coordinator.notePassedKey(at: base)
+        requestOffMain(at: [base + 0.01], on: coordinator)
+        await mainQueueTurn()
+        box.waits[0]()
+        #expect(box.performed == [.toggle(.customKey)])
+    }
+
+    @Test("A key passed on long before the toggle is not waited for")
+    func stalePassedKeyIsIgnored() async {
+        let base = ProcessInfo.processInfo.systemUptime + 10
+        let (coordinator, box) = handDrivenCoordinator(now: base + 1)
+        coordinator.notePassedKey(at: base)
+        requestOffMain(at: [base + 0.9], on: coordinator)
+        await mainQueueTurn()
+        box.waits[0]()
+        #expect(box.performed == [.toggle(.customKey)])
+    }
+
     @Test("A toggle no keystroke follows does not stay pending")
     func pendingToggleDrainsWithoutAKeystroke() async {
         let coordinator = InputModeCoordinator.shared

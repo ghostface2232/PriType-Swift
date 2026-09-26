@@ -448,6 +448,25 @@ struct IMKIntegrationTests {
         #expect(afterTyping { $0.toggle() }.first == .insert("각"), "한/영 toggle")
     }
 
+    @Test("A key that commits and passes on sends the commit alone, with no clear after it")
+    func commitIsNotFollowedByAClear() {
+        func calls(_ press: (IMKHarness) -> Void) -> [FakeTextClient.Call] {
+            let (harness, field) = start()
+            defer { harness.finish() }
+            harness.type("rk")
+            field.client.clearLog()
+            press(harness)
+            #expect(field.client.markedText == nil)
+            #expect(field.client.text.hasPrefix("가"))
+            return field.client.calls.filter { if case .host = $0 { false } else { true } }
+        }
+        // insertText with NSNotFound replaces the marked text and ends the
+        // composition; a setMarkedText("") after it is a wasted round trip.
+        #expect(calls { _ = $0.press(.return) } == [.insert("가")], "return")
+        #expect(calls { _ = $0.keyDown(keyCode: 9, characters: "v", modifiers: .command) } == [.insert("가")], "⌘V")
+        #expect(calls { _ = $0.keyDown(keyCode: 115, characters: "\u{1}") } == [.insert("가")], "home")
+    }
+
     @Test("Escape drops the composition and is consumed")
     func escapeCancels() {
         let (harness, field) = start()
@@ -480,6 +499,17 @@ struct IMKIntegrationTests {
         #expect(field.client.text == "한")
         harness.type("k")
         #expect(field.client.text == "한ㅏ")
+    }
+
+    @Test("Finalizing a composition does not ask the host where its marked text is")
+    func finalizeAsksNothing() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type("gks")
+        field.client.resetQueryCounts()
+        harness.click()
+        #expect(field.client.text == "한")
+        #expect(field.client.markedRangeQueries == 0, "insertText with NSNotFound finds it itself")
     }
 
     @Test("The same keyDown delivered twice is processed once")
@@ -757,6 +787,25 @@ struct IMKIntegrationTests {
         field.client.placeCaret(at: 1)
         harness.candidates.choose(1)
         #expect(field.client.text == "요 한", "요 is not the 한 the candidate was looked up from")
+        #expect(!harness.candidates.isVisible)
+    }
+
+    @Test("A candidate chosen in a host that will not show its text replaces nothing")
+    func hanjaHostHidesText() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "요"))
+        harness.press(.space)
+        harness.type(Dubeolsik.keys(for: "한"))
+        harness.pressHanjaKey()
+        #expect(harness.candidates.entries.first?.hanja == "韓")
+        // The caret moved without the input method hearing of it, and the host
+        // reports the caret but not the text before it: nothing proves that the
+        // unit before the caret is still the 한 the candidate was looked up from.
+        field.client.placeCaret(at: 1)
+        field.client.hidesText = true
+        harness.candidates.choose(1)
+        #expect(field.client.text == "요 한", "요 must not be overwritten blindly")
         #expect(!harness.candidates.isVisible)
     }
 

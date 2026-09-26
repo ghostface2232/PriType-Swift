@@ -1,3 +1,4 @@
+import Carbon
 import Cocoa
 import Testing
 @testable import PriTypeCore
@@ -120,6 +121,23 @@ struct KeyPositionTests {
         #expect(!umlaut, "the layout is still taken as QWERTY-lettered")
     }
 
+    @Test("A layout known to displace punctuation gets it from the US keys before any letter key is typed")
+    func probedLayoutAppliesFromTheFirstKey() {
+        let (composer, delegate) = makeComposer()
+        composer.assumeLatinLayout(lettersTypingOtherwise: [46])   // AZERTY: "," on M
+        type([(";", 43, []), ("&", 18, [])], into: composer, delegate)
+        #expect(delegate.insertedTexts == [",", "1"])
+    }
+
+    @Test("A letter typed on a probed key still overrules the probe")
+    func observationOverrulesProbe() {
+        let (composer, delegate) = makeComposer()
+        composer.assumeLatinLayout(lettersTypingOtherwise: [46])
+        type([("m", 46, [])], into: composer, delegate)             // the client types QWERTY
+        type([(";", 43, [])], into: composer, delegate)
+        #expect(delegate.insertedTexts.last == ";")
+    }
+
     @Test("The verdict follows the layout: letters on the letter keys again restore it")
     func layoutVerdictFollowsChange() {
         let (composer, delegate) = makeComposer()
@@ -129,5 +147,35 @@ struct KeyPositionTests {
         type([("m", 46, [])], into: composer, delegate)       // the client now types QWERTY
         type([(";", 43, [])], into: composer, delegate)
         #expect(delegate.insertedTexts.last == ";", "the layout's own character again")
+    }
+}
+
+/// What the installed layouts put on the letter keys, read before typing.
+/// TIS asserts that it is called on the main thread.
+@Suite("Latin layout probe")
+@MainActor
+struct LatinLayoutProbeTests {
+    private func lettersTypingOtherwise(_ id: String) throws -> Set<UInt16> {
+        let filter = [kTISPropertyInputSourceID as String: id] as CFDictionary
+        let sources = TISCreateInputSourceList(filter, true)?.takeRetainedValue() as? [TISInputSource]
+        let source = try #require(sources?.first, "\(id) is installed with macOS")
+        let data = try #require(LatinLayoutProbe.layoutData(of: source))
+        return LatinLayoutProbe.lettersTypingOtherwise(in: data)
+    }
+
+    @Test("QWERTY-lettered layouts keep letters on every letter key")
+    func qwertyLettered() throws {
+        #expect(try lettersTypingOtherwise("com.apple.keylayout.ABC").isEmpty)
+        #expect(try lettersTypingOtherwise("com.apple.keylayout.German").isEmpty)
+    }
+
+    @Test("AZERTY puts the comma on M")
+    func azerty() throws {
+        #expect(try lettersTypingOtherwise("com.apple.keylayout.French") == [46])
+    }
+
+    @Test("Dvorak puts ' , . ; on Q W E Z")
+    func dvorak() throws {
+        #expect(try lettersTypingOtherwise("com.apple.keylayout.Dvorak") == [12, 13, 14, 6])
     }
 }

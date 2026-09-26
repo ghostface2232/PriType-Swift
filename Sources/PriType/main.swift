@@ -35,6 +35,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             IOKitManager.requestAccessibilityPermission()
         }
         KeyMonitors.start()
+
+        // Know from the start whether the Latin layout put punctuation on the
+        // letter keys, not only once one of them has been typed.
+        LatinLayoutWatcher.start()
         
         // Pre-load Hanja dictionary in background for instant lookup
         if ConfigurationManager.shared.hanjaEnabled {

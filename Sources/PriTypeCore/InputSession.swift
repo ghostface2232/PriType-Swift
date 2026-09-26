@@ -366,15 +366,19 @@ final class InputSession: @unchecked Sendable {
         client: IMKTextInput,
         reason: CompositionFinalizeReason
     ) {
-        let markedRange = client.markedRange()
         let committed = composer.flushCommitString()
-        DebugLogger.log("InputSession: finalize[\(reason.rawValue)] client=\(client.bundleIdentifier() ?? "?") marked=(\(markedRange.location),\(markedRange.length)) len=\(committed.count)")
+        DebugLogger.log("InputSession: finalize[\(reason.rawValue)] client=\(client.bundleIdentifier() ?? "?") len=\(committed.count)")
         if !committed.isEmpty {
             // Canonical finalize: NSNotFound asks the host to convert its OWN marked
             // text to committed (composition-end), rather than an explicit marked-range
             // edit. (Done at app-deactivate-observer timing, the host still accepts it.)
+            // The host finds its marked text itself, so it is not asked where it is.
             client.insertText(committed, replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
-        } else if markedRange.location != NSNotFound, markedRange.length > 0 {
+            return
+        }
+        // Nothing to commit, yet called: clear whatever the host still marks.
+        let markedRange = client.markedRange()
+        if markedRange.location != NSNotFound, markedRange.length > 0 {
             client.insertText("", replacementRange: markedRange)
         }
     }
