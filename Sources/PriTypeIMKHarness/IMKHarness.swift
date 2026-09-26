@@ -297,9 +297,9 @@ public final class IMKHarness {
     }
 
     /// macOS selected a PriType mode (Caps Lock, the input menu, or the echo of
-    /// a toggle report).
-    public func systemSelects(_ mode: InputMode) {
-        guard let field = focused else { preconditionFailure("No focused field") }
+    /// a toggle report), told to `target`'s controller or else the focused one's.
+    public func systemSelects(_ mode: InputMode, on target: Field? = nil) {
+        guard let field = target ?? focused else { preconditionFailure("No focused field") }
         let id = mode == .english ? "com.pritype.inputmethod.v2.english" : "com.pritype.inputmethod.v2"
         field.controller.setValue(id, forTag: Int(kTextServiceInputModePropertyTag), client: field.client)
     }
@@ -330,6 +330,7 @@ public final class IMKHarness {
         composer.candidatePresenter = HanjaCandidateWindow.shared
         composer.frontmostBundleID = HangulComposer.systemFrontmostBundleID
         runDeferredDeactivations()
+        PriTypeInputController.commitCarriedComposition()
         PriTypeInputController.focusOwnerPolicy = .shared
         PriTypeInputController.now = { ProcessInfo.processInfo.systemUptime }
     }

@@ -158,7 +158,6 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
                 // mode would leave an older pending (e.g. English) still resolvable,
                 // so a late-activating stale controller could re-apply it.
                 if composer.inputMode != mode {
-                    Self.commitCarriedComposition()
                     session?.finalize(reason: .systemModeSwitch)
                 }
                 composer.setInputMode(mode)
@@ -203,9 +202,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// old client. `context` is evaluated after the old composition is committed,
     /// so the old client's commit never waits on the new client's analysis IPC.
     private func replaceSession(client: IMKTextInput, context: @autoclosure () -> ClientContext) -> InputSession {
-        if Self.carriedComposition == nil {
-            session?.finalize(reason: .deactivateServer)
-        }
+        session?.finalize(reason: .deactivateServer)
         session?.disarmFocusLossFinalizer()
         let newSession = InputSession(client: client, context: context(), composer: composer)
         session = newSession
@@ -235,10 +232,13 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// When this controller last took the engine over, or started a new session.
     private var servingSince: TimeInterval = -.infinity
 
-    /// A composition whose session IMK retired within `churnWindow`, and when,
-    /// waiting for the session that takes over (`continueCarriedComposition(in:)`).
+    /// A syllable whose session IMK retired within `churnWindow`: the session it
+    /// was typed in, the syllable itself, and when. It is held outside the shared
+    /// engine, so nothing that ends another session's composition meanwhile can
+    /// commit it there (`continueCarriedComposition(in:byKey:)`).
     /// - Warning: Access from main thread only.
-    nonisolated(unsafe) private static var carriedComposition: (session: InputSession, since: TimeInterval)?
+    nonisolated(unsafe) private static var carriedComposition:
+        (session: InputSession, syllable: DubeolsikEngine, since: TimeInterval)?
 
     /// This controller is losing the engine: commit its syllable, or carry it
     /// over if IMK is retiring the session too soon for a person to have left it.
@@ -261,36 +261,50 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// Hold `session`'s syllable for the session that takes over. If none does,
     /// it is committed where it was typed once the wait for a reactivation is up.
     private static func carry(_ session: InputSession) {
-        // Already carried: the syllable is still that session's, never shown here.
-        guard carriedComposition == nil else { return }
         let since = now()
-        carriedComposition = (session, since)
+        carriedComposition = (session, sharedComposer.setAsideComposition(), since)
         scheduleDeferredDeactivation {
             guard carriedComposition?.since == since else { return }
             commitCarriedComposition()
         }
     }
 
-    /// Commit a carried syllable into the client it was typed in, as always.
-    private static func commitCarriedComposition() {
+    /// Commit a carried syllable into the client it was typed in, as always. The
+    /// IMK harness also calls it when a run ends: runs can interleave, and a wait
+    /// one of them scheduled may have been handed to another.
+    public static func commitCarriedComposition() {
         guard let carried = carriedComposition else { return }
         carriedComposition = nil
+        sharedComposer.resumeComposition(carried.syllable)
         carried.session.finalize(reason: .deactivateServer)
     }
 
-    /// `session` has taken over. A carried syllable continues here if it is the
-    /// same app's and the handover is part of the same churn, marked again since
-    /// the host showing it may not have been this field. Anything else commits it
-    /// where it was typed, as always.
-    private func continueCarriedComposition(in session: InputSession) {
+    /// `session` has taken over, by an activation or by a key (`byKey`). A carried
+    /// syllable continues here if it is the same app's, marked again since the
+    /// host showing it may not have been this field. A key typed into another app
+    /// commits it where it was typed, as always; so does the wait running out
+    /// (`carry(_:)`), which also bounds how late a session may take it over.
+    ///
+    /// Another app merely activating settles nothing: on the way to the new app's
+    /// field IMK can pass through the app just left (KakaoTalk → TextEdit
+    /// reactivates KakaoTalk in between), and the key after it can come later
+    /// than `churnWindow`.
+    private func continueCarriedComposition(in session: InputSession, byKey: Bool) {
         guard let carried = Self.carriedComposition else { return }
-        guard carried.session.context.bundleId == session.context.bundleId,
-              Self.now() - carried.since < Self.churnWindow else {
+        if carried.session.context.bundleId == session.context.bundleId {
+            Self.carriedComposition = nil
+            composer.resumeComposition(carried.syllable)
+            // The mode changed while it was carried (a toggle, or macOS selecting
+            // English before this activation): it ends as that boundary ends a
+            // syllable, committed — here, where the text can land.
+            if composer.inputMode == .korean {
+                session.adapter.setMarkedText(composer.preeditForDisplay)
+            } else {
+                session.finalize(reason: .systemModeSwitch)
+            }
+        } else if byKey {
             Self.commitCarriedComposition()
-            return
         }
-        Self.carriedComposition = nil
-        session.adapter.setMarkedText(composer.preeditForDisplay)
     }
 
     /// Route a composition-ending event to the single finalize path. Prefers the
@@ -446,7 +460,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
                 )
                 DebugLogger.log("Activated for client: \(newSession.context.bundleId) (Lightweight Context)")
             }
-            session.map(continueCarriedComposition)
+            session.map { continueCarriedComposition(in: $0, byKey: false) }
         } else {
             // Fallback if sender is not IMKTextInput (rare). Keep the old session's
             // adapter alive for async Hanja callbacks, but stop trusting its context
@@ -774,7 +788,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         let session = Signposts.interval(Signposts.keystroke, Signposts.Stage.session, id: signpostID, recording: recording) {
             ensureSession(for: client)
         }
-        continueCarriedComposition(in: session)
+        continueCarriedComposition(in: session, byKey: true)
         // A key for this client says it has focus, even before (or without) the
         // activation that would have said so: some hosts deliver keys first.
         Self.focusOwnerPolicy.focusDidMove(to: session.context.bundleId, owner: ObjectIdentifier(self))
