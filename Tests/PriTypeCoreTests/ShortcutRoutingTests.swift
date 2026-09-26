@@ -46,7 +46,7 @@ struct ShortcutRoutingTests {
         let tap = RightCommandSuppressor()
         let passed = ShortcutActions()
         tap.onToggle = { _ in }
-        tap.onKeyPassed = { time in passed.record("\(time)") }
+        tap.onKeyPassed = { keyCode, time in passed.record("\(keyCode)@\(time)") }
         let toggle = KeyBinding(keyCode: 105, modifiers: 0, displayName: "F13")
         let hanja = KeyBinding(keyCode: 61, modifiers: 0, displayName: "Right Option")
         func send(_ keyCode: CGKeyCode, flags: CGEventFlags, at nanoseconds: CGEventTimestamp) throws {
@@ -60,7 +60,7 @@ struct ShortcutRoutingTests {
         try send(8, flags: .maskCommand, at: 2_000_000_000)       // ⌘C: a menu's
         try send(105, flags: [], at: 3_000_000_000)               // the toggle: consumed
         try send(1, flags: .maskShift, at: 4_000_000_000)         // S: typed
-        #expect(passed.snapshot == ["1.0", "4.0"])
+        #expect(passed.snapshot == ["0@1.0", "1@4.0"])
     }
 
     @Test("Holding an ordinary toggle key fires once and stays suppressed")

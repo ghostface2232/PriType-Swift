@@ -58,7 +58,7 @@ public final class RightCommandSuppressor: Sendable {
         var onToggle: (@Sendable (_ eventTime: TimeInterval) -> Void)?
         var onHanjaLookup: (@Sendable (_ eventTime: TimeInterval) -> Void)?
         /// Called on the event-tap thread for a keystroke passed on to the app.
-        var onKeyPassed: (@Sendable (_ eventTime: TimeInterval) -> Void)?
+        var onKeyPassed: (@Sendable (_ keyCode: UInt16, _ eventTime: TimeInterval) -> Void)?
         /// Delivered on the main queue.
         var onTapFailed: (@Sendable () -> Void)?
         /// Delivered on the main queue.
@@ -114,14 +114,15 @@ public final class RightCommandSuppressor: Sendable {
         set { state.withLock { $0.onHanjaLookup = newValue } }
     }
 
-    /// Callback for every keystroke the tap lets through to the app, with its
-    /// time. Called on the event-tap thread, so it must be thread-safe and must not
-    /// block. `InputModeCoordinator.notePassedKey` is both: it lets a toggle wait
-    /// for the key typed just before it to reach IMK.
+    /// Callback for every keystroke the tap lets through to the app, with its key
+    /// code and time. Called on the event-tap thread, so it must be thread-safe and
+    /// must not block. `InputModeCoordinator.notePassedKey` is both: it lets a
+    /// toggle wait for the key typed just before it to reach IMK, and lets
+    /// `handle()` learn when the key it was handed was pressed.
     ///
     /// Keys carrying ⌘ are left out. A menu takes those as shortcuts before any
     /// input method sees them, so waiting for one only delays the toggle.
-    public var onKeyPassed: (@Sendable (_ eventTime: TimeInterval) -> Void)? {
+    public var onKeyPassed: (@Sendable (_ keyCode: UInt16, _ eventTime: TimeInterval) -> Void)? {
         get { state.withLock { $0.onKeyPassed } }
         set { state.withLock { $0.onKeyPassed = newValue } }
     }
@@ -572,7 +573,7 @@ public final class RightCommandSuppressor: Sendable {
     /// Tell the owner a keystroke is on its way to the app (see `onKeyPassed`).
     private func notePassedKey(_ state: State, _ event: CGEvent) {
         guard !event.flags.contains(.maskCommand) else { return }
-        state.onKeyPassed?(Self.eventTime(of: event))
+        state.onKeyPassed?(UInt16(event.getIntegerValueField(.keyboardEventKeycode)), Self.eventTime(of: event))
     }
     
     // MARK: - Helpers

@@ -139,6 +139,8 @@ keyDown ──► PriTypeInputController.handle(event, client)
 
 탭 스레드는 전환키와 한자키를 누른 순간 키 시각과 함께 한 대기열에 기록하고 메인 큐로 넘긴다. 키 입력은 앱 → IMK → `handle()`로 따로 도착하므로 둘의 도착 순서는 보장되지 않는다. 그래서 `handle()`은 조합 전에 자기 키보다 먼저 눌린 동작만 실행한다. 전환 직후 친 키는 새 모드로, 한자키 직후 친 후보 선택 키는 후보창으로 가고, 전환 직전에 친 키는 이전 모드에 남는다. 전환키와 한자키도 서로 순서를 지킨다.
 
+키의 시각은 탭이 본 누른 시각이다. IMK가 `handle()`에 주는 이벤트의 시각은 앱이 키를 넘긴 시각이라 누른 시각보다 늦다(평소 2~5ms, 앱이 바쁘면 수십 ms). 그 시각으로 비교하면 글자 직후 누른 전환키가 그 글자를 앞지른다. 그래서 탭은 앱으로 넘긴 키를 키코드와 함께 기록하고, `handle()`은 같은 키코드의 가장 오래된 기록에서 누른 시각을 꺼낸다(`pressTime(ofKeyCode:deliveredAt:)`). 기록이 없는 키(IOKit 대체 경로)는 IMK의 시각을 쓴다.
+
 ### 전환 처리 (`PriTypeInputController.performPriTypeModeTransition`)
 
 1. 조합을 확정한다(`finalize(.modeTransition)`).

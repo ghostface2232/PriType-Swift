@@ -78,6 +78,25 @@ struct ReviewFixRegressionTests {
         #expect(field.client.text == "ㄱ", "It was pressed in Korean mode")
     }
 
+    @Test("A key the host hands over after a toggle keeps the mode it was pressed in")
+    func keyDeliveredLateKeepsItsPressTime() async {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        // R is pressed and seen by the key monitor; the toggle follows. The host
+        // hands R to IMK only after that, stamped with the time it did so.
+        let pressed = harness.clock
+        InputModeCoordinator.shared.notePassedKey(keyCode: 15, at: pressed)
+        harness.toggleFromKeyMonitor()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        let delivered = harness.makeEvent(keyCode: 15, characters: "r")
+        #expect(delivered.timestamp > pressed)
+        let handled = field.controller.handle(delivered, client: field.client)
+        if !handled { field.client.performHostAction(for: delivered) }
+        #expect(field.client.text == "ㄱ", "It was pressed in Korean mode")
+    }
+
     // MARK: 3 — The double-space substitution edits the space it meant to edit
 
     @Test("A space typed after the caret moved back does not eat the character before it")

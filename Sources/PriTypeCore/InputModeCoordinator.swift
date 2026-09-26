@@ -63,6 +63,10 @@ public final class InputModeCoordinator: @unchecked Sendable {
     /// waits for, instead of guessing from a fixed delay alone.
     private let lastPassedKeyTime = OSAllocatedUnfairLock<TimeInterval>(initialState: -.infinity)
 
+    /// Keys the key monitor passed on that have not reached `handle()` yet, oldest
+    /// first, with the time each was pressed (see `pressTime(ofKeyCode:deliveredAt:)`).
+    private let passedKeys = OSAllocatedUnfairLock<[(keyCode: UInt16, time: TimeInterval)]>(initialState: [])
+
     /// The app has exactly one of these — `shared`. Tests make their own, because
     /// the ordering this class implements is about timers and threads, and a test
     /// that has to suspend to observe a timer cannot also share its queue with
@@ -85,8 +89,37 @@ public final class InputModeCoordinator: @unchecked Sendable {
 
     /// Record a keystroke the key monitor passed on to the app. Callable from any
     /// thread; the event tap calls it for every key it does not consume.
-    public func notePassedKey(at eventTime: TimeInterval) {
+    public func notePassedKey(keyCode: UInt16, at eventTime: TimeInterval) {
         lastPassedKeyTime.withLock { $0 = max($0, eventTime) }
+        passedKeys.withLock { keys in
+            // A key the app kept from IMK (a menu took it, no field was active)
+            // never comes back for its entry.
+            keys.removeAll { eventTime - $0.time > Self.inFlightKeyLimit }
+            keys.append((keyCode, eventTime))
+        }
+    }
+
+    /// When the key `handle()` was just handed was pressed.
+    ///
+    /// IMK's event carries the time the host passed it on, not the time of the
+    /// press the key monitor saw: 2–5 ms later at rest, tens of milliseconds when
+    /// the host is busy. Ordered by that time, a toggle pressed in between counts
+    /// as earlier than the key and takes it into the new mode. Keys reach IMK in
+    /// the order the monitor passed them, so this key is the oldest recorded one
+    /// with its key code; any older entries went somewhere IMK never saw. A key
+    /// the monitor did not record (the IOKit fallback records none) keeps IMK's
+    /// time.
+    public func pressTime(ofKeyCode keyCode: UInt16, deliveredAt timestamp: TimeInterval) -> TimeInterval {
+        passedKeys.withLock { keys in
+            // Nothing is recorded any more once the monitor changes hands.
+            keys.removeAll { timestamp - $0.time > Self.inFlightKeyLimit }
+            guard let index = keys.firstIndex(where: { $0.keyCode == keyCode && $0.time <= timestamp }) else {
+                return timestamp
+            }
+            let time = keys[index].time
+            keys.removeFirst(index + 1)
+            return time
+        }
     }
 
     private func request(_ action: KeyAction, eventTime: TimeInterval?) {

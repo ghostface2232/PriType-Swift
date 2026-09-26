@@ -684,7 +684,9 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // the new mode or in the candidate window — but only actions pressed before
         // this key: running a later one would reinterpret a key typed earlier.
         Signposts.interval(Signposts.keystroke, Signposts.Stage.pendingActions, id: signpostID, recording: recording) {
-            InputModeCoordinator.shared.applyPendingKeyActions(before: event.timestamp)
+            let coordinator = InputModeCoordinator.shared
+            coordinator.applyPendingKeyActions(
+                before: coordinator.pressTime(ofKeyCode: event.keyCode, deliveredAt: event.timestamp))
         }
 
         // 2. Duplicate-keyDown suppression. Some hosts (observed: KakaoTalk) deliver
