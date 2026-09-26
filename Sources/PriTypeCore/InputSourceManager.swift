@@ -1,5 +1,6 @@
 import Foundation
 import Carbon
+import os
 
 // MARK: - InputSourceManager
 
@@ -14,8 +15,23 @@ public final class InputSourceManager: @unchecked Sendable {
     
     /// Shared instance
     public static let shared = InputSourceManager()
-    
-    private init() {}
+
+    /// The Roman layout English mode overrides clients with, resolved once per
+    /// change of the enabled list (see `enabledRomanKeyboardLayoutID()`).
+    private let romanLayout: OSAllocatedUnfairLock<RomanLayoutResolution>
+    /// macOS announces every change to the enabled input sources, delivered even
+    /// while PriType is inactive (see `DistributedNotificationObserver`).
+    private let enabledSourcesObserver: DistributedNotificationObserver
+
+    private init() {
+        let romanLayout = OSAllocatedUnfairLock(initialState: RomanLayoutResolution())
+        self.romanLayout = romanLayout
+        enabledSourcesObserver = DistributedNotificationObserver(
+            name: kTISNotifyEnabledKeyboardInputSourcesChanged as String
+        ) {
+            romanLayout.withLock { $0.invalidate() }
+        }
+    }
     
     // MARK: - Constants
     
@@ -117,6 +133,18 @@ public final class InputSourceManager: @unchecked Sendable {
         return ids
     }
 
+    /// The enabled ABC or US layout to override a client with in English mode.
+    ///
+    /// Every switch to English asks, and listing the enabled input sources is a
+    /// round of TIS calls for an answer that changes only when the user edits the
+    /// list. So the answer is kept until macOS announces such an edit
+    /// (`kTISNotifyEnabledKeyboardInputSourcesChanged`). A list TIS cannot give is
+    /// not kept: the next switch asks again.
+    /// - Warning: Main thread only, like every TIS call.
+    public func enabledRomanKeyboardLayoutID() -> String? {
+        romanLayout.withLockUnchecked { $0.layoutID(resolving: enabledKeyboardInputSourceIDs) }
+    }
+
     /// Never resurrect a disabled ABC/US layout merely to override a client.
     static func enabledRomanKeyboardLayoutID(in enabledIDs: [String]) -> String? {
         ["com.apple.keylayout.ABC", "com.apple.keylayout.US"].first { enabledIDs.contains($0) }
@@ -171,6 +199,7 @@ public final class InputSourceManager: @unchecked Sendable {
             return .failed(reason: "HIToolbox defaults unavailable")
         }
         let result = Self.disableABCKeyboardLayout(in: defaults)
+        romanLayout.withLock { $0.invalidate() }
         if result == .removed || result == .alreadyAbsent {
             CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
             // A retry can find clean preferences while TIS still has ABC enabled.
@@ -230,5 +259,25 @@ public final class InputSourceManager: @unchecked Sendable {
     static func isABCDisabled(in enabledIDs: [String]?) -> Bool {
         guard let enabledIDs else { return false }
         return !enabledIDs.contains(abcInputSourceID)
+    }
+}
+
+// MARK: - RomanLayoutResolution
+
+/// A resolved Roman override layout, kept until the enabled list changes.
+struct RomanLayoutResolution {
+    /// `nil`: not resolved. `.some(nil)`: resolved, and neither ABC nor US is enabled.
+    private var resolved: String??
+
+    mutating func layoutID(resolving enabledIDs: () -> [String]?) -> String? {
+        if let resolved { return resolved }
+        guard let ids = enabledIDs() else { return nil }
+        let layoutID = InputSourceManager.enabledRomanKeyboardLayoutID(in: ids)
+        resolved = .some(layoutID)
+        return layoutID
+    }
+
+    mutating func invalidate() {
+        resolved = nil
     }
 }

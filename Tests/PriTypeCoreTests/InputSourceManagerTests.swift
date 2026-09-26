@@ -13,6 +13,44 @@ struct RomanOverridePolicyTests {
     }
 }
 
+@Suite("Roman override layout resolution")
+struct RomanLayoutResolutionTests {
+    private final class Lister {
+        var calls = 0
+        var answer: [String]? = ["com.apple.keylayout.ABC"]
+        func list() -> [String]? { calls += 1; return answer }
+    }
+
+    @Test("The enabled list is read once, then again only after it changes")
+    func resolvedOncePerChange() {
+        var resolution = RomanLayoutResolution()
+        let lister = Lister()
+        #expect(resolution.layoutID(resolving: lister.list) == "com.apple.keylayout.ABC")
+        #expect(resolution.layoutID(resolving: lister.list) == "com.apple.keylayout.ABC")
+        #expect(lister.calls == 1, "a switch to English asks TIS nothing new")
+
+        lister.answer = ["com.apple.keylayout.US"]
+        resolution.invalidate()
+        #expect(resolution.layoutID(resolving: lister.list) == "com.apple.keylayout.US")
+        #expect(lister.calls == 2)
+    }
+
+    @Test("No Roman layout is an answer too; an unreadable list is not")
+    func absenceIsKeptFailureIsNot() {
+        var resolution = RomanLayoutResolution()
+        let lister = Lister()
+        lister.answer = nil
+        #expect(resolution.layoutID(resolving: lister.list) == nil)
+        #expect(resolution.layoutID(resolving: lister.list) == nil)
+        #expect(lister.calls == 2, "TIS could not say: ask again next time")
+
+        lister.answer = []
+        #expect(resolution.layoutID(resolving: lister.list) == nil)
+        #expect(resolution.layoutID(resolving: lister.list) == nil)
+        #expect(lister.calls == 3, "neither ABC nor US is enabled: that holds until the list changes")
+    }
+}
+
 // MARK: - Cleanup Atomicity / Verification Tests
 
 @Suite("Disable ABC keyboard layout", .serialized)

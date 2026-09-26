@@ -236,11 +236,9 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         guard force || lastKeyboardOverrideClientID != clientID || now - lastKeyboardOverrideTime > 0.5 else {
             return
         }
-        // Resolved live, not cached: the user can disable ABC at any time, and a
-        // stale answer would override a client with a layout they removed.
-        guard let enabledIDs = InputSourceManager.shared.enabledKeyboardInputSourceIDs(),
-              let layoutID = InputSourceManager.enabledRomanKeyboardLayoutID(in: enabledIDs)
-        else { return }
+        // Kept only until the enabled list changes: the user can disable ABC at any
+        // time, and a stale answer would override a client with a layout they removed.
+        guard let layoutID = InputSourceManager.shared.enabledRomanKeyboardLayoutID() else { return }
 
         let selector = NSSelectorFromString("overrideKeyboardWithKeyboardNamed:")
         let object = client as AnyObject
