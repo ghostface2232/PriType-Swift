@@ -119,6 +119,18 @@ struct ReviewFixRegressionTests {
         #expect(field.client.text == "가. ")
     }
 
+    @Test("In English mode a quick double space after a word becomes a period too")
+    func englishDoubleSpace() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.toggle()
+        #expect(!harness.press(.space), "a first space is the host's to type")
+        harness.type("hello  ")
+        #expect(field.client.text == " hello. ")
+        harness.type(".  ")
+        #expect(field.client.text == " hello. .  ", "not after punctuation")
+    }
+
     // MARK: 4 — A space the substitution cannot make is still a space
 
     @Test("A host that reports no caret gets the space, not nothing")
