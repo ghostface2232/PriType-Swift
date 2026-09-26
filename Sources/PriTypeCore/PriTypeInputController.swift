@@ -269,8 +269,10 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         }
     }
 
-    /// Commit a carried syllable into the client it was typed in, as always.
-    private static func commitCarriedComposition() {
+    /// Commit a carried syllable into the client it was typed in, as always. The
+    /// IMK harness also calls it when a run ends: runs can interleave, and a wait
+    /// one of them scheduled may have been handed to another.
+    public static func commitCarriedComposition() {
         guard let carried = carriedComposition else { return }
         carriedComposition = nil
         sharedComposer.resumeComposition(carried.syllable)

@@ -330,6 +330,7 @@ public final class IMKHarness {
         composer.candidatePresenter = HanjaCandidateWindow.shared
         composer.frontmostBundleID = HangulComposer.systemFrontmostBundleID
         runDeferredDeactivations()
+        PriTypeInputController.commitCarriedComposition()
         PriTypeInputController.focusOwnerPolicy = .shared
         PriTypeInputController.now = { ProcessInfo.processInfo.systemUptime }
     }
