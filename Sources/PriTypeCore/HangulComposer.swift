@@ -141,6 +141,12 @@ public class HangulComposer: @unchecked Sendable {
         previousKeyWasBackspace = false
     }
 
+    /// Start judging the Latin layout from what it puts on the letter keys
+    /// (`LatinLayoutProbe`), for a layout just selected. Main thread only.
+    func assumeLatinLayout(lettersTypingOtherwise keys: Set<UInt16>) {
+        latinLayout = LatinLayoutObserver(lettersTypingOtherwise: keys)
+    }
+
     public func setInputMode(_ mode: InputMode) {
         previousKeyWasBackspace = false
         modeSelectionRevision &+= 1

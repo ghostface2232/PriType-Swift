@@ -144,6 +144,9 @@ public enum QwertyKeyMap {
         letters[keyCode] != nil
     }
 
+    /// The key codes of the 26 letter keys.
+    static var letterKeyCodes: Dictionary<UInt16, Character>.Keys { letters.keys }
+
     /// US digits and punctuation of the main typing block, unshifted and
     /// shifted. Key 50 is left out: ISO keyboards swap it with key 10, so its
     /// position is not the US grave key.
@@ -175,9 +178,17 @@ public enum QwertyKeyMap {
 /// which gives back a complete set.
 ///
 /// Each key is judged by what it typed last, so the verdict follows a change
-/// of layout, such as a client later overridden to ABC.
+/// of layout, such as a client later overridden to ABC. Before a key has typed
+/// anything it is judged by the layout itself (`LatinLayoutProbe`), so the
+/// first comma on AZERTY is a comma even when M has not been pressed yet.
 struct LatinLayoutObserver {
-    private var lettersTypingOtherwise: Set<UInt16> = []
+    private var lettersTypingOtherwise: Set<UInt16>
+
+    /// - Parameter lettersTypingOtherwise: the letter keys the layout is known
+    ///   to put something other than a letter on, before anything is typed.
+    init(lettersTypingOtherwise: Set<UInt16> = []) {
+        self.lettersTypingOtherwise = lettersTypingOtherwise
+    }
 
     /// Whether the layout moved punctuation onto the letter keys.
     var displacesPunctuation: Bool { !lettersTypingOtherwise.isEmpty }
