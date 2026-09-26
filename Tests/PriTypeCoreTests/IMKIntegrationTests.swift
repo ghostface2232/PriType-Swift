@@ -977,6 +977,48 @@ struct IMKIntegrationTests {
         #expect(real.client.text == "다")
     }
 
+    @Test("A carried syllable waits out IMK passing back through the app just left")
+    func churnThroughThePreviousApp() {
+        let (harness, _) = start()
+        defer { harness.finish() }
+        let left = harness.makeField(bundleID: "com.kakao.KakaoTalkMac")
+        harness.focus(left)
+        let (transient, real) = churnFields(harness, bundleID: "com.apple.TextEdit")
+        // KakaoTalk → TextEdit: a brief TextEdit controller gets the key, IMK
+        // activates KakaoTalk once more, and only then TextEdit's field.
+        harness.activateAhead(transient)
+        left.controller.deactivateServer(left.client)
+        harness.type("e")                                            // ㄷ
+        left.controller.activateServer(left.client)
+        left.controller.deactivateServer(left.client)
+        transient.controller.deactivateServer(transient.client)
+        harness.activateAhead(real)
+        harness.type("k")                                            // ㅏ
+        #expect(real.client.text == "다")
+        #expect(left.client.text.isEmpty, "nothing lands in the app left behind")
+    }
+
+    @Test("A syllable carried again across the bounce continues when its key comes late")
+    func churnThroughThePreviousAppWithALateKey() {
+        let (harness, _) = start()
+        defer { harness.finish() }
+        let left = harness.makeField(bundleID: "com.kakao.KakaoTalkMac")
+        harness.focus(left)
+        let (transient, real) = churnFields(harness, bundleID: "com.apple.TextEdit")
+        harness.activateAhead(transient)
+        left.controller.deactivateServer(left.client)
+        harness.type("w")                                            // ㅈ
+        transient.controller.deactivateServer(transient.client)
+        // TextEdit's field takes the syllable, then KakaoTalk's reactivation
+        // takes the engine from it, before the field's own next key.
+        harness.activateAhead(real)
+        left.controller.activateServer(left.client)
+        left.controller.deactivateServer(left.client)
+        for _ in 0..<3 { _ = harness.makeEvent(keyCode: 0, characters: "") }  // 60 ms pass
+        harness.type("k")                                            // ㅏ
+        #expect(real.client.text == "자", "not ㅈㅏ")
+    }
+
     @Test("A syllable left by churn is not carried into another app, or into a later session")
     func churnCarriesOnlyWithinTheApp() {
         let (harness, _) = start()
@@ -989,13 +1031,14 @@ struct IMKIntegrationTests {
         harness.type("k")
         #expect(other.client.text == "ㅏ", "the ㄴ belongs to the app it was typed in")
 
-        // A field left too soon, and the next session well after the churn.
+        // A field left too soon, and no session taking it over before the wait ends.
         let (late, next) = churnFields(harness, bundleID: "com.apple.Notes")
         late.client.ignoresEdits = false
         harness.activateAhead(late)
         harness.type("s")
         late.controller.deactivateServer(late.client)
-        harness.focus(next)                                           // a click later
+        harness.runDeferredDeactivations()
+        harness.focus(next)
         harness.type("k")
         #expect(late.client.text == "ㄴ", "committed where it was typed")
         #expect(next.client.text == "ㅏ")

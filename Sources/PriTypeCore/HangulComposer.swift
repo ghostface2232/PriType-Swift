@@ -517,6 +517,18 @@ public class HangulComposer: @unchecked Sendable {
         return committed
     }
     
+    /// Take the syllable being composed out of the engine, leaving it idle, to be
+    /// resumed in another client (`resumeComposition(_:)`).
+    func setAsideComposition() -> DubeolsikEngine {
+        defer { engine.reset() }
+        return engine
+    }
+
+    /// Put back a syllable taken out with `setAsideComposition()`.
+    func resumeComposition(_ syllable: DubeolsikEngine) {
+        engine = syllable
+    }
+
     /// Clear the local text buffer without affecting composition state.
     public func clearLocalBuffer() {
         localTextBuffer = ""
