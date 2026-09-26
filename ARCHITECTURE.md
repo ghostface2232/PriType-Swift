@@ -128,7 +128,11 @@ keyDown ──► PriTypeInputController.handle(event, client)
   - 누르는 순간(`press`, 기본): 키를 삼키고 즉시 전환한다. 누름은 언제나 삼키고, 뗌은 그 누름을 삼켰을 때만 삼킨다. 이미 누른 것으로 기록된 상태에서 다시 온 누름(떼기를 잃었거나 DOWN이 두 번 온 경우)은 전환하지 않고 삼키기만 한다. 앱에 짝 없는 누름을 넘기면 그 떼기를 탭이 삼켜 앱의 ⌘가 눌린 채 남기 때문이다. 키 상태는 이벤트 플래그로 '눌림→뗌' 쪽으로만 바로잡는다. 탭이 보지 못한 누름(탭이 켜지기 전부터 누르고 있던 키)은 앱의 것이다. 누르고 있는 동안 다른 키에서 그 수정키를 떼어 내므로 우측 ⌘ + C는 c를 입력한다. 한자키(수정키 하나일 때)도 누를 때 삼키므로 같은 방식으로 떼어 낸다. 떼어 내기는 후보창 키 라우팅보다 먼저 하므로, 한자키를 떼기 전에 친 숫자도 후보를 고른다.
   - 단독 탭(`tapAlone`): 수정키를 앱에 그대로 넘기고, 다른 키, 클릭, 한자키 없이 1초 안에 떼면 전환한다. 우측 ⌘ + C는 복사다. 이 모드에서만 이벤트 탭이 클릭도 받으며, 설정을 바꾸면 탭을 다시 만든다.
   - 두 키 모니터가 같은 `ModifierTapDetector`로 시간을 잰다. 다만 보는 것이 다르다. IOKit 경로는 키보드만 보므로 ⌘-클릭을 알지 못하고, 대신 수정키보다 먼저 눌려 있던 일반 키도 알아챈다.
-- 전환 제외 앱(`ToggleExclusionPolicy`): 원격 데스크톱·가상 머신처럼 자체 입력기를 쓰는 앱이 앞에 있으면 전환키와 한자키를 가로채지 않고 그대로 넘긴다.
+- 전환 제외 앱(`ToggleExclusionPolicy`): 원격 데스크톱·가상 머신처럼 자체 입력기를 쓰는 앱이 키를 받을 때는 전환키와 한자키를 가로채지 않고 그대로 넘긴다.
+  - 키를 받는 앱은 포커스 소유자를 먼저 본다. IMK가 PriType을 활성화한 입력칸의 앱이다(`focusDidMove`, 세션이 이미 가진 번들 ID라 호스트 호출이 없다). 그 컨트롤러가 비활성화되면 지운다. 늦게 온 이전 입력칸의 비활성화는 새 소유자를 지우지 못한다. 소유자가 없으면 앞에 있는 앱으로 판정한다. 입력칸이 없는 원격 세션, 번들 ID를 주지 않는 클라이언트, 다른 입력 소스가 선택된 경우가 여기에 해당한다. 앱이 활성화되면 소유자를 잊는다.
+  - Spotlight는 활성화하지 않는 패널이라, 열려도 아래 앱이 앞에 있는 앱으로 남고 활성화 알림도 오지 않는다. 앞 앱만 보던 때는 제외 앱 위에 연 Spotlight에서도 전환키가 멈춰 있었다.
+  - 탭 콜백은 이 캐시만 읽는다. 손쉬운 사용 조회는 어디에서도 하지 않는다.
+  - 탭이 삼킨 누름은 제외 앱으로 포커스가 옮겨 가도 그 뗌까지 삼킨다. 앱이 누름을 보지 못했으니 뗌도 보지 않아야 한다. 앱이 본 누름(단독 탭 모드, 또는 제외 앱에서 누른 키)은 끝까지 앱의 것이다.
 - Caps Lock 입력 소스 전환이 켜져 있으면 PriType 전환키는 동작하지 않는다(설정 창에서 안내).
 
 ### 순서 보장 (`InputModeCoordinator`)
@@ -269,7 +273,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 | `IOKitManager.state` | HID 매니저, `HIDShortcutState`, 대체 경로 콜백. `IOHIDManagerOpen`·`Close`는 `hidd`를 기다리는 IPC라 잠금 밖에서 한다 |
 | `ConfigurationManager.bindings` | 탭이 키마다 읽는 값의 캐시: 전환키·한자키 바인딩, 전환 시점, 한자 켜짐 |
 | `PolledPreference.state` | 다른 프로세스가 쓰는 설정의 캐시: Caps Lock 입력 소스 전환, 더블스페이스 마침표, 직접 입력 실험. 1초에 한 번까지만 다시 읽는다 |
-| `ToggleExclusionPolicy.state` | 앞에 있는 앱, 제외 목록, 작업공간 옵저버. `NSWorkspace` 등록·해제는 잠금 밖에서 한다 |
+| `ToggleExclusionPolicy.state` | 앞에 있는 앱, 포커스 소유자, 제외 목록, 작업공간 옵저버. `NSWorkspace` 등록·해제는 잠금 밖에서 한다 |
 | `PreferencesDomain.resolved` | 이 프로세스가 읽는 설정 도메인 |
 | `InputModeCoordinator.pendingActions` | 탭 스레드가 기록한 전환·한자 동작 대기열 |
 | `HanjaManager.condition` | 사전 로딩 상태. 미리 매핑만 기다리고 검색은 기다리지 않는다. 매핑된 사전 자체는 읽기 전용이다 |
@@ -281,7 +285,7 @@ SwiftUI, 460×700. 위에서부터 다음과 같다.
 |---|---|
 | `ConfigurationManager.bindings` | 키마다 — 전환키·한자키·전환 시점·한자 켜짐 |
 | `PolledPreference.state` | 키마다 — Caps Lock 입력 소스 전환 |
-| `ToggleExclusionPolicy.state` | 키마다 — 앞 앱이 제외 대상인지 |
+| `ToggleExclusionPolicy.state` | 키마다 — 키를 받는 앱이 제외 대상인지 |
 | `HanjaCandidateWindow.pageCandidatesState` | 후보창이 떠 있을 때 |
 | `InputModeCoordinator.pendingActions` | 전환키·한자키를 넘길 때 |
 | `IOKitManager.state` · `EventTapThread.state` | 탭을 시작·정지·재시작할 때 |

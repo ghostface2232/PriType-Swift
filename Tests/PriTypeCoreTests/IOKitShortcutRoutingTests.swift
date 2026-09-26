@@ -346,6 +346,25 @@ struct IOKitShortcutRoutingTests {
         #expect(press(&state, HIDUsage.f13, true, toggle: f13Binding, hanja: rightOptionBinding, paused: true) == nil)
     }
 
+    @Test("Focus moving to or from an excluded app mid-tap cancels the tap")
+    func pauseChangingMidTap() {
+        var state = HIDShortcutState()
+        // Pressed in Spotlight, released after it closed over the excluded app.
+        #expect(press(&state, HIDUsage.rightCommand, true, toggle: rightCommandBinding, hanja: rightOptionBinding) == nil)
+        #expect(press(&state, HIDUsage.rightCommand, false, toggle: rightCommandBinding, hanja: rightOptionBinding,
+                      paused: true) == nil)
+        // Pressed in the excluded app, released in Spotlight.
+        #expect(press(&state, HIDUsage.rightCommand, true, toggle: rightCommandBinding, hanja: rightOptionBinding,
+                      paused: true, at: 1) == nil)
+        #expect(press(&state, HIDUsage.rightCommand, false, toggle: rightCommandBinding, hanja: rightOptionBinding,
+                      at: 1.1) == nil)
+        // The next whole tap is unaffected.
+        #expect(press(&state, HIDUsage.rightCommand, true, toggle: rightCommandBinding, hanja: rightOptionBinding,
+                      at: 2) == nil)
+        #expect(press(&state, HIDUsage.rightCommand, false, toggle: rightCommandBinding, hanja: rightOptionBinding,
+                      at: 2.1) == .toggle)
+    }
+
     @Test("A disabled toggle still routes hanja")
     func disabledToggleStillRoutesHanja() {
         var state = HIDShortcutState()
