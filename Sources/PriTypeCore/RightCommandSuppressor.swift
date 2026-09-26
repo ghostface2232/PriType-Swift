@@ -354,27 +354,29 @@ public final class RightCommandSuppressor: Sendable {
         // runs its own IME and needs the physical key). This is a cached lookup —
         // never query the workspace or Accessibility from a tap callback.
         let excluded = excludedOverride ?? ToggleExclusionPolicy.shared.isTogglePaused
+        let toggleTrigger = trigger ?? config.toggleTrigger
+        // Exclusion is enforced by this single early return, NOT by per-branch
+        // guards below. Keep it that way: with two mechanisms, removing this return
+        // would silently leave the toggle branch unguarded while hanja stayed safe.
+        // Recording still needs the key; everything else — including modifier
+        // stripping — must leave the event exactly as the app expects it. The one
+        // exception is the release of a press this tap swallowed before focus
+        // moved to the excluded app (see `endsSwallowedPress`).
+        if excluded && !state.isRecordingKey {
+            let swallow = Self.endsSwallowedPress(state, type: type, keyCode: keyCode,
+                                                  flags: event.flags.rawValue, toggle: toggleBinding,
+                                                  hanja: hanjaBinding, trigger: toggleTrigger)
+            return swallow ? nil : Unmanaged.passUnretained(event)
+        }
         let priTypeToggleEnabled = (toggleEnabled ?? !config.capsLockInputSourceSwitchEnabled) && !excluded
         if !priTypeToggleEnabled {
             state.toggleModifierIsDown = false
             state.toggleTap.interrupt()
         }
-        let toggleTrigger = trigger ?? config.toggleTrigger
         // Hanja conversion turned off: its key is an ordinary key again.
         let priTypeHanjaEnabled = hanjaEnabled ?? config.hanjaEnabled
-        if !priTypeHanjaEnabled {
+        if !priTypeHanjaEnabled || excluded {
             state.hanjaModifierIsDown = false
-        }
-        // Exclusion is enforced by this single early return, NOT by per-branch
-        // guards below. Keep it that way: with two mechanisms, removing this return
-        // would silently leave the toggle branch unguarded while hanja stayed safe.
-        // Recording still needs the key; everything else — including modifier
-        // stripping — must leave the event exactly as the app expects it.
-        if excluded {
-            state.hanjaModifierIsDown = false
-            if !state.isRecordingKey {
-                return Unmanaged.passUnretained(event)
-            }
         }
         
         // Wait for modifier release or a regular key before deciding the binding.
@@ -587,6 +589,40 @@ public final class RightCommandSuppressor: Sendable {
         }
     }
     
+    /// Whether an event reaching an excluded app must be swallowed after all:
+    /// it is the toggle or Hanja key, and this tap swallowed that key's press.
+    ///
+    /// Focus can move while the key is held — Escape closing Spotlight over a
+    /// remote-desktop window, with the toggle key still down from switching
+    /// modes in it. The app never saw that key go down, so it must not see it
+    /// come up, or see it go down again with no release in between: the press
+    /// ends where it began. A press the app did see (tap mode passes both edges,
+    /// or it went down in the excluded app) is not recorded, so it stays the
+    /// app's to the end.
+    ///
+    /// Anything else passes and ends every recorded press whose key the flags
+    /// show up, as `forgetReleased` does; the next press in a non-excluded app
+    /// must toggle.
+    private static func endsSwallowedPress(_ state: State, type: CGEventType, keyCode: Int64, // swiftlint:disable:this function_parameter_count
+                                           flags: UInt64, toggle: KeyBinding, hanja: KeyBinding,
+                                           trigger: ToggleTrigger) -> Bool {
+        state.toggleTap.interrupt()
+        if trigger != .press { state.toggleModifierIsDown = false }
+        if type == .flagsChanged {
+            let pressed = ModifierKeyState.isDown(keyCode, flags: flags)
+            if state.toggleModifierIsDown && keyCode == toggle.keyCode {
+                if !pressed { state.toggleModifierIsDown = false }
+                return true
+            }
+            if state.hanjaModifierIsDown && keyCode == hanja.keyCode {
+                if !pressed { state.hanjaModifierIsDown = false }
+                return true
+            }
+        }
+        forgetReleased(state, toggle: toggle, hanja: hanja, flags: flags, hanjaEnabled: true)
+        return false
+    }
+
     /// Clear a recorded press whose key `flags` shows up: its release was lost.
     /// Never sets one — see the keyDown path.
     private static func forgetReleased(_ state: State, toggle: KeyBinding, hanja: KeyBinding,

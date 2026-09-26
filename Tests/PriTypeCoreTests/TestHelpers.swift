@@ -11,6 +11,7 @@ final class MockConfiguration: ConfigurationProviding, @unchecked Sendable {
     var controlSpaceAsToggle: Bool { false }
     var capsLockInputSourceSwitchEnabled: Bool { false }
     var doubleSpacePeriodEnabled: Bool { true }
+    var toggleExcludedBundleIDs: [String] = []
 }
 
 /// Mock implementation of HangulComposerDelegate for tests

@@ -309,6 +309,12 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         systemModeReporter(nextMode)
     }
 
+    /// Where activation reports which app's field has keyboard focus (see
+    /// `ToggleExclusionPolicy`). A harness gives its fields a policy of their
+    /// own, so they do not move the process-wide one under other tests.
+    /// - Warning: Access from main thread only.
+    nonisolated(unsafe) public static var focusOwnerPolicy: ToggleExclusionPolicy = .shared
+
     // A custom toggle switches the composer synchronously and then reports the
     // result to macOS. `selectInputMode:` is not used for that: routing through
     // the client can transfer a Latin-only host to real ABC (upstream #11).
@@ -353,6 +359,11 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             session?.disarmFocusLossFinalizer()
             session?.markContextStale()
         }
+        // The bundle ID the session already holds: no call into the host. With
+        // no client there is no owner to name, and the frontmost app decides.
+        Self.focusOwnerPolicy.focusDidMove(
+            to: sender is IMKTextInput ? session?.context.bundleId : nil,
+            owner: ObjectIdentifier(self))
     }
 
     override public func deactivateServer(_ sender: Any!) {
@@ -401,6 +412,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // - mark the context stale so the next handle() re-analyzes it.
         session?.disarmFocusLossFinalizer()
         session?.markContextStale()
+        Self.focusOwnerPolicy.focusDidLeave(owner: ObjectIdentifier(self))
         if Self.sharedController === self { Self.sharedController = nil }
     }
 
@@ -663,6 +675,9 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         let session = Signposts.interval(Signposts.keystroke, Signposts.Stage.session, id: signpostID, recording: recording) {
             ensureSession(for: client)
         }
+        // A key for this client says it has focus, even before (or without) the
+        // activation that would have said so: some hosts deliver keys first.
+        Self.focusOwnerPolicy.focusDidMove(to: session.context.bundleId, owner: ObjectIdentifier(self))
 
         // A toggle or Hanja key pressed just before this key may still be waiting
         // for its hop from the key-monitor thread. Run it now so this key lands in

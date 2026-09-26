@@ -67,6 +67,10 @@ public final class IMKHarness {
     /// Stands in for the Hanja candidate window while the harness runs.
     public let candidates = FakeCandidatePresenter()
 
+    /// Hears which field has focus, in place of the process-wide exclusion
+    /// policy that suites off the main actor read at the same time.
+    public let focusPolicy = ToggleExclusionPolicy()
+
     /// The highest event time any harness run has handed out.
     ///
     /// `NSEvent.timestamp` never goes backwards, and code that orders a key against
@@ -101,6 +105,7 @@ public final class IMKHarness {
         PriTypeInputController.scheduleDeferredDeactivation = { [weak self] work in
             self?.deferredDeactivations.append(work)
         }
+        PriTypeInputController.focusOwnerPolicy = focusPolicy
         InputModeCoordinator.shared.applyPendingKeyActions()
         let composer = PriTypeInputController.sharedComposer
         composer.setInputMode(.korean)
@@ -316,6 +321,7 @@ public final class IMKHarness {
         composer.setInputMode(.korean)
         composer.candidatePresenter = HanjaCandidateWindow.shared
         composer.frontmostBundleID = HangulComposer.systemFrontmostBundleID
+        PriTypeInputController.focusOwnerPolicy = .shared
     }
 
     // MARK: US layout

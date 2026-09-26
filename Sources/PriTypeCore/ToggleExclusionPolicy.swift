@@ -2,7 +2,7 @@ import Foundation
 import Cocoa
 
 /// Decides whether PriType's custom toggle/hanja keys are suppressed for the
-/// frontmost application.
+/// application that has keyboard focus.
 ///
 /// ## Why this exists
 /// Remote-desktop and virtualization clients (Windows App, VNC/RDP viewers, VMs)
@@ -18,6 +18,23 @@ import Cocoa
 /// is exactly what pushes a tap into `kCGEventTapDisabledByTimeout`. So the
 /// frontmost bundle ID is captured from `NSWorkspace` activation notifications on
 /// the main thread, and the callback only reads a cached string under a lock.
+///
+/// ## Why the focus owner comes first
+/// The frontmost app is not always the one the keys go to. Spotlight opens as a
+/// non-activating panel: the app under it stays frontmost, and no activation
+/// notification is posted either way, while every key goes to Spotlight's field.
+/// With a remote-desktop client under it, that left the toggle paused in a field
+/// that has nothing to do with the remote session.
+///
+/// PriType learns who has keyboard focus without asking anyone: IMK activates
+/// its input controller for the field that gained focus and deactivates it for
+/// the one that lost it, and the controller reports both here with the bundle
+/// ID it already has (`focusDidMove(to:owner:)`, `focusDidLeave(owner:)`). A
+/// key handed to a controller says the same, and some hosts send one before
+/// the activation, so every key reports it too. That is the focus owner. When there is none — no field is active (a remote session
+/// capturing raw keys), the client gave no bundle ID, or another input source is
+/// selected so IMK is not talking to PriType at all — the frontmost app decides,
+/// as it always did.
 ///
 /// The same policy is consulted by `IOKitManager` (the hardware fallback) and by
 /// the async toggle callbacks, so a user's exclusion cannot be bypassed by
@@ -35,13 +52,22 @@ public final class ToggleExclusionPolicy: Sendable {
     /// cheap to put it under the same lock as the snapshot, so it is under it.
     private final class State {
         var frontmostBundleID: String?
+        /// The app whose field IMK last activated PriType for, and which
+        /// controller reported it: only that controller's deactivation clears it.
+        var focusOwner: (bundleID: String, owner: ObjectIdentifier)?
+        /// The bundle ID as `focusOwner`'s controller reported it, before
+        /// normalizing: every key reports it again, and an unchanged report
+        /// must cost no more than this comparison.
+        var focusOwnerReported: String?
         var excludedBundleIDs: Set<String> = []
         var observer: NSObjectProtocol?
     }
 
     private let state = Guarded(State())
 
-    private init() {}
+    /// The app uses `shared`. A policy of its own keeps a test's focus changes
+    /// out of the process-wide one.
+    public init() {}
 
     // MARK: - Lifecycle
 
@@ -86,6 +112,7 @@ public final class ToggleExclusionPolicy: Sendable {
             defer {
                 state.observer = nil
                 state.frontmostBundleID = nil
+                state.focusOwner = nil
                 state.excludedBundleIDs = []
             }
             return state.observer
@@ -116,9 +143,42 @@ public final class ToggleExclusionPolicy: Sendable {
     }
 
     /// Record the frontmost app. Internal so tests can drive it without a workspace.
+    ///
+    /// Also forgets the focus owner. An app that has just activated owns the keys
+    /// unless one of its fields says so itself, and that activation may have come
+    /// just before this notification or may come after it — either way the
+    /// answer is the same app. What this prevents is a field whose deactivation
+    /// never arrived deciding for the app now in front.
     func updateFrontmostBundleID(_ bundleID: String?) {
         let normalized = bundleID.map(Self.normalize)
-        state.withLock { $0.frontmostBundleID = normalized }
+        state.withLock { state in
+            state.frontmostBundleID = normalized
+            state.focusOwner = nil
+        }
+    }
+
+    /// IMK activated `owner` (an input controller) for a field of `bundleID`,
+    /// or handed it a key. A nil or blank bundle ID leaves the decision to the
+    /// frontmost app. Main thread, from the IMK lifecycle and every keystroke.
+    public func focusDidMove(to bundleID: String?, owner: ObjectIdentifier) {
+        let unchanged = state.withLock { state in
+            state.focusOwner?.owner == owner && state.focusOwnerReported == bundleID
+        }
+        guard !unchanged else { return }
+        let normalized = bundleID.map(Self.normalize).flatMap { $0.isEmpty ? nil : $0 }
+        state.withLock { state in
+            state.focusOwner = normalized.map { ($0, owner) }
+            state.focusOwnerReported = normalized == nil ? nil : bundleID
+        }
+    }
+
+    /// IMK deactivated `owner`. Only the controller that reported the focus owner
+    /// can clear it: IMK may deactivate the field being left after it has
+    /// activated the next one, and that late call must not undo the new owner.
+    public func focusDidLeave(owner: ObjectIdentifier) {
+        state.withLock { state in
+            if state.focusOwner?.owner == owner { state.focusOwner = nil }
+        }
     }
 
     // MARK: - Hot Path
@@ -129,16 +189,22 @@ public final class ToggleExclusionPolicy: Sendable {
     /// workspace query.
     public var isTogglePaused: Bool {
         state.withLock { state in
-            guard let frontmost = state.frontmostBundleID, !state.excludedBundleIDs.isEmpty else {
+            guard let target = state.focusOwner?.bundleID ?? state.frontmostBundleID,
+                  !state.excludedBundleIDs.isEmpty else {
                 return false
             }
-            return state.excludedBundleIDs.contains(frontmost)
+            return state.excludedBundleIDs.contains(target)
         }
     }
 
     /// The bundle ID currently treated as frontmost (for diagnostics and tests).
     var currentFrontmostBundleID: String? {
         state.withLock { $0.frontmostBundleID }
+    }
+
+    /// The bundle ID of the focused field's app, if IMK has reported one.
+    var currentFocusOwnerBundleID: String? {
+        state.withLock { $0.focusOwner?.bundleID }
     }
 
     // MARK: - Pure Policy
@@ -150,10 +216,12 @@ public final class ToggleExclusionPolicy: Sendable {
     }
 
     /// Pure form of the decision, so the rule can be tested without any global state.
-    static func isPaused(frontmostBundleID: String?, excludedBundleIDs: [String]) -> Bool {
-        guard let frontmostBundleID else { return false }
+    static func isPaused(frontmostBundleID: String?, focusOwnerBundleID: String? = nil,
+                         excludedBundleIDs: [String]) -> Bool {
+        let owner = focusOwnerBundleID.map(normalize).flatMap { $0.isEmpty ? nil : $0 }
+        guard let target = owner ?? frontmostBundleID.map(normalize) else { return false }
         let normalized = Set(excludedBundleIDs.map(normalize))
-        return normalized.contains(normalize(frontmostBundleID))
+        return normalized.contains(target)
     }
 
     /// Add a bundle ID to a list without introducing duplicates or blank entries.
