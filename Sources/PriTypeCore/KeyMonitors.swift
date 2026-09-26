@@ -36,8 +36,11 @@ public enum KeyMonitors {
         tap.onHanjaLookup = { eventTime in
             InputModeCoordinator.shared.requestHanjaLookup(eventTime: eventTime)
         }
-        tap.onKeyPassed = { eventTime in
-            InputModeCoordinator.shared.notePassedKey(at: eventTime)
+        tap.onCommandDown = { eventTime in
+            InputModeCoordinator.shared.requestShortcutCommit(eventTime: eventTime)
+        }
+        tap.onKeyPassed = { keyCode, eventTime in
+            InputModeCoordinator.shared.notePassedKey(keyCode: keyCode, at: eventTime)
         }
         // Delivered on main, after the tap has removed itself.
         tap.onTapFailed = {

@@ -3,8 +3,9 @@ import Cocoa
 /// Handles the double-space period in Korean composition
 ///
 /// Gated on the macOS "Add period with double-space" preference
-/// (`NSAutomaticPeriodSubstitutionEnabled`). English mode passes keys through, so
-/// the host applies its own text conveniences there, as it does for ABC.
+/// (`NSAutomaticPeriodSubstitutionEnabled`). macOS applies it in the input
+/// source, so no host does it behind PriType, in either mode. In English mode the
+/// host types the text; the composer reads what precedes the caret from it.
 ///
 /// ## Usage
 /// ```swift
@@ -89,6 +90,13 @@ public final class TextConvenienceHandler: @unchecked Sendable {
         return .normalSpace
     }
     
+    /// Whether a space now would be the quick second one, the only space that can
+    /// become a period. Lets a caller skip reading the host for any other.
+    public var followsQuickSpace: Bool {
+        isDoubleSpacePeriodEnabled() && lastWasSpace
+            && ProcessInfo.processInfo.systemUptime - lastSpaceTime < PriTypeConfig.doubleSpaceThreshold
+    }
+
     /// Reset the space state (call when non-space character is typed)
     public func resetSpaceState() {
         lastWasSpace = false

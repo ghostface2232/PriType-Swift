@@ -394,7 +394,7 @@ struct PendingToggleTests {
         let (coordinator, box) = handDrivenCoordinator(now: base + 0.1)
         // Key A is typed and passed on to the app; the toggle follows 10 ms later,
         // while A is still on its way to IMK.
-        coordinator.notePassedKey(at: base)
+        coordinator.notePassedKey(keyCode: 0, at: base)
         requestOffMain(at: [base + 0.01], on: coordinator)
         await mainQueueTurn()
         #expect(box.waits.count == 1)
@@ -416,7 +416,7 @@ struct PendingToggleTests {
     func passedKeyWaitIsBounded() async {
         let base = ProcessInfo.processInfo.systemUptime + 10
         let (coordinator, box) = handDrivenCoordinator(now: base + 0.1)
-        coordinator.notePassedKey(at: base)
+        coordinator.notePassedKey(keyCode: 0, at: base)
         requestOffMain(at: [base + 0.01], on: coordinator)
         await mainQueueTurn()
         box.waits[0]()
@@ -431,18 +431,61 @@ struct PendingToggleTests {
         let base = ProcessInfo.processInfo.systemUptime + 10
         let (coordinator, box) = handDrivenCoordinator(now: base + 0.1)
         box.fieldIsActive = false
-        coordinator.notePassedKey(at: base)
+        coordinator.notePassedKey(keyCode: 0, at: base)
         requestOffMain(at: [base + 0.01], on: coordinator)
         await mainQueueTurn()
+        #expect(box.performed.isEmpty, "the key may be on its way to a field IMK has yet to activate")
         box.waits[0]()
         #expect(box.performed == [.toggle(.customKey)])
+    }
+
+    @Test("A toggle runs at once when the key typed before it has been handled")
+    func handledKeyNoWait() async {
+        let base = ProcessInfo.processInfo.systemUptime + 10
+        let (coordinator, box) = handDrivenCoordinator(now: base + 0.1)
+        coordinator.notePassedKey(keyCode: 0, at: base)
+        coordinator.applyPendingKeyActions(before: coordinator.pressTime(ofKeyCode: 0, deliveredAt: base + 0.003))
+        requestOffMain(at: [base + 0.01], on: coordinator)
+        await mainQueueTurn()
+        #expect(box.performed == [.toggle(.customKey)])
+        #expect(box.waits.isEmpty)
+    }
+
+    /// ⌘ reported from a thread of its own, as the event tap does.
+    private func requestShortcutCommitOffMain(at time: TimeInterval, on coordinator: InputModeCoordinator) {
+        let done = DispatchSemaphore(value: 0)
+        Thread {
+            coordinator.requestShortcutCommit(eventTime: time)
+            done.signal()
+        }.start()
+        done.wait()
+    }
+
+    @Test("⌘ commits at once after a pause, but waits for a syllable still in flight")
+    func shortcutCommitRunsAtOnce() async {
+        let base = ProcessInfo.processInfo.systemUptime + 10
+        let (coordinator, box) = handDrivenCoordinator(now: base + 0.1)
+        // Nothing typed recently: the tap saw every key, so none is in flight.
+        requestShortcutCommitOffMain(at: base, on: coordinator)
+        await mainQueueTurn()
+        #expect(box.performed == [.shortcutCommit])
+        #expect(box.waits.isEmpty)
+
+        // A letter pressed just before ⌘ is still on its way to IMK.
+        coordinator.notePassedKey(keyCode: 1, at: base + 0.05)
+        requestShortcutCommitOffMain(at: base + 0.052, on: coordinator)
+        await mainQueueTurn()
+        #expect(box.performed == [.shortcutCommit], "the letter lands in the syllable first")
+        coordinator.applyPendingKeyActions(before: coordinator.pressTime(ofKeyCode: 1, deliveredAt: base + 0.06))
+        box.waits[0]()
+        #expect(box.performed == [.shortcutCommit, .shortcutCommit])
     }
 
     @Test("A key passed on long before the toggle is not waited for")
     func stalePassedKeyIsIgnored() async {
         let base = ProcessInfo.processInfo.systemUptime + 10
         let (coordinator, box) = handDrivenCoordinator(now: base + 1)
-        coordinator.notePassedKey(at: base)
+        coordinator.notePassedKey(keyCode: 0, at: base)
         requestOffMain(at: [base + 0.9], on: coordinator)
         await mainQueueTurn()
         box.waits[0]()
@@ -466,6 +509,44 @@ struct PendingToggleTests {
             drained = coordinator.pendingActionCount == 0
         }
         #expect(drained, "the queue ran on its own, with no keystroke to carry it")
+    }
+
+    @Test("A key handed over after a toggle still counts from its press")
+    func keyIsOrderedByItsPress() async {
+        let base = ProcessInfo.processInfo.systemUptime + 10
+        let (coordinator, box) = handDrivenCoordinator(now: base + 0.1)
+        // S is pressed, the toggle 3 ms later; the host hands S to IMK only after
+        // that, stamped with the time it did so.
+        coordinator.notePassedKey(keyCode: 1, at: base)
+        requestOffMain(at: [base + 0.003], on: coordinator)
+        await mainQueueTurn()
+        coordinator.applyPendingKeyActions(
+            before: coordinator.pressTime(ofKeyCode: 1, deliveredAt: base + 0.02))
+        #expect(box.performed.isEmpty, "S was typed before the toggle")
+        box.waits[0]()
+        #expect(box.performed == [.toggle(.customKey)])
+    }
+
+    @Test("Press times pair with keys in order, past keys IMK never saw")
+    func pressTimesPairInOrder() {
+        let coordinator = InputModeCoordinator()
+        coordinator.notePassedKey(keyCode: 0, at: 1.00)   // a
+        coordinator.notePassedKey(keyCode: 8, at: 1.01)   // c: a menu took it
+        coordinator.notePassedKey(keyCode: 0, at: 1.02)   // a again
+        coordinator.notePassedKey(keyCode: 1, at: 1.03)   // s
+        #expect(coordinator.pressTime(ofKeyCode: 0, deliveredAt: 1.005) == 1.00)
+        #expect(coordinator.pressTime(ofKeyCode: 0, deliveredAt: 1.025) == 1.02)
+        #expect(coordinator.pressTime(ofKeyCode: 1, deliveredAt: 1.04) == 1.03)
+        // Nothing recorded for it (the IOKit fallback records nothing): IMK's time.
+        #expect(coordinator.pressTime(ofKeyCode: 1, deliveredAt: 1.05) == 1.05)
+    }
+
+    @Test("A passed key IMK never received is forgotten after the in-flight limit")
+    func unclaimedPressTimesExpire() {
+        let coordinator = InputModeCoordinator()
+        coordinator.notePassedKey(keyCode: 0, at: 1.0)
+        coordinator.notePassedKey(keyCode: 1, at: 1.0 + InputModeCoordinator.inFlightKeyLimit + 0.01)
+        #expect(coordinator.pressTime(ofKeyCode: 0, deliveredAt: 2.0) == 2.0)
     }
 
     @Test("Hanja and toggle run in the order they were pressed, cut off by the key")

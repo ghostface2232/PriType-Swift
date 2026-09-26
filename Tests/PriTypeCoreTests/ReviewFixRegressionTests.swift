@@ -78,6 +78,25 @@ struct ReviewFixRegressionTests {
         #expect(field.client.text == "ㄱ", "It was pressed in Korean mode")
     }
 
+    @Test("A key the host hands over after a toggle keeps the mode it was pressed in")
+    func keyDeliveredLateKeepsItsPressTime() async {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        // R is pressed and seen by the key monitor; the toggle follows. The host
+        // hands R to IMK only after that, stamped with the time it did so.
+        let pressed = harness.clock
+        InputModeCoordinator.shared.notePassedKey(keyCode: 15, at: pressed)
+        harness.toggleFromKeyMonitor()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        let delivered = harness.makeEvent(keyCode: 15, characters: "r")
+        #expect(delivered.timestamp > pressed)
+        let handled = field.controller.handle(delivered, client: field.client)
+        if !handled { field.client.performHostAction(for: delivered) }
+        #expect(field.client.text == "ㄱ", "It was pressed in Korean mode")
+    }
+
     // MARK: 3 — The double-space substitution edits the space it meant to edit
 
     @Test("A space typed after the caret moved back does not eat the character before it")
@@ -98,6 +117,46 @@ struct ReviewFixRegressionTests {
         defer { harness.finish() }
         harness.type("rk  ")
         #expect(field.client.text == "가. ")
+    }
+
+    @Test("In English mode a quick double space after a word becomes a period too")
+    func englishDoubleSpace() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.toggle()
+        #expect(!harness.press(.space), "a first space is the host's to type")
+        harness.type("hello  ")
+        #expect(field.client.text == " hello. ")
+        harness.type(".  ")
+        #expect(field.client.text == " hello. .  ", "not after punctuation")
+    }
+
+    @Test("A space in one field does not make the first space in the next a period")
+    func doubleSpaceAcrossFields() {
+        let (harness, first) = start()
+        defer { harness.finish() }
+        harness.toggle()
+        harness.type("a ")
+        let second = harness.makeField()
+        second.client.insertText("b ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        harness.focus(second)   // well inside the double-space window
+        harness.press(.space)
+        #expect(second.client.text == "b  ")
+        #expect(first.client.text == "a ")
+    }
+
+    @Test("A field reactivated behind the same client starts with no space pending")
+    func doubleSpaceAcrossReactivation() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.toggle()
+        harness.type("a ")
+        // Web fields share one client: focus moving between them is a
+        // deactivation and an activation of the same client.
+        harness.blur()
+        harness.focus(field)
+        harness.press(.space)
+        #expect(field.client.text == "a  ")
     }
 
     // MARK: 4 — A space the substitution cannot make is still a space

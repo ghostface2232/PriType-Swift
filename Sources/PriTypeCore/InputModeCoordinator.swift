@@ -32,6 +32,7 @@ public final class InputModeCoordinator: @unchecked Sendable {
     enum KeyAction: Equatable {
         case toggle(ToggleSource)
         case hanja
+        case shortcutCommit
     }
 
     private struct PendingAction {
@@ -63,6 +64,10 @@ public final class InputModeCoordinator: @unchecked Sendable {
     /// waits for, instead of guessing from a fixed delay alone.
     private let lastPassedKeyTime = OSAllocatedUnfairLock<TimeInterval>(initialState: -.infinity)
 
+    /// Keys the key monitor passed on that have not reached `handle()` yet, oldest
+    /// first, with the time each was pressed (see `pressTime(ofKeyCode:deliveredAt:)`).
+    private let passedKeys = OSAllocatedUnfairLock<[(keyCode: UInt16, time: TimeInterval)]>(initialState: [])
+
     /// The app has exactly one of these — `shared`. Tests make their own, because
     /// the ordering this class implements is about timers and threads, and a test
     /// that has to suspend to observe a timer cannot also share its queue with
@@ -83,10 +88,51 @@ public final class InputModeCoordinator: @unchecked Sendable {
         request(.hanja, eventTime: eventTime)
     }
 
+    /// ⌘ went down: commit the syllable before the shortcut's key arrives.
+    ///
+    /// Committing with the shortcut's own key is too late for Chromium and
+    /// Electron. A key that arrives over marked text reaches the page as an IME
+    /// key (`VKEY_PROCESSKEY`), and the host replays the real key only when the
+    /// input method left an edit command behind — ⌘← does, ⌘A, ⌘Z and ⌘Enter do
+    /// not, so the shortcut is lost. Ordered with keystrokes like a toggle, so a
+    /// syllable still in flight is committed whole.
+    public func requestShortcutCommit(eventTime: TimeInterval) {
+        request(.shortcutCommit, eventTime: eventTime)
+    }
+
     /// Record a keystroke the key monitor passed on to the app. Callable from any
     /// thread; the event tap calls it for every key it does not consume.
-    public func notePassedKey(at eventTime: TimeInterval) {
+    public func notePassedKey(keyCode: UInt16, at eventTime: TimeInterval) {
         lastPassedKeyTime.withLock { $0 = max($0, eventTime) }
+        passedKeys.withLock { keys in
+            // A key the app kept from IMK (a menu took it, no field was active)
+            // never comes back for its entry.
+            keys.removeAll { eventTime - $0.time > Self.inFlightKeyLimit }
+            keys.append((keyCode, eventTime))
+        }
+    }
+
+    /// When the key `handle()` was just handed was pressed.
+    ///
+    /// IMK's event carries the time the host passed it on, not the time of the
+    /// press the key monitor saw: 2–5 ms later at rest, tens of milliseconds when
+    /// the host is busy. Ordered by that time, a toggle pressed in between counts
+    /// as earlier than the key and takes it into the new mode. Keys reach IMK in
+    /// the order the monitor passed them, so this key is the oldest recorded one
+    /// with its key code; any older entries went somewhere IMK never saw. A key
+    /// the monitor did not record (the IOKit fallback records none) keeps IMK's
+    /// time.
+    public func pressTime(ofKeyCode keyCode: UInt16, deliveredAt timestamp: TimeInterval) -> TimeInterval {
+        passedKeys.withLock { keys in
+            // Nothing is recorded any more once the monitor changes hands.
+            keys.removeAll { timestamp - $0.time > Self.inFlightKeyLimit }
+            guard let index = keys.firstIndex(where: { $0.keyCode == keyCode && $0.time <= timestamp }) else {
+                return timestamp
+            }
+            let time = keys[index].time
+            keys.removeFirst(index + 1)
+            return time
+        }
     }
 
     private func request(_ action: KeyAction, eventTime: TimeInterval?) {
@@ -104,11 +150,14 @@ public final class InputModeCoordinator: @unchecked Sendable {
             let passedKey = lastPassedKeyTime.withLock { $0 }
             let awaitedKey = passedKey < eventTime && eventTime - passedKey < Self.inFlightKeyLimit
                 ? passedKey : nil
+            // ⌘ is reported only by the event tap, which records every key it
+            // passes on: with none recent, nothing pressed before it is in flight.
+            let seenByTap = action == .shortcutCommit
             if Thread.isMainThread {
-                drainAfterKeyMonitorHop(pressedAt: eventTime, awaiting: awaitedKey)
+                drainAfterKeyMonitorHop(pressedAt: eventTime, awaiting: awaitedKey, seenByTap: seenByTap)
             } else {
                 DispatchQueue.main.async {
-                    self.drainAfterKeyMonitorHop(pressedAt: eventTime, awaiting: awaitedKey)
+                    self.drainAfterKeyMonitorHop(pressedAt: eventTime, awaiting: awaitedKey, seenByTap: seenByTap)
                 }
             }
             return
@@ -191,8 +240,9 @@ public final class InputModeCoordinator: @unchecked Sendable {
     private var lastHandledKeyTime: TimeInterval = -.infinity
 
     /// An action has reached main from the key-monitor thread. Run it now if every
-    /// key pressed before it has already been handled; otherwise give those keys
-    /// the bounded moment above to arrive on their own.
+    /// key pressed before it has already been handled — a later key has, or the
+    /// key the monitor passed just before it has — otherwise give those keys the
+    /// bounded moment above to arrive on their own.
     ///
     /// Either way the drain reaches only as far as THIS action. A drain that ran
     /// the whole queue would carry later actions with it, and those are the ones
@@ -201,14 +251,20 @@ public final class InputModeCoordinator: @unchecked Sendable {
     /// with none of the wait this exists to give — the reordering it was meant to
     /// prevent, arrived at from the other side.
     ///
-    /// - Parameter awaitedKey: the press time of the key the monitor passed on
-    ///   just before this action, if it did. Until `handle()` has seen it, or it
-    ///   is `inFlightKeyLimit` old, the wait is renewed.
-    private func drainAfterKeyMonitorHop(pressedAt eventTime: TimeInterval, awaiting awaitedKey: TimeInterval?) {
+    /// - Parameters:
+    ///   - awaitedKey: the press time of the key the monitor passed on just before
+    ///     this action, if it did. Until `handle()` has seen it, or it is
+    ///     `inFlightKeyLimit` old, the wait is renewed.
+    ///   - seenByTap: the action came from the event tap, which records every key,
+    ///     so no awaited key means none is in flight.
+    private func drainAfterKeyMonitorHop(pressedAt eventTime: TimeInterval, awaiting awaitedKey: TimeInterval?,
+                                         seenByTap: Bool) {
         // `runPendingActions(before:)` runs what was pressed strictly earlier, and
         // this action is the one being waited on, so the bound includes it.
         let throughThisAction = eventTime.nextUp
-        guard lastHandledKeyTime < eventTime else {
+        let earlierKeysHandled = awaitedKey.map { lastHandledKeyTime >= $0 || now() - $0 >= Self.inFlightKeyLimit }
+            ?? seenByTap
+        guard lastHandledKeyTime < eventTime, !earlierKeysHandled else {
             runPendingActions(before: throughThisAction)
             return
         }
@@ -291,6 +347,8 @@ public final class InputModeCoordinator: @unchecked Sendable {
             performToggle(source: source)
         case .hanja:
             PriTypeInputController.sharedComposer.triggerHanjaLookup()
+        case .shortcutCommit:
+            PriTypeInputController.sharedController?.commitForShortcut()
         }
     }
 

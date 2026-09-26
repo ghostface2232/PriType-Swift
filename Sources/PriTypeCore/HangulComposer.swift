@@ -136,9 +136,10 @@ public class HangulComposer: @unchecked Sendable {
     ///   including `activateServer` focus changes — may mutate the mode.
     /// Forget what the last key was. The composer is shared by every client, so a
     /// Backspace in one app must not make the first Backspace in another look like
-    /// the second of a pair.
+    /// the second of a pair, nor a space the first of a double-space period.
     public func forgetKeyHistory() {
         previousKeyWasBackspace = false
+        textConvenience.resetSpaceState()
     }
 
     /// Start judging the Latin layout from what it puts on the letter keys
@@ -341,7 +342,9 @@ public class HangulComposer: @unchecked Sendable {
         // - Roman characters come from the keyboard layout that the controller
         //   installs via `overrideKeyboardWithKeyboardNamed(ABC/US)`.
         // Text conveniences belong to the host, which knows the field's opt-in
-        // settings. English printable keys always pass through unchanged.
+        // settings — except the double-space period. macOS applies that in the
+        // input source, so behind a third-party input method no host does
+        // (measured: TextEdit, KakaoTalk, Chrome and Electron all type two spaces).
         if inputMode == .english {
             // Text this keystroke commits is precomposed already, and a host that
             // answers from before the commit would describe a document that no
@@ -360,7 +363,15 @@ public class HangulComposer: @unchecked Sendable {
                 // the paths below that would say so are past this early return.
                 delegate.forgetLastPrecomposedSyllable()
             }
-            return false
+            guard keyCode == KeyCode.space, !wasComposing,
+                  event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
+                textConvenience.resetSpaceState()
+                return false
+            }
+            // The host typed this text, so what precedes the caret is asked of it —
+            // and only for a quick second space, the one that can become a period.
+            var typed = textConvenience.followsQuickSpace ? delegate.textBeforeCursor(length: 2) ?? "" : ""
+            return textConvenience.handleDoubleSpacePeriod(buffer: &typed, delegate: delegate) == .convertedToPeriod
         }
         
         // If Hanja candidate window is visible, forward keys to it
@@ -544,6 +555,7 @@ public class HangulComposer: @unchecked Sendable {
     public func markKeystroke(bundleId: String, client: AnyObject? = nil) {
         if bundleId != lastInputBundleId || client !== lastInputClient {
             localTextBuffer = ""
+            forgetKeyHistory()
         }
         lastInputBundleId = bundleId
         lastInputClient = client

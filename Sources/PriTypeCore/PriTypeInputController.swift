@@ -133,7 +133,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// controller after the new one is already composing.
     private func claimActiveController() {
         if let previous = Self.sharedController, previous !== self {
-            previous.session?.finalize(reason: .deactivateServer)
+            previous.leaveComposition()
             previous.session?.disarmFocusLossFinalizer()
             previous.session?.markContextStale()
             // Open candidates belong to the previous client. Its deactivation
@@ -141,7 +141,11 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             // activation — and then it no longer owns the engine and leaves
             // them up, with the event tap routing this client's keys to them.
             composer.dismissHanjaCandidates(reason: "another client took over")
-            // The key history belongs to the client that typed it.
+        }
+        if Self.sharedController !== self {
+            servingSince = Self.now()
+            // The key history belongs to the field that typed it, and web fields
+            // share one client: a reactivation may be another field.
             composer.forgetKeyHistory()
         }
         Self.sharedController = self
@@ -154,6 +158,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
                 // mode would leave an older pending (e.g. English) still resolvable,
                 // so a late-activating stale controller could re-apply it.
                 if composer.inputMode != mode {
+                    Self.commitCarriedComposition()
                     session?.finalize(reason: .systemModeSwitch)
                 }
                 composer.setInputMode(mode)
@@ -198,12 +203,94 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// old client. `context` is evaluated after the old composition is committed,
     /// so the old client's commit never waits on the new client's analysis IPC.
     private func replaceSession(client: IMKTextInput, context: @autoclosure () -> ClientContext) -> InputSession {
-        session?.finalize(reason: .deactivateServer)
+        if Self.carriedComposition == nil {
+            session?.finalize(reason: .deactivateServer)
+        }
         session?.disarmFocusLossFinalizer()
         let newSession = InputSession(client: client, context: context(), composer: composer)
         session = newSession
+        servingSince = Self.now()
         newSession.armFocusLossFinalizer()
         return newSession
+    }
+
+    // MARK: - Activation churn
+
+    /// How long a session must have been live for leaving it to commit its
+    /// syllable.
+    ///
+    /// Right after an app switch IMK can hand the first key to a controller it
+    /// retires a few milliseconds later, in favour of another controller of the
+    /// same app (measured: 4 ms in KakaoTalk, 16 ms in TextEdit). A syllable
+    /// committed into the retired client reaches no field; the jamo was simply
+    /// gone (카톡 came out as ㅏ톡). A person cannot focus a field, type and move
+    /// on inside this window, so a composition left that fast is handed to the
+    /// next session instead.
+    static let churnWindow: TimeInterval = 0.05
+
+    /// The clock `churnWindow` is measured on. The IMK harness puts its own in.
+    /// - Warning: Access from main thread only.
+    nonisolated(unsafe) public static var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+
+    /// When this controller last took the engine over, or started a new session.
+    private var servingSince: TimeInterval = -.infinity
+
+    /// A composition whose session IMK retired within `churnWindow`, and when,
+    /// waiting for the session that takes over (`continueCarriedComposition(in:)`).
+    /// - Warning: Access from main thread only.
+    nonisolated(unsafe) private static var carriedComposition: (session: InputSession, since: TimeInterval)?
+
+    /// This controller is losing the engine: commit its syllable, or carry it
+    /// over if IMK is retiring the session too soon for a person to have left it.
+    private func leaveComposition() {
+        guard let session else { return }
+        if leavesTooSoon {
+            Self.carry(session)
+        } else {
+            session.finalize(reason: .deactivateServer)
+        }
+    }
+
+    /// Whether a marked syllable is live in a session served for less than
+    /// `churnWindow`. Direct insertion already wrote it into the document.
+    private var leavesTooSoon: Bool {
+        composer.hasActiveComposition && session?.adapter.deliveryMode == .markedText
+            && Self.now() - servingSince < Self.churnWindow
+    }
+
+    /// Hold `session`'s syllable for the session that takes over. If none does,
+    /// it is committed where it was typed once the wait for a reactivation is up.
+    private static func carry(_ session: InputSession) {
+        // Already carried: the syllable is still that session's, never shown here.
+        guard carriedComposition == nil else { return }
+        let since = now()
+        carriedComposition = (session, since)
+        scheduleDeferredDeactivation {
+            guard carriedComposition?.since == since else { return }
+            commitCarriedComposition()
+        }
+    }
+
+    /// Commit a carried syllable into the client it was typed in, as always.
+    private static func commitCarriedComposition() {
+        guard let carried = carriedComposition else { return }
+        carriedComposition = nil
+        carried.session.finalize(reason: .deactivateServer)
+    }
+
+    /// `session` has taken over. A carried syllable continues here if it is the
+    /// same app's and the handover is part of the same churn, marked again since
+    /// the host showing it may not have been this field. Anything else commits it
+    /// where it was typed, as always.
+    private func continueCarriedComposition(in session: InputSession) {
+        guard let carried = Self.carriedComposition else { return }
+        guard carried.session.context.bundleId == session.context.bundleId,
+              Self.now() - carried.since < Self.churnWindow else {
+            Self.commitCarriedComposition()
+            return
+        }
+        Self.carriedComposition = nil
+        session.adapter.setMarkedText(composer.preeditForDisplay)
     }
 
     /// Route a composition-ending event to the single finalize path. Prefers the
@@ -254,6 +341,13 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     }
 
     // MARK: - Mode Transitions (한/영)
+
+    /// ⌘ went down (`InputModeCoordinator.requestShortcutCommit`). With the
+    /// Hanja candidates up, keys go to the window first and it decides.
+    func commitForShortcut() {
+        guard composer.hasActiveComposition, !HanjaCandidateWindow.shared.isVisible else { return }
+        session?.finalize(reason: .shortcut)
+    }
 
     public func performPriTypeModeTransition(source: InputModeCoordinator.ToggleSource) {
         guard let session else {
@@ -352,6 +446,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
                 )
                 DebugLogger.log("Activated for client: \(newSession.context.bundleId) (Lightweight Context)")
             }
+            session.map(continueCarriedComposition)
         } else {
             // Fallback if sender is not IMKTextInput (rare). Keep the old session's
             // adapter alive for async Hanja callbacks, but stop trusting its context
@@ -391,7 +486,11 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // fires earlier, while the host still accepts input); by the time
         // deactivateServer runs, native hosts like KakaoTalk have already resigned and
         // ignore insertText. If the observer already committed, this is a no-op.
-        finalizeActiveComposition(sender: sender, reason: .deactivateServer)
+        if Self.sharedController === self, leavesTooSoon, let session {
+            Self.carry(session)
+        } else {
+            finalizeActiveComposition(sender: sender, reason: .deactivateServer)
+        }
         // Focus is leaving this client (another window or app). Its Hanja
         // candidates can no longer receive keys, so close them. Only the owner
         // does this: a late deactivation of an older controller must not close
@@ -675,6 +774,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         let session = Signposts.interval(Signposts.keystroke, Signposts.Stage.session, id: signpostID, recording: recording) {
             ensureSession(for: client)
         }
+        continueCarriedComposition(in: session)
         // A key for this client says it has focus, even before (or without) the
         // activation that would have said so: some hosts deliver keys first.
         Self.focusOwnerPolicy.focusDidMove(to: session.context.bundleId, owner: ObjectIdentifier(self))
@@ -684,7 +784,9 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // the new mode or in the candidate window — but only actions pressed before
         // this key: running a later one would reinterpret a key typed earlier.
         Signposts.interval(Signposts.keystroke, Signposts.Stage.pendingActions, id: signpostID, recording: recording) {
-            InputModeCoordinator.shared.applyPendingKeyActions(before: event.timestamp)
+            let coordinator = InputModeCoordinator.shared
+            coordinator.applyPendingKeyActions(
+                before: coordinator.pressTime(ofKeyCode: event.keyCode, deliveredAt: event.timestamp))
         }
 
         // 2. Duplicate-keyDown suppression. Some hosts (observed: KakaoTalk) deliver
