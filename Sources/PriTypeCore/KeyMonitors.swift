@@ -36,6 +36,9 @@ public enum KeyMonitors {
         tap.onHanjaLookup = { eventTime in
             InputModeCoordinator.shared.requestHanjaLookup(eventTime: eventTime)
         }
+        tap.onKeyPassed = { eventTime in
+            InputModeCoordinator.shared.notePassedKey(at: eventTime)
+        }
         // Delivered on main, after the tap has removed itself.
         tap.onTapFailed = {
             MainActor.assumeIsolated {
