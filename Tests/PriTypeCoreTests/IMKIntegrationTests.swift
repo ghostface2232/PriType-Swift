@@ -448,6 +448,25 @@ struct IMKIntegrationTests {
         #expect(afterTyping { $0.toggle() }.first == .insert("각"), "한/영 toggle")
     }
 
+    @Test("A key that commits and passes on sends the commit alone, with no clear after it")
+    func commitIsNotFollowedByAClear() {
+        func calls(_ press: (IMKHarness) -> Void) -> [FakeTextClient.Call] {
+            let (harness, field) = start()
+            defer { harness.finish() }
+            harness.type("rk")
+            field.client.clearLog()
+            press(harness)
+            #expect(field.client.markedText == nil)
+            #expect(field.client.text.hasPrefix("가"))
+            return field.client.calls.filter { if case .host = $0 { false } else { true } }
+        }
+        // insertText with NSNotFound replaces the marked text and ends the
+        // composition; a setMarkedText("") after it is a wasted round trip.
+        #expect(calls { _ = $0.press(.return) } == [.insert("가")], "return")
+        #expect(calls { _ = $0.keyDown(keyCode: 9, characters: "v", modifiers: .command) } == [.insert("가")], "⌘V")
+        #expect(calls { _ = $0.keyDown(keyCode: 115, characters: "\u{1}") } == [.insert("가")], "home")
+    }
+
     @Test("Escape drops the composition and is consumed")
     func escapeCancels() {
         let (harness, field) = start()

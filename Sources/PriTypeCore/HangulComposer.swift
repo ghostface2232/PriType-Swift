@@ -182,9 +182,6 @@ public class HangulComposer: @unchecked Sendable {
         if keyCode == KeyCode.return || keyCode == KeyCode.numpadEnter {
             let hadComposition = engine.isComposing
             commitComposition(delegate: delegate)
-            if hadComposition {
-                delegate.setMarkedText("")
-            }
             localTextBuffer = ""
 
             if hadComposition && ClientCompatibilityPolicy.needsReturnConsumedAfterCompositionCommit(bundleId: lastInputBundleId) {
@@ -352,7 +349,6 @@ public class HangulComposer: @unchecked Sendable {
             let wasComposing = engine.isComposing
             if wasComposing {
                 commitComposition(delegate: delegate)
-                delegate.setMarkedText("")
             }
             localTextBuffer = ""
             if isPlainBackspace {
@@ -392,7 +388,6 @@ public class HangulComposer: @unchecked Sendable {
              // live and the host app ignores or misapplies the shortcut (e.g. Cmd+←).
              if engine.isComposing {
                  commitComposition(delegate: delegate)
-                 delegate.setMarkedText("")
              }
              localTextBuffer = "" // Any system shortcut (Cmd+V, Cmd+Z, etc.) invalidates local context
              // A shortcut can paste, undo or move the caret anywhere.
@@ -429,7 +424,6 @@ public class HangulComposer: @unchecked Sendable {
                 DebugLogger.log("Non-printable key detected, passing to system")
                 if engine.isComposing {
                     commitComposition(delegate: delegate)
-                    delegate.setMarkedText("")
                 }
                 localTextBuffer = ""
                 // Home, End, Page Up/Down and friends all move the caret.
@@ -477,7 +471,9 @@ public class HangulComposer: @unchecked Sendable {
     }
 
     /// Commits the syllable being typed, if any: `insertText` replaces the marked
-    /// text with it.
+    /// text with it, and that ends the composition in the host. Nothing needs
+    /// clearing after it — a `setMarkedText("")` there is one more round trip to
+    /// the host, and in direct insertion a caret query and an empty insert.
     private func commitComposition(delegate: HangulComposerDelegate) {
         guard let syllable = engine.flush() else { return }
         let text = String(syllable)
