@@ -1019,6 +1019,23 @@ struct IMKIntegrationTests {
         #expect(real.client.text == "자", "not ㅈㅏ")
     }
 
+    @Test("A syllable carried across a switch to English is committed in the field, not resumed")
+    func carriedAcrossAModeChange() {
+        let (harness, _) = start()
+        defer { harness.finish() }
+        let (transient, real) = churnFields(harness, bundleID: "com.apple.TextEdit")
+        harness.activateAhead(transient)
+        harness.type("e")                                            // ㄷ
+        transient.controller.deactivateServer(transient.client)
+        // macOS selects English on the destination controller before activating it.
+        harness.systemSelects(.english, on: real)
+        harness.activateAhead(real)
+        #expect(real.client.text == "ㄷ")
+        #expect(real.client.markedText == nil)
+        #expect(!PriTypeInputController.sharedComposer.hasActiveComposition)
+        #expect(PriTypeInputController.sharedComposer.inputMode == .english)
+    }
+
     @Test("A syllable left by churn is not carried into another app, or into a later session")
     func churnCarriesOnlyWithinTheApp() {
         let (harness, _) = start()

@@ -294,7 +294,14 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         if carried.session.context.bundleId == session.context.bundleId {
             Self.carriedComposition = nil
             composer.resumeComposition(carried.syllable)
-            session.adapter.setMarkedText(composer.preeditForDisplay)
+            // The mode changed while it was carried (a toggle, or macOS selecting
+            // English before this activation): it ends as that boundary ends a
+            // syllable, committed — here, where the text can land.
+            if composer.inputMode == .korean {
+                session.adapter.setMarkedText(composer.preeditForDisplay)
+            } else {
+                session.finalize(reason: .systemModeSwitch)
+            }
         } else if byKey {
             Self.commitCarriedComposition()
         }
