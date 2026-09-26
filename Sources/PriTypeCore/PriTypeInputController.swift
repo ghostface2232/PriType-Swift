@@ -141,10 +141,13 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             // activation — and then it no longer owns the engine and leaves
             // them up, with the event tap routing this client's keys to them.
             composer.dismissHanjaCandidates(reason: "another client took over")
-            // The key history belongs to the client that typed it.
+        }
+        if Self.sharedController !== self {
+            servingSince = Self.now()
+            // The key history belongs to the field that typed it, and web fields
+            // share one client: a reactivation may be another field.
             composer.forgetKeyHistory()
         }
-        if Self.sharedController !== self { servingSince = Self.now() }
         Self.sharedController = self
         if let pending = pendingSystemMode {
             pendingSystemMode = nil

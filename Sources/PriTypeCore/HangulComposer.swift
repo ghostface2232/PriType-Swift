@@ -136,9 +136,10 @@ public class HangulComposer: @unchecked Sendable {
     ///   including `activateServer` focus changes — may mutate the mode.
     /// Forget what the last key was. The composer is shared by every client, so a
     /// Backspace in one app must not make the first Backspace in another look like
-    /// the second of a pair.
+    /// the second of a pair, nor a space the first of a double-space period.
     public func forgetKeyHistory() {
         previousKeyWasBackspace = false
+        textConvenience.resetSpaceState()
     }
 
     /// Start judging the Latin layout from what it puts on the letter keys
@@ -554,6 +555,7 @@ public class HangulComposer: @unchecked Sendable {
     public func markKeystroke(bundleId: String, client: AnyObject? = nil) {
         if bundleId != lastInputBundleId || client !== lastInputClient {
             localTextBuffer = ""
+            forgetKeyHistory()
         }
         lastInputBundleId = bundleId
         lastInputClient = client

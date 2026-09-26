@@ -131,6 +131,34 @@ struct ReviewFixRegressionTests {
         #expect(field.client.text == " hello. .  ", "not after punctuation")
     }
 
+    @Test("A space in one field does not make the first space in the next a period")
+    func doubleSpaceAcrossFields() {
+        let (harness, first) = start()
+        defer { harness.finish() }
+        harness.toggle()
+        harness.type("a ")
+        let second = harness.makeField()
+        second.client.insertText("b ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        harness.focus(second)   // well inside the double-space window
+        harness.press(.space)
+        #expect(second.client.text == "b  ")
+        #expect(first.client.text == "a ")
+    }
+
+    @Test("A field reactivated behind the same client starts with no space pending")
+    func doubleSpaceAcrossReactivation() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.toggle()
+        harness.type("a ")
+        // Web fields share one client: focus moving between them is a
+        // deactivation and an activation of the same client.
+        harness.blur()
+        harness.focus(field)
+        harness.press(.space)
+        #expect(field.client.text == "a  ")
+    }
+
     // MARK: 4 — A space the substitution cannot make is still a space
 
     @Test("A host that reports no caret gets the space, not nothing")
