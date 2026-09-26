@@ -106,6 +106,7 @@ public final class IMKHarness {
             self?.deferredDeactivations.append(work)
         }
         PriTypeInputController.focusOwnerPolicy = focusPolicy
+        PriTypeInputController.now = { [weak self] in self?.clock ?? 0 }
         InputModeCoordinator.shared.applyPendingKeyActions()
         let composer = PriTypeInputController.sharedComposer
         composer.setInputMode(.korean)
@@ -128,12 +129,18 @@ public final class IMKHarness {
     /// Move focus to `field`: the current field's controller is deactivated,
     /// then the new one activated, the order IMK uses.
     public func focus(_ field: Field) {
+        // A person takes longer to click than IMK's activation churn lasts
+        // (`PriTypeInputController.churnWindow`).
+        clock += Self.clickTime
         if let focused, focused.client !== field.client {
             focused.controller.deactivateServer(focused.client)
         }
         field.controller.activateServer(field.client)
         focused = field
     }
+
+    /// How long a person's click into another field takes, at the least.
+    public static let clickTime: TimeInterval = 0.1
 
     /// Move focus to `field` in the order some hosts use: the new controller is
     /// activated while the current one is still active. The field left behind
@@ -313,6 +320,7 @@ public final class IMKHarness {
 
     /// Run everything the key monitor queued, and leave the shared engine idle.
     public func finish() {
+        clock += Self.clickTime
         InputModeCoordinator.shared.applyPendingKeyActions()
         runDeferredDeactivations()
         blur()
@@ -321,7 +329,9 @@ public final class IMKHarness {
         composer.setInputMode(.korean)
         composer.candidatePresenter = HanjaCandidateWindow.shared
         composer.frontmostBundleID = HangulComposer.systemFrontmostBundleID
+        runDeferredDeactivations()
         PriTypeInputController.focusOwnerPolicy = .shared
+        PriTypeInputController.now = { ProcessInfo.processInfo.systemUptime }
     }
 
     // MARK: US layout

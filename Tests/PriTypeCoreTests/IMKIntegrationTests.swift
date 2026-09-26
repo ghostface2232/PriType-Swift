@@ -937,4 +937,101 @@ struct IMKIntegrationTests {
         #expect(second.client.markedText == "가")
         #expect(first.client.text == "한")
     }
+
+    // MARK: Activation churn after an app switch
+
+    /// The app the user switches to, where IMK hands the first key to a
+    /// controller it retires a few milliseconds later. That client takes no edits.
+    private func churnFields(_ harness: IMKHarness, bundleID: String = "com.kakao.KakaoTalkMac")
+        -> (transient: IMKHarness.Field, real: IMKHarness.Field) {
+        let transient = harness.makeField(bundleID: bundleID)
+        transient.client.ignoresEdits = true
+        return (transient, harness.makeField(bundleID: bundleID))
+    }
+
+    @Test("A key handed to a controller IMK retires before activating the app's field carries on there")
+    func keyBeforeActivationCarriesOn() {
+        let (harness, _) = start()
+        defer { harness.finish() }
+        let (transient, real) = churnFields(harness)
+        // KakaoTalk's order: the key reaches another controller with no activation.
+        let key = harness.makeEvent(keyCode: 1, characters: "s")   // ㄴ
+        #expect(transient.controller.handle(key, client: transient.client))
+        harness.activateAhead(real)
+        harness.type("k")                                            // ㅏ
+        #expect(real.client.text == "나", "not ㅏ: the ㄴ was committed into a client that dropped it")
+        #expect(real.client.markedText == "나")
+    }
+
+    @Test("A key in a field IMK activates and retires within milliseconds carries on in the next one")
+    func briefActivationCarriesOn() {
+        let (harness, _) = start()
+        defer { harness.finish() }
+        let (transient, real) = churnFields(harness, bundleID: "com.apple.TextEdit")
+        // TextEdit's order: a brief activation, the key, its deactivation, the real one.
+        harness.activateAhead(transient)
+        harness.type("e")                                            // ㄷ
+        transient.controller.deactivateServer(transient.client)
+        harness.activateAhead(real)
+        harness.type("k")                                            // ㅏ
+        #expect(real.client.text == "다")
+    }
+
+    @Test("A syllable left by churn is not carried into another app, or into a later session")
+    func churnCarriesOnlyWithinTheApp() {
+        let (harness, _) = start()
+        defer { harness.finish() }
+        let (transient, _) = churnFields(harness)
+        let key = harness.makeEvent(keyCode: 1, characters: "s")
+        #expect(transient.controller.handle(key, client: transient.client))
+        let other = harness.makeField(bundleID: "com.apple.TextEdit")
+        harness.activateAhead(other)
+        harness.type("k")
+        #expect(other.client.text == "ㅏ", "the ㄴ belongs to the app it was typed in")
+
+        // A field left too soon, and the next session well after the churn.
+        let (late, next) = churnFields(harness, bundleID: "com.apple.Notes")
+        late.client.ignoresEdits = false
+        harness.activateAhead(late)
+        harness.type("s")
+        late.controller.deactivateServer(late.client)
+        harness.focus(next)                                           // a click later
+        harness.type("k")
+        #expect(late.client.text == "ㄴ", "committed where it was typed")
+        #expect(next.client.text == "ㅏ")
+    }
+
+    @Test("A controller used before, handed the first key with no activation, still carries it on")
+    func reusedControllerCarriesOn() {
+        let (harness, _) = start()
+        defer { harness.finish() }
+        let (retired, real) = churnFields(harness)
+        retired.client.ignoresEdits = false
+        harness.focus(retired)
+        harness.type("rk ")
+        harness.focus(harness.makeField(bundleID: "com.apple.TextEdit"))
+        // Back in KakaoTalk, the old controller gets the key first.
+        retired.client.ignoresEdits = true
+        let key = harness.makeEvent(keyCode: 1, characters: "s")
+        #expect(retired.controller.handle(key, client: retired.client))
+        harness.activateAhead(real)
+        harness.type("k")
+        #expect(real.client.text == "나")
+    }
+
+    @Test("A carried syllable no session takes over is committed where it was typed")
+    func carriedSyllableWithNoTakerIsCommitted() {
+        let (harness, _) = start()
+        defer { harness.finish() }
+        let (brief, _) = churnFields(harness)
+        brief.client.ignoresEdits = false
+        harness.activateAhead(brief)
+        harness.type("s")
+        brief.controller.deactivateServer(brief.client)
+        #expect(brief.client.markedText == "ㄴ", "held for a moment")
+        harness.runDeferredDeactivations()
+        #expect(brief.client.text == "ㄴ")
+        #expect(brief.client.markedText == nil)
+        #expect(!PriTypeInputController.sharedComposer.hasActiveComposition)
+    }
 }
