@@ -255,6 +255,13 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
 
     // MARK: - Mode Transitions (한/영)
 
+    /// ⌘ went down (`InputModeCoordinator.requestShortcutCommit`). With the
+    /// Hanja candidates up, keys go to the window first and it decides.
+    func commitForShortcut() {
+        guard composer.hasActiveComposition, !HanjaCandidateWindow.shared.isVisible else { return }
+        session?.finalize(reason: .shortcut)
+    }
+
     public func performPriTypeModeTransition(source: InputModeCoordinator.ToggleSource) {
         guard let session else {
             Self.performModeTransitionWithoutField(source: source)

@@ -434,8 +434,51 @@ struct PendingToggleTests {
         coordinator.notePassedKey(keyCode: 0, at: base)
         requestOffMain(at: [base + 0.01], on: coordinator)
         await mainQueueTurn()
+        #expect(box.performed.isEmpty, "the key may be on its way to a field IMK has yet to activate")
         box.waits[0]()
         #expect(box.performed == [.toggle(.customKey)])
+    }
+
+    @Test("A toggle runs at once when the key typed before it has been handled")
+    func handledKeyNoWait() async {
+        let base = ProcessInfo.processInfo.systemUptime + 10
+        let (coordinator, box) = handDrivenCoordinator(now: base + 0.1)
+        coordinator.notePassedKey(keyCode: 0, at: base)
+        coordinator.applyPendingKeyActions(before: coordinator.pressTime(ofKeyCode: 0, deliveredAt: base + 0.003))
+        requestOffMain(at: [base + 0.01], on: coordinator)
+        await mainQueueTurn()
+        #expect(box.performed == [.toggle(.customKey)])
+        #expect(box.waits.isEmpty)
+    }
+
+    /// ⌘ reported from a thread of its own, as the event tap does.
+    private func requestShortcutCommitOffMain(at time: TimeInterval, on coordinator: InputModeCoordinator) {
+        let done = DispatchSemaphore(value: 0)
+        Thread {
+            coordinator.requestShortcutCommit(eventTime: time)
+            done.signal()
+        }.start()
+        done.wait()
+    }
+
+    @Test("⌘ commits at once after a pause, but waits for a syllable still in flight")
+    func shortcutCommitRunsAtOnce() async {
+        let base = ProcessInfo.processInfo.systemUptime + 10
+        let (coordinator, box) = handDrivenCoordinator(now: base + 0.1)
+        // Nothing typed recently: the tap saw every key, so none is in flight.
+        requestShortcutCommitOffMain(at: base, on: coordinator)
+        await mainQueueTurn()
+        #expect(box.performed == [.shortcutCommit])
+        #expect(box.waits.isEmpty)
+
+        // A letter pressed just before ⌘ is still on its way to IMK.
+        coordinator.notePassedKey(keyCode: 1, at: base + 0.05)
+        requestShortcutCommitOffMain(at: base + 0.052, on: coordinator)
+        await mainQueueTurn()
+        #expect(box.performed == [.shortcutCommit], "the letter lands in the syllable first")
+        coordinator.applyPendingKeyActions(before: coordinator.pressTime(ofKeyCode: 1, deliveredAt: base + 0.06))
+        box.waits[0]()
+        #expect(box.performed == [.shortcutCommit, .shortcutCommit])
     }
 
     @Test("A key passed on long before the toggle is not waited for")

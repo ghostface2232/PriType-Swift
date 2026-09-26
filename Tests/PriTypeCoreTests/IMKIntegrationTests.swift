@@ -51,6 +51,20 @@ struct IMKIntegrationTests {
         #expect(field.client.calls.last == .host("insert(\\n)"))
     }
 
+    @Test("⌘ going down commits the syllable, so the shortcut's key finds nothing marked")
+    func commandCommitsBeforeTheShortcut() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type("gks")
+        field.client.clearLog()
+        field.controller.commitForShortcut()
+        #expect(field.client.calls == [.insert("한")])
+        #expect(field.client.markedText == nil)
+        field.client.clearLog()
+        #expect(!harness.keyDown(keyCode: 0, characters: "a", modifiers: .command))
+        #expect(!field.client.calls.contains { if case .insert = $0 { true } else { false } })
+    }
+
     @Test("Backspace takes jamo off the syllable, and the host deletes the last one")
     func backspaceToEmpty() {
         let (harness, field) = start()

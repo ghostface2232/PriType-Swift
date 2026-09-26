@@ -57,6 +57,8 @@ public final class RightCommandSuppressor: Sendable {
         /// Called on the event-tap thread at the moment the key is seen.
         var onToggle: (@Sendable (_ eventTime: TimeInterval) -> Void)?
         var onHanjaLookup: (@Sendable (_ eventTime: TimeInterval) -> Void)?
+        /// Called on the event-tap thread when ⌘ goes down.
+        var onCommandDown: (@Sendable (_ eventTime: TimeInterval) -> Void)?
         /// Called on the event-tap thread for a keystroke passed on to the app.
         var onKeyPassed: (@Sendable (_ keyCode: UInt16, _ eventTime: TimeInterval) -> Void)?
         /// Delivered on the main queue.
@@ -125,6 +127,15 @@ public final class RightCommandSuppressor: Sendable {
     public var onKeyPassed: (@Sendable (_ keyCode: UInt16, _ eventTime: TimeInterval) -> Void)? {
         get { state.withLock { $0.onKeyPassed } }
         set { state.withLock { $0.onKeyPassed = newValue } }
+    }
+
+    /// Callback for ⌘ going down, either side, with the time it was pressed.
+    /// Called on the event-tap thread, so it must be thread-safe and must not
+    /// block. `InputModeCoordinator.requestShortcutCommit` is both: the syllable
+    /// is committed before the shortcut's own key reaches the app.
+    public var onCommandDown: (@Sendable (_ eventTime: TimeInterval) -> Void)? {
+        get { state.withLock { $0.onCommandDown } }
+        set { state.withLock { $0.onCommandDown = newValue } }
     }
 
     /// Callback for when CGEventTap permanently fails and IOKit should take over.
@@ -399,6 +410,10 @@ public final class RightCommandSuppressor: Sendable {
             
             // Track Control key state (for Control+Space combo)
             state.controlIsDown = flags.contains(.maskControl)
+
+            if (keyCode == 54 || keyCode == 55) && ModifierKeyState.isDown(keyCode, flags: flags.rawValue) {
+                state.onCommandDown?(Self.eventTime(of: event))
+            }
 
             if keyCode == 57 {
                 return Unmanaged.passUnretained(event)

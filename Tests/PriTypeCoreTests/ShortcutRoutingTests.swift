@@ -63,6 +63,29 @@ struct ShortcutRoutingTests {
         #expect(passed.snapshot == ["0@1.0", "1@4.0"])
     }
 
+    @Test("⌘ going down is reported with its time on either side; its release and other modifiers are not")
+    func commandDownIsReported() throws {
+        let tap = RightCommandSuppressor()
+        let seen = ShortcutActions()
+        tap.onCommandDown = { time in seen.record("\(time)") }
+        let toggle = KeyBinding(keyCode: 105, modifiers: 0, displayName: "F13")
+        let hanja = KeyBinding(keyCode: 61, modifiers: 0, displayName: "Right Option")
+        func change(_ keyCode: CGKeyCode, _ flags: UInt64, at seconds: CGEventTimestamp) throws {
+            let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true))
+            event.type = .flagsChanged
+            event.flags = CGEventFlags(rawValue: flags)
+            event.timestamp = seconds * 1_000_000_000
+            _ = tap.handleEvent(type: .flagsChanged, event: event, toggle: toggle, hanja: hanja,
+                                toggleEnabled: true, excludedOverride: false)
+        }
+        let command = CGEventFlags.maskCommand.rawValue
+        try change(55, command | 0x8, at: 1)                        // left ⌘ down
+        try change(55, 0, at: 2)                                     // left ⌘ up
+        try change(54, command | 0x10, at: 3)                        // right ⌘ down
+        try change(56, command | 0x10 | CGEventFlags.maskShift.rawValue | 0x2, at: 4)  // ⇧ with ⌘ held
+        #expect(seen.snapshot == ["1.0", "3.0"])
+    }
+
     @Test("Holding an ordinary toggle key fires once and stays suppressed")
     func autorepeatFiresOnce() async throws {
         let tap = RightCommandSuppressor()

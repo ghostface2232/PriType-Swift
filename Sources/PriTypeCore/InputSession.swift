@@ -12,6 +12,7 @@ enum CompositionFinalizeReason: String {
     case deactivateServer       // IMK deactivateServer (fallback; native hosts may already ignore)
     case mouseCommit            // IMK commitComposition (click outside the composition)
     case modeTransition         // PriType custom toggle key (한/영)
+    case shortcut               // ⌘ pressed: a shortcut is coming
     case systemModeSwitch       // macOS selected the other PriType mode (Caps Lock / menu)
     case deliveryModeChange     // The resolved delivery policy no longer matches the adapter
 }
