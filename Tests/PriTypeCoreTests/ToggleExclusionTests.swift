@@ -214,6 +214,25 @@ struct ToggleExclusionFocusTests {
         #expect(policy.isTogglePaused)
     }
 
+    @Test("Reporting the same owner again changes nothing, and a cleared owner can be reported again")
+    func repeatedReports() {
+        let policy = policy()
+        policy.focusDidMove(to: "  com.apple.campo ", owner: ObjectIdentifier(first))
+        policy.focusDidMove(to: "  com.apple.campo ", owner: ObjectIdentifier(first))
+        #expect(policy.currentFocusOwnerBundleID == "com.apple.campo")
+
+        // Another controller with the same bundle ID takes it over.
+        policy.focusDidMove(to: "  com.apple.campo ", owner: ObjectIdentifier(second))
+        policy.focusDidLeave(owner: ObjectIdentifier(first))
+        #expect(policy.currentFocusOwnerBundleID == "com.apple.campo")
+
+        // Forgotten on activation, then the same field's next key names it again.
+        policy.updateFrontmostBundleID(remoteDesktop)
+        #expect(policy.isTogglePaused)
+        policy.focusDidMove(to: "  com.apple.campo ", owner: ObjectIdentifier(second))
+        #expect(!policy.isTogglePaused)
+    }
+
     @Test("The pure rule puts the focus owner first")
     func pureRule() {
         #expect(!ToggleExclusionPolicy.isPaused(
@@ -264,6 +283,29 @@ struct ToggleExclusionIMKTests {
 
         harness.blur()
         #expect(policy.currentFocusOwnerBundleID == nil)
+        #expect(policy.isTogglePaused)
+    }
+
+    @Test("A key that arrives before its field's activation names the owner")
+    func keyBeforeActivation() {
+        PriTypeInputController.resetSystemModeTracking()
+        let harness = IMKHarness()
+        defer { harness.finish() }
+        let policy = harness.focusPolicy
+        let configuration = MockConfiguration()
+        configuration.toggleExcludedBundleIDs = [remoteDesktop]
+        policy.refreshExcludedBundleIDs(from: configuration)
+        policy.updateFrontmostBundleID(remoteDesktop)
+
+        // A panel over the excluded app whose host sends the key first; the
+        // activation comes later, or not at all.
+        let search = harness.makeField(bundleID: spotlight)
+        let event = harness.makeEvent(keyCode: 0, characters: "a")
+        _ = search.controller.handle(event, client: search.client)
+        #expect(policy.currentFocusOwnerBundleID == spotlight.lowercased())
+        #expect(!policy.isTogglePaused)
+
+        search.controller.deactivateServer(search.client)
         #expect(policy.isTogglePaused)
     }
 }

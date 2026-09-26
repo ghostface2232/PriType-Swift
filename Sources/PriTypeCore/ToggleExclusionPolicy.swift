@@ -29,8 +29,9 @@ import Cocoa
 /// PriType learns who has keyboard focus without asking anyone: IMK activates
 /// its input controller for the field that gained focus and deactivates it for
 /// the one that lost it, and the controller reports both here with the bundle
-/// ID it already has (`focusDidMove(to:owner:)`, `focusDidLeave(owner:)`). That
-/// is the focus owner. When there is none — no field is active (a remote session
+/// ID it already has (`focusDidMove(to:owner:)`, `focusDidLeave(owner:)`). A
+/// key handed to a controller says the same, and some hosts send one before
+/// the activation, so every key reports it too. That is the focus owner. When there is none — no field is active (a remote session
 /// capturing raw keys), the client gave no bundle ID, or another input source is
 /// selected so IMK is not talking to PriType at all — the frontmost app decides,
 /// as it always did.
@@ -54,6 +55,10 @@ public final class ToggleExclusionPolicy: Sendable {
         /// The app whose field IMK last activated PriType for, and which
         /// controller reported it: only that controller's deactivation clears it.
         var focusOwner: (bundleID: String, owner: ObjectIdentifier)?
+        /// The bundle ID as `focusOwner`'s controller reported it, before
+        /// normalizing: every key reports it again, and an unchanged report
+        /// must cost no more than this comparison.
+        var focusOwnerReported: String?
         var excludedBundleIDs: Set<String> = []
         var observer: NSObjectProtocol?
     }
@@ -152,13 +157,18 @@ public final class ToggleExclusionPolicy: Sendable {
         }
     }
 
-    /// IMK activated `owner` (an input controller) for a field of `bundleID`.
-    /// A nil or blank bundle ID leaves the decision to the frontmost app.
-    /// Main thread, from the IMK lifecycle.
+    /// IMK activated `owner` (an input controller) for a field of `bundleID`,
+    /// or handed it a key. A nil or blank bundle ID leaves the decision to the
+    /// frontmost app. Main thread, from the IMK lifecycle and every keystroke.
     public func focusDidMove(to bundleID: String?, owner: ObjectIdentifier) {
+        let unchanged = state.withLock { state in
+            state.focusOwner?.owner == owner && state.focusOwnerReported == bundleID
+        }
+        guard !unchanged else { return }
         let normalized = bundleID.map(Self.normalize).flatMap { $0.isEmpty ? nil : $0 }
         state.withLock { state in
             state.focusOwner = normalized.map { ($0, owner) }
+            state.focusOwnerReported = normalized == nil ? nil : bundleID
         }
     }
 

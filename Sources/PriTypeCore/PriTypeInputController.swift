@@ -675,6 +675,9 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         let session = Signposts.interval(Signposts.keystroke, Signposts.Stage.session, id: signpostID, recording: recording) {
             ensureSession(for: client)
         }
+        // A key for this client says it has focus, even before (or without) the
+        // activation that would have said so: some hosts deliver keys first.
+        Self.focusOwnerPolicy.focusDidMove(to: session.context.bundleId, owner: ObjectIdentifier(self))
 
         // A toggle or Hanja key pressed just before this key may still be waiting
         // for its hop from the key-monitor thread. Run it now so this key lands in
