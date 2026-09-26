@@ -148,6 +148,10 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
     }
     private var frozen: (text: NSString, selection: NSRange)?
 
+    /// Some hosts report a caret but answer every request for text with nothing.
+    /// While this is set, `attributedSubstring` returns nil.
+    public var hidesText = false
+
     /// How many times the input method asked for the caret and for text. Query
     /// count is the IPC cost a host pays for a keystroke.
     public private(set) var selectionQueries = 0
@@ -241,6 +245,7 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
 
     public func attributedSubstring(from range: NSRange) -> NSAttributedString! {
         substringQueries += 1
+        guard !hidesText else { return nil }
         let text = reported.text
         guard range.location != NSNotFound, NSMaxRange(range) <= text.length else { return nil }
         return NSAttributedString(string: text.substring(with: range))

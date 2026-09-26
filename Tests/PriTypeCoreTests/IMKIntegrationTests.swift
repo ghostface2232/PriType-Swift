@@ -760,6 +760,25 @@ struct IMKIntegrationTests {
         #expect(!harness.candidates.isVisible)
     }
 
+    @Test("A candidate chosen in a host that will not show its text replaces nothing")
+    func hanjaHostHidesText() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "요"))
+        harness.press(.space)
+        harness.type(Dubeolsik.keys(for: "한"))
+        harness.pressHanjaKey()
+        #expect(harness.candidates.entries.first?.hanja == "韓")
+        // The caret moved without the input method hearing of it, and the host
+        // reports the caret but not the text before it: nothing proves that the
+        // unit before the caret is still the 한 the candidate was looked up from.
+        field.client.placeCaret(at: 1)
+        field.client.hidesText = true
+        harness.candidates.choose(1)
+        #expect(field.client.text == "요 한", "요 must not be overwritten blindly")
+        #expect(!harness.candidates.isVisible)
+    }
+
     @Test("After a click closes the candidates, the next lookup reads the host, not the old buffer")
     func hanjaClickClearsBuffer() {
         let (harness, field) = start()

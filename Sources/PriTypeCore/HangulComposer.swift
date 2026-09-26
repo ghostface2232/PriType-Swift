@@ -721,7 +721,7 @@ public class HangulComposer: @unchecked Sendable {
                         let replaceRange = NSRange(location: selRange.location - replacementLength, length: replacementLength)
                         let current = client.attributedSubstring(from: replaceRange)?.string
                         guard Self.canReplace(current, with: entry) else {
-                            DebugLogger.log("Hanja: text before the caret changed since show — aborting selection")
+                            DebugLogger.log("Hanja: text before the caret changed since show, or the host would not show it — aborting selection")
                             self.hanjaMode = false
                             return
                         }
@@ -761,13 +761,17 @@ public class HangulComposer: @unchecked Sendable {
     /// Whether a candidate may replace the text before the caret. The caret can
     /// move without the IME hearing of it (a click, when nothing is marked), and
     /// then the text before it is not what was looked up — for one syllable as
-    /// much as for a word. So when the host reports that text it must match.
+    /// much as for a word. So the host's text there must match.
     /// Checking one syllable also refuses decomposed (NFD) text, where the
-    /// replaced UTF-16 unit would be a lone jamo of the syllable. A host that
-    /// cannot report its text (nil, or an empty string from hosts that answer
-    /// with nothing) is still replaced blindly: there is nothing to check.
+    /// replaced UTF-16 unit would be a lone jamo of the syllable.
+    ///
+    /// A host that reports a caret but not the text before it (nil, or an empty
+    /// string from hosts that answer with nothing) is refused too, as
+    /// `BaseClientAdapter.replaceTextBeforeCursor` refuses it: unreadable is not
+    /// the same as unchanged, and a replacement range computed from a caret that
+    /// moved, or from a stale one, would overwrite whatever now sits there.
     static func canReplace(_ current: String?, with entry: HanjaEntry) -> Bool {
-        guard let current, !current.isEmpty else { return true }
+        guard let current, !current.isEmpty else { return false }
         return current.precomposedStringWithCanonicalMapping == entry.hangul.precomposedStringWithCanonicalMapping
     }
 
