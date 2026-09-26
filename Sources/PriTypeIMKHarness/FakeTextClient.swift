@@ -156,6 +156,7 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
     /// count is the IPC cost a host pays for a keystroke.
     public private(set) var selectionQueries = 0
     public private(set) var substringQueries = 0
+    public private(set) var markedRangeQueries = 0
     /// Context questions: `validAttributesForMarkedText` and `bundleIdentifier`.
     public private(set) var attributeQueries = 0
     public private(set) var bundleQueries = 0
@@ -168,6 +169,7 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
     public func resetQueryCounts() {
         selectionQueries = 0
         substringQueries = 0
+        markedRangeQueries = 0
         attributeQueries = 0
         bundleQueries = 0
     }
@@ -240,7 +242,8 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
     }
 
     public func markedRange() -> NSRange {
-        marked ?? NSRange(location: NSNotFound, length: 0)
+        markedRangeQueries += 1
+        return marked ?? NSRange(location: NSNotFound, length: 0)
     }
 
     public func attributedSubstring(from range: NSRange) -> NSAttributedString! {

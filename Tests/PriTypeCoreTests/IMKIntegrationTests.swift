@@ -482,6 +482,17 @@ struct IMKIntegrationTests {
         #expect(field.client.text == "한ㅏ")
     }
 
+    @Test("Finalizing a composition does not ask the host where its marked text is")
+    func finalizeAsksNothing() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type("gks")
+        field.client.resetQueryCounts()
+        harness.click()
+        #expect(field.client.text == "한")
+        #expect(field.client.markedRangeQueries == 0, "insertText with NSNotFound finds it itself")
+    }
+
     @Test("The same keyDown delivered twice is processed once")
     func duplicateKeyDown() {
         let (harness, field) = start()
