@@ -143,8 +143,8 @@ struct HanjaManagerLoadingTests {
         let release = DispatchSemaphore(value: 0)
     }
 
-    @Test("A search while another thread loads returns at once, then finds entries")
-    func searchDoesNotWaitForLoad() throws {
+    @Test("A search while another thread loads waits for it and finds entries")
+    func searchWaitsForLoad() throws {
         let data = try HanjaDictionary.compile(source: HanjaDictionaryTests.sample)
         let gate = Gate()
         let manager = HanjaManager(loader: {
@@ -152,18 +152,41 @@ struct HanjaManagerLoadingTests {
             gate.release.wait()
             return try? HanjaDictionary(data: data)
         })
-        let loader = Thread { manager.loadIfNeeded() }
-        loader.start()
+        // Long enough that only a hang could outlast it, whatever else runs.
+        manager.loadWaitLimit = 30
+        Thread { manager.loadIfNeeded() }.start()
+        gate.started.wait()
+        // The load finishes a moment after the Hanja key: the key still gets its
+        // candidates, rather than none until it is pressed again.
+        Thread {
+            Thread.sleep(forTimeInterval: 0.02)
+            gate.release.signal()
+        }.start()
+        #expect(manager.search(key: "가").count == 3)
+        #expect(manager.isLoaded)
+    }
+
+    @Test("A load that does not finish in time leaves the search empty, not stuck")
+    func searchWaitIsBounded() throws {
+        let data = try HanjaDictionary.compile(source: HanjaDictionaryTests.sample)
+        let gate = Gate()
+        let manager = HanjaManager(loader: {
+            gate.started.signal()
+            gate.release.wait()
+            return try? HanjaDictionary(data: data)
+        })
+        let finished = DispatchSemaphore(value: 0)
+        Thread { manager.loadIfNeeded(); finished.signal() }.start()
         gate.started.wait()
 
         let start = Date()
-        #expect(manager.search(key: "가").isEmpty)
-        #expect(Date().timeIntervalSince(start) < 0.5)
+        #expect(manager.searchWord(endingWith: "가가가가").isEmpty)
+        // One wait for the whole word, not one per ending (four would be 0.8 s).
+        #expect(Date().timeIntervalSince(start) < manager.loadWaitLimit * 3)
         #expect(!manager.isLoaded)
 
         gate.release.signal()
-        manager.loadIfNeeded() // waits for the loading thread
-        #expect(manager.isLoaded)
+        finished.wait()
         #expect(manager.search(key: "가").count == 3)
     }
 
