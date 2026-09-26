@@ -5,7 +5,7 @@ All notable changes to PriType-Swift will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.9.0] - 2026-09-26 (Stable)
 
 ### 수정 (업데이트 암호 창이 입력을 멈춤 — 2026-09-25)
 - 앱 안 업데이트의 관리자 암호 창이 떠 있는 동안 PriType의 메인 스레드가 멈춰 있었습니다. 암호 창을 띄우는 `do shell script … with administrator privileges`가 사용자가 답할 때까지 호출한 스레드를 붙잡는데, 입력기의 메인 스레드는 모든 앱의 키 입력을 처리합니다. 그래서 창을 띄워 둔 채 다른 앱에서 치는 글자는 응답을 받지 못했습니다. 이제 PriType 실행 파일을 인자와 함께 자식 프로세스로 한 번 더 띄워 그쪽에서 암호를 묻고, 입력기는 결과를 비동기로 기다립니다. 자식은 AppKit과 IMK를 시작하기 전에 암호만 묻고 끝나며, 같은 실행 파일이라 암호 창은 여전히 "PriType"의 요청으로 뜹니다(macOS 27에서 확인). 누구든 PriType을 이 방식으로 실행할 수 있으므로, 자식은 경로나 해시를 건네받지 않고 스테이징 디렉터리의 패키지와 서명된 manifest를 스스로 검증합니다. 릴리스 키로 서명되고 지금보다 새 버전이며 패키지와 바이트 단위로 맞을 때만 암호를 묻습니다.
