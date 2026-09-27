@@ -76,6 +76,11 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
         reentries.append((call, body))
     }
 
+    /// Forget what `onNext` queued for calls the input method has not made.
+    public func cancelReentries() {
+        reentries.removeAll()
+    }
+
     private func reenter(_ call: Reentry) {
         guard let index = reentries.firstIndex(where: { $0.0 == call }) else { return }
         let body = reentries.remove(at: index).1
