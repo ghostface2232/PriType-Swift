@@ -26,6 +26,11 @@ public protocol HangulComposerDelegate: AnyObject {
     /// Called when the in-progress composition text should be displayed
     /// - Parameter text: The preedit text (incomplete Hangul being composed)
     func setMarkedText(_ text: String)
+
+    /// Called when Backspace takes a jamo off the syllable being composed, with
+    /// what is left of it. Shown like any other preedit (`setMarkedText`) unless
+    /// the delivery path has to answer the key differently.
+    func setMarkedTextAfterBackspace(_ text: String)
     
     /// Returns the text immediately before the current cursor position
     /// - Parameter length: Maximum length of text to retrieve
@@ -72,6 +77,12 @@ public protocol HangulComposerDelegate: AnyObject {
     /// may answer where the last one refused. Gives up what was remembered and
     /// lets a host the rewrite had written off be tried again.
     func resumePrecomposing()
+}
+
+public extension HangulComposerDelegate {
+    func setMarkedTextAfterBackspace(_ text: String) {
+        setMarkedText(text)
+    }
 }
 
 // MARK: - TextReplacementResult

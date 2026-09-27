@@ -131,6 +131,22 @@ public enum ClientCompatibilityPolicy {
         hermesBundleIds.contains(bundleId)
     }
 
+    /// Hosts whose keys go through Chromium's `RenderWidgetHostViewCocoa -keyEvent:`
+    /// (Hermes and Blink renderers). Two things follow for real-text composition:
+    ///
+    /// - The web page gets the keydown of a key the input method handled whenever
+    ///   the key finds no marked text, leaves none and inserts at most one
+    ///   character at the caret; only for the others does it get a "Process" key.
+    ///   The page then runs the key's default action. After a Backspace that the
+    ///   input method answered by rewriting real text in place, that is one more
+    ///   delete: in Hermes, 닭 ⌫ left an empty field, not 달.
+    /// - Text inserted at the caret while a key is handled is held until the key is
+    ///   done, and meanwhile the host answers from its marked range. Once the key
+    ///   has committed marked text, no report shows what it writes after that.
+    public static func usesChromiumKeyHandling(bundleId: String) -> Bool {
+        hermesBundleIds.contains(bundleId) || compositionRenderer(bundleId: bundleId) == .blink
+    }
+
     /// Whether direct insertion must be denied for `bundleId` because the host cannot
     /// reliably support in-place real-text rewrites (Electron/Chromium/browsers).
     /// Explicit list + a keyword heuristic for unlisted Electron/Chromium wrappers.

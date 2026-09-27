@@ -226,32 +226,36 @@ struct DirectInsertionSessionTests {
     @Test("Backspace decomposition stops at the committed boundary")
     func backspaceStopsAtCommittedBoundary() {
         // Exercised against the REAL DirectInsertionAdapter (not a mock mirror),
-        // so the adapter's live-range tracking and state machine are covered.
-        let (composer, client, session) = makeSession()
-        #expect(session.adapter is DirectInsertionAdapter)
+        // so the adapter's live-range tracking and state machine are covered. A
+        // native host's: Hermes marks what Backspace leaves (see
+        // `IMKIntegrationTests.hermesBackspaceTakesOneJamo`), and this fake keeps
+        // no marked text in its document.
+        let composer = HangulComposer(configuration: MockConfiguration())
+        let client = FakeIMKTextInput()
+        let adapter = DirectInsertionAdapter(client: client, bundleId: "com.apple.TextEdit")
 
         // Commit 가 with a space, then start a fresh syllable on top of it.
         for (char, code): (String, UInt16) in [("r", 15), ("k", 40)] {
-            _ = composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: session.adapter)
+            _ = composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: adapter)
         }
-        _ = composer.handle(TestEventFactory.keyEvent(char: " ", keyCode: KeyCode.space)!, delegate: session.adapter)
+        _ = composer.handle(TestEventFactory.keyEvent(char: " ", keyCode: KeyCode.space)!, delegate: adapter)
         let committed = client.document
         #expect(committed == "가 ", "setup produced '\(committed)'")
 
         let callsAfterCommit = client.insertCalls.count
         for (char, code): (String, UInt16) in [("s", 1), ("k", 40)] {  // ㄴ, 나
-            _ = composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: session.adapter)
+            _ = composer.handle(TestEventFactory.keyEvent(char: char, keyCode: code)!, delegate: adapter)
         }
         #expect(client.document == committed + "나")
 
         // Decompose the live syllable away. The committed prefix must survive, and
         // the adapter must only ever rewrite its own tracked live range — any write
         // reaching further back would show up as a replacement spanning it.
-        #expect(composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: session.adapter))
+        #expect(composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: adapter))
         #expect(client.document == committed + "ㄴ", "got '\(client.document)'")
         // The last jamo is committed as real text and the key goes to the host,
         // whose own deleteBackward removes it.
-        #expect(!composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: session.adapter))
+        #expect(!composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: adapter))
         #expect(client.document == committed + "ㄴ", "got '\(client.document)'")
         let afterHostDelete = String(client.document.dropLast())
         client.replaceDocument(afterHostDelete, selection: NSRange(location: afterHostDelete.utf16.count, length: 0))
@@ -277,7 +281,7 @@ struct DirectInsertionSessionTests {
 
         // With no preedit left the key passes through to the host rather than
         // PriType deleting committed text itself.
-        #expect(!composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: session.adapter))
+        #expect(!composer.handle(TestEventFactory.keyEvent(char: "\u{7F}", keyCode: KeyCode.backspace)!, delegate: adapter))
         #expect(client.document == committed, "got '\(client.document)'")
     }
 

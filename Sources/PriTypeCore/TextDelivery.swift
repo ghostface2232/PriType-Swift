@@ -204,6 +204,10 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
         // Default: no-op, subclasses override
     }
 
+    func setMarkedTextAfterBackspace(_ text: String) {
+        setMarkedText(text)
+    }
+
     func textBeforeCursor(length: Int) -> String? {
         let selRange = client.selectedRange()
         guard selRange.location != NSNotFound, selRange.location < 10000000 else { return nil } // Protect against Chromium garbage values
@@ -434,6 +438,7 @@ final class DirectInsertionAdapter: BaseClientAdapter {
     func resetPreeditTracking() {
         state = .idle
         preparedLiveRange = nil
+        keyCommittedMarkedText = false
     }
 
     var requiresMarkedTextFinalize: Bool {
@@ -468,6 +473,7 @@ final class DirectInsertionAdapter: BaseClientAdapter {
     /// the current key. The old real text is already committed in the document; the
     /// flush is engine-only and lets the current key begin a fresh composition.
     func prepareForInput() -> Bool {
+        keyCommittedMarkedText = false
         guard case let .directLive(range, text) = state else {
             preparedLiveRange = nil
             return false
@@ -491,12 +497,31 @@ final class DirectInsertionAdapter: BaseClientAdapter {
         return false
     }
 
-    private func renderMarkedFallback(_ text: String) {
+    private func renderMarkedFallback(
+        _ text: String,
+        replacing replacementRange: NSRange = NSRange(location: NSNotFound, length: NSNotFound)
+    ) {
         let attributed = NSAttributedString(string: text, attributes: preeditAttributes)
         client.setMarkedText(
             attributed,
             selectionRange: NSRange(location: text.utf16.count, length: 0),
-            replacementRange: NSRange(location: NSNotFound, length: NSNotFound)
+            replacementRange: replacementRange
+        )
+    }
+
+    /// Whether the live preedit still stands at `range`, the caret right after it.
+    /// `prepareForInput()` has already checked it for the key being handled; any
+    /// other caller asks the host again. Never overwrite a range we cannot prove.
+    private func liveRangeHolds(_ range: NSRange, expectedText: String) -> Bool {
+        if preparedLiveRange == range {
+            preparedLiveRange = nil
+            return true
+        }
+        return DirectInsertionPlanner.liveRegionIsVerified(
+            selectionRange: client.selectedRange(),
+            liveRange: range,
+            actualSubstring: client.attributedSubstring(from: range)?.string,
+            expectedText: expectedText
         )
     }
 
@@ -508,26 +533,12 @@ final class DirectInsertionAdapter: BaseClientAdapter {
 
         switch state {
         case let .directLive(range, expectedText):
-            if preparedLiveRange == range {
-                preparedLiveRange = nil
-                replacementRange = range
-            } else {
-                // Delegate calls outside InputSession's keystroke pipeline still get
-                // the same integrity guard. Never overwrite a range we cannot prove.
-                let selection = client.selectedRange()
-                let actual = client.attributedSubstring(from: range)?.string
-                guard DirectInsertionPlanner.liveRegionIsVerified(
-                    selectionRange: selection,
-                    liveRange: range,
-                    actualSubstring: actual,
-                    expectedText: expectedText
-                ) else {
-                    state = .idle
-                    rewriteLivePreedit(with: text, keepingLive: keepingLive)
-                    return
-                }
-                replacementRange = range
+            guard liveRangeHolds(range, expectedText: expectedText) else {
+                state = .idle
+                rewriteLivePreedit(with: text, keepingLive: keepingLive)
+                return
             }
+            replacementRange = range
 
         case .idle:
             writeAtHostCaret(text, keepingLive: keepingLive)
@@ -569,6 +580,12 @@ final class DirectInsertionAdapter: BaseClientAdapter {
     /// may have changed (`resumePrecomposing`).
     private var hostReportsLag = false
 
+    /// Set when the key being handled committed marked text in a host with
+    /// Chromium's key handling. Its reports cannot show a syllable written after
+    /// that until the key is done, so that syllable is marked too — without taking
+    /// the host for one whose reports lag. Cleared by the next key.
+    private var keyCommittedMarkedText = false
+
     /// Set while IMK is deactivating the field inside a call a keystroke made into
     /// the host (`InputSession.hostMayDropEdits`). A write that does not show in
     /// the host's answer then was dropped, not overtaken by a lagging report.
@@ -592,6 +609,13 @@ final class DirectInsertionAdapter: BaseClientAdapter {
             // in a host with no caret (Google Docs) the next mark replaced it.
             noteOwnOutput()
             client.insertText(text, replacementRange: atCaret)
+            return
+        }
+
+        if keyCommittedMarkedText {
+            state = .markedFallback
+            preparedLiveRange = nil
+            renderMarkedFallback(text)
             return
         }
 
@@ -633,6 +657,7 @@ final class DirectInsertionAdapter: BaseClientAdapter {
             super.insertText(text)   // base: NSNotFound auto-replaces marked text
             state = .idle
             preparedLiveRange = nil
+            keyCommittedMarkedText = ClientCompatibilityPolicy.usesChromiumKeyHandling(bundleId: bundleId)
             return
         }
         guard !text.isEmpty else { return }
@@ -645,6 +670,27 @@ final class DirectInsertionAdapter: BaseClientAdapter {
     override func setMarkedText(_ text: String) {
         // No marked text in direct insertion: render the preedit as real text in place.
         rewriteLivePreedit(with: text, keepingLive: true)
+    }
+
+    /// What Backspace leaves of the syllable. A host that hands the page the key
+    /// anyway (`ClientCompatibilityPolicy.usesChromiumKeyHandling`) runs its own
+    /// delete right after an in-place rewrite, so there it is marked over the real
+    /// text instead: a key that leaves marked text reaches the page as "Process",
+    /// which deletes nothing. The syllable stays marked until it ends; the next one
+    /// is real text again.
+    override func setMarkedTextAfterBackspace(_ text: String) {
+        guard !text.isEmpty, state != .markedFallback,
+              ClientCompatibilityPolicy.usesChromiumKeyHandling(bundleId: bundleId) else {
+            return setMarkedText(text)
+        }
+        var replacementRange = NSRange(location: NSNotFound, length: NSNotFound)
+        if case let .directLive(range, expectedText) = state,
+           liveRangeHolds(range, expectedText: expectedText) {
+            replacementRange = range
+        }
+        state = .markedFallback
+        preparedLiveRange = nil
+        renderMarkedFallback(text, replacing: replacementRange)
     }
 
     override func replaceTextBeforeCursor(length: Int, with text: String, verifying context: String) -> TextReplacementResult {
