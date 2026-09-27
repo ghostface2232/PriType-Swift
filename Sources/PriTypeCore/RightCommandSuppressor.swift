@@ -411,7 +411,13 @@ public final class RightCommandSuppressor: Sendable {
             // Track Control key state (for Control+Space combo)
             state.controlIsDown = flags.contains(.maskControl)
 
-            if (keyCode == 54 || keyCode == 55) && ModifierKeyState.isDown(keyCode, flags: flags.rawValue) {
+            let isHanjaModifier = priTypeHanjaEnabled && hanjaBinding.isModifierKey && hanjaBinding.isModifierOnly
+                && keyCode == hanjaBinding.keyCode && keyCode != toggleBinding.keyCode
+
+            // A ⌘ bound as the Hanja key starts no shortcut: it opens and closes
+            // the candidates.
+            if (keyCode == 54 || keyCode == 55) && !isHanjaModifier
+                && ModifierKeyState.isDown(keyCode, flags: flags.rawValue) {
                 state.onCommandDown?(Self.eventTime(of: event))
             }
 
@@ -460,8 +466,7 @@ public final class RightCommandSuppressor: Sendable {
             }
             
             // Dynamic hanja key — modifier key, single-key binding (only if different from toggle key)
-            if priTypeHanjaEnabled && hanjaBinding.isModifierKey && hanjaBinding.isModifierOnly
-                && keyCode == hanjaBinding.keyCode && keyCode != toggleBinding.keyCode {
+            if isHanjaModifier {
                 let isPressed = ModifierKeyState.isDown(keyCode, flags: flags.rawValue)
                 
                 if isPressed {

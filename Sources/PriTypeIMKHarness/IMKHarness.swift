@@ -318,6 +318,12 @@ public final class IMKHarness {
         InputModeCoordinator.shared.applyPendingKeyActions()
     }
 
+    /// ⌘ going down, as the event tap reports it before the shortcut's key.
+    public func pressCommand() {
+        InputModeCoordinator.shared.requestShortcutCommit(eventTime: takeClock())
+        InputModeCoordinator.shared.applyPendingKeyActions()
+    }
+
     /// Run everything the key monitor queued, and leave the shared engine idle.
     public func finish() {
         clock += Self.clickTime

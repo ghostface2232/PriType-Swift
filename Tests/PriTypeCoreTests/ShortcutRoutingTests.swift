@@ -86,6 +86,25 @@ struct ShortcutRoutingTests {
         #expect(seen.snapshot == ["1.0", "3.0"])
     }
 
+    @Test("A ⌘ bound as the Hanja key is not reported as the start of a shortcut")
+    func hanjaCommandIsNotAShortcut() throws {
+        let tap = RightCommandSuppressor()
+        let seen = ShortcutActions()
+        tap.onCommandDown = { _ in seen.record("command") }
+        tap.onHanjaLookup = { _ in }
+        let toggle = KeyBinding(keyCode: 105, modifiers: 0, displayName: "F13")
+        let hanja = KeyBinding(keyCode: 54, modifiers: 0, displayName: "Right Command")
+        let command = CGEventFlags.maskCommand.rawValue
+        for (keyCode, flags) in [(CGKeyCode(54), command | 0x10), (54, 0), (55, command | 0x8)] {
+            let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true))
+            event.type = .flagsChanged
+            event.flags = CGEventFlags(rawValue: flags)
+            _ = tap.handleEvent(type: .flagsChanged, event: event, toggle: toggle, hanja: hanja,
+                                toggleEnabled: true, hanjaEnabled: true, excludedOverride: false)
+        }
+        #expect(seen.snapshot == ["command"], "left ⌘ only")
+    }
+
     @Test("Holding an ordinary toggle key fires once and stays suppressed")
     func autorepeatFiresOnce() async throws {
         let tap = RightCommandSuppressor()

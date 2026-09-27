@@ -768,7 +768,7 @@ struct IMKIntegrationTests {
         defer { harness.finish() }
         harness.type(Dubeolsik.keys(for: "대한민국"))
         harness.pressHanjaKey()
-        #expect(field.client.markedText == nil, "the syllable is committed for the lookup")
+        #expect(field.client.markedText == "국", "the syllable stays marked for the lookup")
         #expect(harness.candidates.entries.first?.hanja == "大韓民國")
         harness.type("1")
         #expect(field.client.text == "大韓民國")
@@ -788,16 +788,26 @@ struct IMKIntegrationTests {
         #expect(field.client.text == "대한민國가")
     }
 
+    /// Type `word` and leave it committed, with nothing marked: a space commits
+    /// it and a Backspace takes the space back. A lookup then reads committed
+    /// text, and IMK says nothing when a click moves the caret away from it.
+    private func typeCommitted(_ harness: IMKHarness, _ word: String) {
+        harness.type(Dubeolsik.keys(for: word))
+        harness.press(.space)
+        harness.press(.backspace)
+    }
+
     @Test("A one-syllable candidate chosen after the caret moved leaves the text alone")
     func hanjaAfterCaretMoved() {
         let (harness, field) = start()
         defer { harness.finish() }
         harness.type(Dubeolsik.keys(for: "요"))
         harness.press(.space)
-        harness.type(Dubeolsik.keys(for: "한"))
+        typeCommitted(harness, "한")
         harness.pressHanjaKey()
         #expect(harness.candidates.entries.first?.hanja == "韓")
-        // A click after 요: IMK tells the input method nothing, nothing is marked.
+        #expect(field.client.markedText == nil)
+        // A click after 요: nothing is marked, so IMK tells the input method nothing.
         field.client.placeCaret(at: 1)
         harness.candidates.choose(1)
         #expect(field.client.text == "요 한", "요 is not the 한 the candidate was looked up from")
@@ -810,7 +820,7 @@ struct IMKIntegrationTests {
         defer { harness.finish() }
         harness.type(Dubeolsik.keys(for: "요"))
         harness.press(.space)
-        harness.type(Dubeolsik.keys(for: "한"))
+        typeCommitted(harness, "한")
         harness.pressHanjaKey()
         #expect(harness.candidates.entries.first?.hanja == "韓")
         // The caret moved without the input method hearing of it, and the host
@@ -844,18 +854,65 @@ struct IMKIntegrationTests {
         defer { harness.finish() }
         harness.type(Dubeolsik.keys(for: "요"))
         harness.press(.space)
-        harness.type(Dubeolsik.keys(for: "한"))
+        typeCommitted(harness, "한")
         harness.pressHanjaKey()
         field.client.placeCaret(at: 0)
         harness.candidates.choose(1)
         #expect(field.client.text == "요 한")
 
-        harness.type(Dubeolsik.keys(for: "대한민국"))   // now at the start: 대한민국요 한
+        typeCommitted(harness, "대한민국")   // now at the start: 대한민국요 한
         harness.pressHanjaKey()
         #expect(harness.candidates.entries.first?.hanja == "大韓民國")
         field.client.placeCaret(at: 2)
         harness.candidates.choose(1)
         #expect(field.client.text == "대한민국요 한", "not 대한大韓民國민국요 한")
+    }
+
+    @Test("A candidate for the marked syllable replaces it without a range, which some hosts drop")
+    func hanjaReplacesMarkedSyllable() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        field.client.ignoresReplacementRange = true   // Figma: edits land at the caret
+        harness.type(Dubeolsik.keys(for: "요"))
+        harness.press(.space)
+        harness.type(Dubeolsik.keys(for: "한"))
+        harness.pressHanjaKey()
+        harness.type("1")
+        #expect(field.client.text == "요 韓", "not 요 한韓")
+        #expect(field.client.markedText == nil)
+
+        harness.type("a")                               // ㅁ: symbols
+        harness.pressHanjaKey()
+        let symbol = harness.candidates.entries.first?.hanja
+        harness.type("1")
+        #expect(field.client.text == "요 韓" + (symbol ?? "?"))
+    }
+
+    @Test("Candidates closed without a choice keep the syllable as typed")
+    func hanjaEscapeKeepsSyllable() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "한"))
+        harness.pressHanjaKey()
+        #expect(harness.press(.escape))
+        #expect(field.client.text == "한")
+        #expect(field.client.markedText == nil)
+        harness.type(Dubeolsik.keys(for: "가"))
+        #expect(field.client.text == "한가", "a new syllable, not one joined to 한")
+    }
+
+    @Test("⌘ going down with the candidates up closes them and commits the syllable before the shortcut")
+    func hanjaClosedByShortcut() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "한"))
+        harness.pressHanjaKey()
+        #expect(field.client.markedText == "한")
+        // Chromium drops a shortcut whose key arrives over marked text.
+        harness.pressCommand()
+        #expect(!harness.candidates.isVisible)
+        #expect(field.client.text == "한")
+        #expect(field.client.markedText == nil)
     }
 
     @Test("A lookup in another app never joins the last syllable typed in the previous one")
