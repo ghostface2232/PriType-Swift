@@ -13,10 +13,10 @@ import PriTypeIMKHarness
 struct IMKIntegrationTests {
     private typealias Call = FakeTextClient.Call
 
-    private func start() -> (IMKHarness, IMKHarness.Field) {
+    private func start(bundleID: String = "com.pritype.imk-harness") -> (IMKHarness, IMKHarness.Field) {
         PriTypeInputController.resetSystemModeTracking()
         let harness = IMKHarness()
-        let field = harness.makeField()
+        let field = harness.makeField(bundleID: bundleID)
         harness.focus(field)
         return (harness, field)
     }
@@ -1292,5 +1292,47 @@ struct IMKIntegrationTests {
         field.client.ignoresEdits = false   // the host is back, IMK never says so
         harness.click()
         #expect(field.client.text == "한글 한ㄱ", "the dropped ㄱ is committed, not lost")
+    }
+
+    // MARK: Direct insertion in a Chromium host
+
+    @Test("In Hermes, Backspace takes one jamo off a real-text syllable although the page still gets the key")
+    func hermesBackspaceTakesOneJamo() {
+        let (harness, field) = start(bundleID: "com.nousresearch.hermes")
+        defer { harness.finish() }
+        field.client.forwardsHandledKeyDowns = true
+        harness.type("ekfr")                                         // 닭
+        #expect(field.client.text == "닭")
+        #expect(field.client.markedText == nil, "Hermes composes in real text")
+        #expect(harness.press(.backspace))
+        #expect(field.client.text == "달", "not an empty field: the page's own delete must not follow the rewrite")
+        #expect(field.client.markedText == "달")
+        harness.type("r")
+        #expect(field.client.text == "닭")
+        harness.press(.space)
+        #expect(field.client.text == "닭 ")
+        harness.type("rk")
+        #expect(field.client.markedText == nil, "the next syllable is real text again")
+
+        harness.type("sk")                                           // 가나
+        #expect(field.client.text == "닭 가나")
+        harness.press(.backspace)
+        #expect(field.client.text == "닭 가ㄴ", "not 닭 가")
+        harness.press(.backspace)
+        #expect(field.client.text == "닭 가")
+        harness.press(.backspace)
+        #expect(field.client.text == "닭 ")
+    }
+
+    @Test("In a native host, Backspace keeps a real-text syllable real text")
+    func nativeDirectInsertionBackspaceStaysRealText() {
+        let restore = Self.enableDirectInsertion()
+        defer { restore() }
+        let (harness, field) = start(bundleID: "com.apple.TextEdit")
+        defer { harness.finish() }
+        harness.type("ekfr")
+        #expect(harness.press(.backspace))
+        #expect(field.client.text == "달")
+        #expect(field.client.markedText == nil)
     }
 }

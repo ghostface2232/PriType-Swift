@@ -267,7 +267,7 @@ public class HangulComposer: @unchecked Sendable {
                     delegate.forgetLastPrecomposedSyllable()
                     return false
                 }
-                delegate.setMarkedText(engine.composing.map(String.init) ?? "")
+                delegate.setMarkedTextAfterBackspace(engine.composing.map(String.init) ?? "")
                 return true
             }
             if !localTextBuffer.isEmpty { localTextBuffer.removeLast() }

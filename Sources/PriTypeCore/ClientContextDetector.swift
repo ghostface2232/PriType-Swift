@@ -131,6 +131,17 @@ public enum ClientCompatibilityPolicy {
         hermesBundleIds.contains(bundleId)
     }
 
+    /// Chromium, and so every Electron app, hands the web page the keydown of a
+    /// key the input method handled whenever the key finds no marked text, leaves
+    /// none and inserts at most one character at the caret; only for the others
+    /// does it send the page a "Process" key (`RenderWidgetHostViewCocoa
+    /// -keyEvent:`). The page then runs the key's default action. After a
+    /// Backspace that the input method answered by rewriting real text in place,
+    /// that is one more delete: in Hermes, 닭 ⌫ left an empty field, not 달.
+    public static func forwardsHandledKeyDowns(bundleId: String) -> Bool {
+        hermesBundleIds.contains(bundleId) || compositionRenderer(bundleId: bundleId) == .blink
+    }
+
     /// Whether direct insertion must be denied for `bundleId` because the host cannot
     /// reliably support in-place real-text rewrites (Electron/Chromium/browsers).
     /// Explicit list + a keyword heuristic for unlisted Electron/Chromium wrappers.

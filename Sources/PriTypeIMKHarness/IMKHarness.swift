@@ -249,10 +249,9 @@ public final class IMKHarness {
     private func keyDown(_ event: NSEvent) -> Bool {
         guard let field = focused else { preconditionFailure("No focused field") }
         let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        field.client.keyDownWillReachInputMethod()
         let handled = field.controller.handle(event, client: field.client)
-        if !handled {
-            field.client.performHostAction(for: event)
-        }
+        field.client.finishKeyDown(event, handledByInputMethod: handled)
         keyLatencies.append(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - start)
         return handled
     }

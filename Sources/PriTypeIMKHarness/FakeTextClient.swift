@@ -221,6 +221,9 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
     public func insertText(_ string: Any!, replacementRange: NSRange) {
         let text = Self.plain(string)
         guard !ignoresEdits else { return log(.dropped(text)) }
+        if replacementRange.location == NSNotFound {
+            keyInProgress?.insertedAtCaret += (text as NSString).length
+        }
         let inserted = replace(target(for: replacementRange), with: text)
         marked = nil
         selection = NSRange(location: NSMaxRange(inserted), length: 0)
@@ -319,6 +322,39 @@ public final class FakeTextClient: NSObject, IMKTextInput, GlobalSecureInputRepo
     public func uniqueClientIdentifierString() -> String! { "\(bundleID).\(ObjectIdentifier(self).hashValue)" }
 
     // MARK: Host behavior
+
+    /// Chromium, and so every Electron app, hands the web page the keydown of a
+    /// key the input method handled, unless the key had marked text before or
+    /// after it or inserted more than one character at the caret: for those it
+    /// sends a "Process" key instead (`RenderWidgetHostViewCocoa -keyEvent:`).
+    /// The page then runs the key's default action. A letter's does nothing (its
+    /// text comes separately), but after an input method rewrote the text by
+    /// range, a Backspace still deletes a character. Set this to model such a host.
+    public var forwardsHandledKeyDowns = false
+
+    /// Whether the key being delivered found marked text, and how many UTF-16
+    /// units it has inserted at the caret so far.
+    private var keyInProgress: (hadMarkedText: Bool, insertedAtCaret: Int)?
+
+    /// A keyDown is about to reach the input method.
+    public func keyDownWillReachInputMethod() {
+        keyInProgress = (marked != nil, 0)
+    }
+
+    /// The input method is done with the keyDown: run what the host still does
+    /// with it — everything, if the input method passed it on.
+    public func finishKeyDown(_ event: NSEvent, handledByInputMethod handled: Bool) {
+        let key = keyInProgress
+        keyInProgress = nil
+        guard handled else { return performHostAction(for: event) }
+        guard forwardsHandledKeyDowns, let key, !key.hadMarkedText, marked == nil,
+              key.insertedAtCaret <= 1, Self.keysWithADefaultAction.contains(event.keyCode) else { return }
+        log(.host("keydown"))
+        performHostAction(for: event)
+    }
+
+    /// Backspace, Return, keypad Enter, Tab, Escape and the arrows.
+    private static let keysWithADefaultAction: Set<UInt16> = [51, 36, 76, 48, 53, 123, 124, 125, 126]
 
     /// What the host does with a key the input method did not handle, as
     /// `NSTextView` would: type its characters, delete, break the line, move.
