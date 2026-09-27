@@ -105,7 +105,10 @@ final class InputSession: @unchecked Sendable {
         guard adapter.deliveryMode != resolved else { return }
         finalize(reason: .deliveryModeChange)
         adapter = TextDeliveryPolicy.makeAdapter(for: client, context: context)
-        (adapter as? DirectInsertionAdapter)?.hostMayDropEdits = hostMayDropEdits
+        if let direct = adapter as? DirectInsertionAdapter {
+            direct.hostMayDropEdits = hostMayDropEdits
+            direct.mayStillBeRetired = mayStillBeRetired
+        }
     }
 
     /// Establish a composition boundary when a direct-insertion live range no longer
@@ -214,20 +217,15 @@ final class InputSession: @unchecked Sendable {
 
     // MARK: Carrying a syllable (see PriTypeInputController, Activation churn)
 
-    /// Whether the live syllable is still this session's alone to write, and so
-    /// can move to another one: marked text, which is only on display, or
-    /// direct-insertion text the host dropped — which from here is handled as
-    /// marked text, so that committing it here after all writes it. Real text the
-    /// host kept is in the document already, and stays there.
-    func releaseUnwrittenSyllable() -> Bool {
-        guard composer.hasActiveComposition else { return false }
-        guard let direct = adapter as? DirectInsertionAdapter else {
-            return adapter.deliveryMode == .markedText
-        }
-        if direct.requiresMarkedTextFinalize { return true }
-        guard case .directLive = direct.state, !direct.hostHoldsLivePreedit else { return false }
-        direct.continueAsMarkedText()
-        return true
+    /// Set for a key that reaches this session within `churnWindow` of its
+    /// controller taking the field over, when IMK may yet retire the controller
+    /// and drop what its client was sent. A syllable begun then is composed as
+    /// marked text even under direct insertion, so that it can be carried to
+    /// the next session: real text cannot be, since whether the retired client
+    /// took it is unknowable — a host whose reports lag looks exactly like one
+    /// that dropped the write.
+    var mayStillBeRetired = false {
+        didSet { (adapter as? DirectInsertionAdapter)?.mayStillBeRetired = mayStillBeRetired }
     }
 
     // MARK: Held deactivation (see PriTypeInputController, Re-entrant Lifecycle Calls)
@@ -323,9 +321,10 @@ final class InputSession: @unchecked Sendable {
     }
 
     /// Whether the live syllable is shown through marked text, which a host can
-    /// drop or end on its own. Direct-live text is real text; the next key's
-    /// `prepareForInput` verifies it as usual.
-    private var composesInMarkedText: Bool {
+    /// drop or end on its own, and which is only on display until committed —
+    /// so it can also be carried to another session. Direct-live text is real
+    /// text; the next key's `prepareForInput` verifies it as usual.
+    var composesInMarkedText: Bool {
         guard composer.hasActiveComposition, adapter.deliveryMode != .immediate else { return false }
         if let direct = adapter as? DirectInsertionAdapter { return direct.requiresMarkedTextFinalize }
         return true

@@ -1054,8 +1054,8 @@ struct IMKIntegrationTests {
         #expect(real.client.markedText == "나")
     }
 
-    @Test("Under direct insertion, a syllable the retired client dropped carries on; one it kept stays there")
-    func directInsertionCarriesOnlyADroppedSyllable() {
+    @Test("Under direct insertion, a syllable begun as IMK may yet retire the controller is marked, and carries on")
+    func directInsertionCarriesAnEarlySyllable() {
         let restore = Self.enableDirectInsertion()
         defer { restore() }
         let (harness, _) = start()
@@ -1063,24 +1063,35 @@ struct IMKIntegrationTests {
         let (transient, real) = churnFields(harness)
         let key = harness.makeEvent(keyCode: 1, characters: "s")   // ㄴ
         #expect(transient.controller.handle(key, client: transient.client))
-        #expect(transient.client.calls.contains(.dropped("ㄴ")), "written as real text, and dropped")
+        #expect(transient.client.calls == [.dropped("ㄴ")], "marked, not written as real text")
         harness.activateAhead(real)
         harness.type("k")                                            // ㅏ
-        #expect(real.client.text == "나", "not ㅏ: the ㄴ was written into a client that dropped it")
+        #expect(real.client.text == "나", "not ㅏ: the ㄴ was sent to a client that dropped it")
         harness.press(.space)
         #expect(real.client.text == "나 ")
 
-        // A client that took the write holds the syllable in its document, and
-        // carrying it on would type it a second time.
+        // A client whose reports lag keeps what it is sent yet reads back as if
+        // it had dropped it. Had the syllable been written there as real text,
+        // carrying it on would type it twice; as marked text, nothing of it is
+        // committed there.
         let (brief, next) = churnFields(harness, bundleID: "com.apple.TextEdit")
         brief.client.ignoresEdits = false
+        brief.client.freezeReports = true
         harness.activateAhead(brief)
         harness.type("e")                                            // ㄷ
+        #expect(brief.client.markedText == "ㄷ")
         brief.controller.deactivateServer(brief.client)
         harness.activateAhead(next)
         harness.type("k")                                            // ㅏ
-        #expect(brief.client.text == "ㄷ")
-        #expect(next.client.text == "ㅏ")
+        #expect(brief.client.committedText.isEmpty, "nothing committed in the retired client")
+        #expect(next.client.text == "다")
+
+        // Typed once the field has been served longer than IMK's churn lasts,
+        // a syllable is real text again.
+        harness.press(.space)
+        harness.type("r")
+        #expect(next.client.text == "다 ㄱ")
+        #expect(next.client.markedText == nil)
     }
 
     @Test("A key in a field IMK activates and retires within milliseconds carries on in the next one")

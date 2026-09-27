@@ -251,12 +251,12 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         }
     }
 
-    /// Whether `session`, served for less than `churnWindow`, holds a syllable
-    /// only it can still write (`InputSession.releaseUnwrittenSyllable`). Marked
-    /// text always is; direct insertion is when the retired client dropped the
-    /// write, and otherwise the syllable is already in the document.
+    /// Whether `session`, served for less than `churnWindow`, shows a syllable in
+    /// marked text. Only that can move to another session: real text is in the
+    /// document already. Direct insertion composes a syllable begun that early
+    /// in marked text for this reason (`InputSession.mayStillBeRetired`).
     private func leavesTooSoon(_ session: InputSession) -> Bool {
-        Self.now() - servingSince < Self.churnWindow && session.releaseUnwrittenSyllable()
+        Self.now() - servingSince < Self.churnWindow && session.composesInMarkedText
     }
 
     /// Hold `session`'s syllable for the session that takes over. If none does,
@@ -859,6 +859,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // 5. The delivery policy can flip mid-session (experimental flag toggled in
         // settings); make sure the adapter still matches before composing into it.
         session.ensureAdapterMatchesPolicy()
+        session.mayStillBeRetired = Self.now() - servingSince < Self.churnWindow
 
         // A direct-live preedit has no IMK marked range, so caret/document changes
         // must be detected explicitly before this key mutates the Hangul engine.

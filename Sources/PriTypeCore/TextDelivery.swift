@@ -440,9 +440,8 @@ final class DirectInsertionAdapter: BaseClientAdapter {
         state == .markedFallback
     }
 
-    /// Whether the live preedit was written and the host kept it: its range still
-    /// reads back as the preedit, with the caret right after it. A client IMK is
-    /// retiring as it hands over the first key after an app switch drops the write.
+    /// Whether the live preedit was written and the host shows it: its range
+    /// still reads back as the preedit, with the caret right after it.
     var hostHoldsLivePreedit: Bool {
         guard case let .directLive(range, text) = state else { return false }
         return DirectInsertionPlanner.liveRegionIsVerified(
@@ -575,6 +574,11 @@ final class DirectInsertionAdapter: BaseClientAdapter {
     /// the host's answer then was dropped, not overtaken by a lagging report.
     var hostMayDropEdits = false
 
+    /// Set while IMK may still retire the controller this adapter's session
+    /// belongs to (`InputSession.mayStillBeRetired`): a syllable begun then is
+    /// composed as marked text.
+    var mayStillBeRetired = false
+
     /// Write `text` with nothing of ours live: at the caret the host has, not at
     /// one computed from its report. A report can trail the document (Chromium),
     /// and a range read from a stale one puts the text somewhere the user did not
@@ -592,11 +596,12 @@ final class DirectInsertionAdapter: BaseClientAdapter {
         }
 
         let selection = client.selectedRange()
-        guard !hostReportsLag, DirectInsertionPlanner.isUsableCollapsedSelection(selection) else {
+        guard !hostReportsLag, !mayStillBeRetired,
+              DirectInsertionPlanner.isUsableCollapsedSelection(selection) else {
             state = .markedFallback
             preparedLiveRange = nil
             renderMarkedFallback(text)
-            DebugLogger.log("DirectInsertionAdapter: no trustworthy caret, falling back to marked text")
+            DebugLogger.log("DirectInsertionAdapter: no trustworthy caret, or a controller IMK may yet retire; composing as marked text")
             return
         }
 
