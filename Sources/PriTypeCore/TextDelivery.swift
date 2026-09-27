@@ -438,6 +438,7 @@ final class DirectInsertionAdapter: BaseClientAdapter {
     func resetPreeditTracking() {
         state = .idle
         preparedLiveRange = nil
+        keyCommittedMarkedText = false
     }
 
     var requiresMarkedTextFinalize: Bool {
@@ -472,6 +473,7 @@ final class DirectInsertionAdapter: BaseClientAdapter {
     /// the current key. The old real text is already committed in the document; the
     /// flush is engine-only and lets the current key begin a fresh composition.
     func prepareForInput() -> Bool {
+        keyCommittedMarkedText = false
         guard case let .directLive(range, text) = state else {
             preparedLiveRange = nil
             return false
@@ -578,6 +580,12 @@ final class DirectInsertionAdapter: BaseClientAdapter {
     /// may have changed (`resumePrecomposing`).
     private var hostReportsLag = false
 
+    /// Set when the key being handled committed marked text in a host with
+    /// Chromium's key handling. Its reports cannot show a syllable written after
+    /// that until the key is done, so that syllable is marked too — without taking
+    /// the host for one whose reports lag. Cleared by the next key.
+    private var keyCommittedMarkedText = false
+
     /// Set while IMK is deactivating the field inside a call a keystroke made into
     /// the host (`InputSession.hostMayDropEdits`). A write that does not show in
     /// the host's answer then was dropped, not overtaken by a lagging report.
@@ -601,6 +609,13 @@ final class DirectInsertionAdapter: BaseClientAdapter {
             // in a host with no caret (Google Docs) the next mark replaced it.
             noteOwnOutput()
             client.insertText(text, replacementRange: atCaret)
+            return
+        }
+
+        if keyCommittedMarkedText {
+            state = .markedFallback
+            preparedLiveRange = nil
+            renderMarkedFallback(text)
             return
         }
 
@@ -642,6 +657,7 @@ final class DirectInsertionAdapter: BaseClientAdapter {
             super.insertText(text)   // base: NSNotFound auto-replaces marked text
             state = .idle
             preparedLiveRange = nil
+            keyCommittedMarkedText = ClientCompatibilityPolicy.usesChromiumKeyHandling(bundleId: bundleId)
             return
         }
         guard !text.isEmpty else { return }
@@ -657,14 +673,14 @@ final class DirectInsertionAdapter: BaseClientAdapter {
     }
 
     /// What Backspace leaves of the syllable. A host that hands the page the key
-    /// anyway (`ClientCompatibilityPolicy.forwardsHandledKeyDowns`) runs its own
+    /// anyway (`ClientCompatibilityPolicy.usesChromiumKeyHandling`) runs its own
     /// delete right after an in-place rewrite, so there it is marked over the real
     /// text instead: a key that leaves marked text reaches the page as "Process",
     /// which deletes nothing. The syllable stays marked until it ends; the next one
     /// is real text again.
     override func setMarkedTextAfterBackspace(_ text: String) {
         guard !text.isEmpty, state != .markedFallback,
-              ClientCompatibilityPolicy.forwardsHandledKeyDowns(bundleId: bundleId) else {
+              ClientCompatibilityPolicy.usesChromiumKeyHandling(bundleId: bundleId) else {
             return setMarkedText(text)
         }
         var replacementRange = NSRange(location: NSNotFound, length: NSNotFound)

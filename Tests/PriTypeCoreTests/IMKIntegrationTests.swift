@@ -1300,7 +1300,7 @@ struct IMKIntegrationTests {
     func hermesBackspaceTakesOneJamo() {
         let (harness, field) = start(bundleID: "com.nousresearch.hermes")
         defer { harness.finish() }
-        field.client.forwardsHandledKeyDowns = true
+        field.client.usesChromiumKeyHandling = true
         harness.type("ekfr")                                         // 닭
         #expect(field.client.text == "닭")
         #expect(field.client.markedText == nil, "Hermes composes in real text")
@@ -1322,6 +1322,24 @@ struct IMKIntegrationTests {
         #expect(field.client.text == "닭 가")
         harness.press(.backspace)
         #expect(field.client.text == "닭 ")
+    }
+
+    @Test("In Hermes, the word Backspace edited ends in marked text and the next word is real text again")
+    func hermesAfterABackspaceEdit() {
+        let (harness, field) = start(bundleID: "com.nousresearch.hermes")
+        defer { harness.finish() }
+        field.client.usesChromiumKeyHandling = true
+        harness.type("ekfr")                                         // 닭
+        harness.press(.backspace)                                    // 달, marked
+        harness.type("rhrl")                                         // 달고기
+        #expect(field.client.text == "달고기")
+        #expect(field.client.markedText == "기",
+                "begun by the key that committed the marked 달, which Chromium does not report yet")
+        harness.press(.space)
+        harness.type("dksxk")                                        // 안타
+        #expect(field.client.text == "달고기 안타")
+        #expect(field.client.markedText == nil,
+                "real text: a report that trailed one key is not a host whose reports lag")
     }
 
     @Test("In a native host, Backspace keeps a real-text syllable real text")
