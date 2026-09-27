@@ -458,18 +458,33 @@ struct UpdateAuthorizationChildTests {
     @MainActor
     @Test("The main thread keeps running while the dialog waits for an answer")
     func mainThreadStaysFree() async throws {
-        let exe = try Self.child("sleep 0.5; exit 0")
-        defer { try? FileManager.default.removeItem(at: exe) }
-        var ticks = 0
-        let ticker = Task { @MainActor in
-            while !Task.isCancelled {
-                ticks += 1
-                try? await Task.sleep(nanoseconds: 20_000_000)
+        // The child says it is waiting, then waits for main to answer. Counting
+        // main's turns instead measured how busy other main-actor tests kept
+        // it: a loaded runner gave 8 in 3 s. Main only has to get one turn
+        // while the child runs; if the wait holds main, the answer never comes
+        // and the child gives up, failing the call.
+        let waiting = FileManager.default.temporaryDirectory.appendingPathComponent("auth-waiting-\(UUID().uuidString)")
+        let answered = FileManager.default.temporaryDirectory.appendingPathComponent("auth-answered-\(UUID().uuidString)")
+        let exe = try Self.child("""
+            touch '\(waiting.path)'
+            tries=0
+            until [ -e '\(answered.path)' ]; do
+                tries=$((tries + 1))
+                [ $tries -gt 300 ] && { echo 'main did not answer within 30 s' >&2; exit 1; }
+                sleep 0.1
+            done
+            """)
+        let answerer = Task { @MainActor in
+            while !FileManager.default.fileExists(atPath: waiting.path) {
+                try await Task.sleep(nanoseconds: 10_000_000)
             }
+            FileManager.default.createFile(atPath: answered.path, contents: nil)
+        }
+        defer {
+            answerer.cancel()
+            for url in [exe, waiting, answered] { try? FileManager.default.removeItem(at: url) }
         }
         try await UpdateInstaller.authorizeInChild(executable: exe, staging: Self.stagingURL)
-        ticker.cancel()
-        #expect(ticks >= 10, "main ran \(ticks) times during a 0.5 s wait")
     }
 
     // MARK: Child
