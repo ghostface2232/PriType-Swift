@@ -244,18 +244,19 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     /// over if IMK is retiring the session too soon for a person to have left it.
     private func leaveComposition() {
         guard let session else { return }
-        if leavesTooSoon {
+        if leavesTooSoon(session) {
             Self.carry(session)
         } else {
             session.finalize(reason: .deactivateServer)
         }
     }
 
-    /// Whether a marked syllable is live in a session served for less than
-    /// `churnWindow`. Direct insertion already wrote it into the document.
-    private var leavesTooSoon: Bool {
-        composer.hasActiveComposition && session?.adapter.deliveryMode == .markedText
-            && Self.now() - servingSince < Self.churnWindow
+    /// Whether `session`, served for less than `churnWindow`, holds a syllable
+    /// only it can still write (`InputSession.releaseUnwrittenSyllable`). Marked
+    /// text always is; direct insertion is when the retired client dropped the
+    /// write, and otherwise the syllable is already in the document.
+    private func leavesTooSoon(_ session: InputSession) -> Bool {
+        Self.now() - servingSince < Self.churnWindow && session.releaseUnwrittenSyllable()
     }
 
     /// Hold `session`'s syllable for the session that takes over. If none does,
@@ -294,6 +295,11 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         if carried.session.context.bundleId == session.context.bundleId {
             Self.carriedComposition = nil
             composer.resumeComposition(carried.syllable)
+            // Marked, whatever the delivery: IMK's churn may still be going on,
+            // and a host finishing its activation drops edits. A dropped mark is
+            // simply sent again (`InputSession.resumeAfterHeldDeactivation`); real
+            // text cannot be, not knowing whether the host took it.
+            (session.adapter as? DirectInsertionAdapter)?.continueAsMarkedText()
             // The mode changed while it was carried (a toggle, or macOS selecting
             // English before this activation): it ends as that boundary ends a
             // syllable, committed — here, where the text can land.
@@ -486,8 +492,9 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         if Self.handleDepth > 0 {
             // Where the composition sits in the host, recorded now: once the call
             // this arrived in returns, the host may front another field.
-            let anchor = Self.sharedController === self && composer.hasActiveComposition
-                ? session?.hostAnchor() : nil
+            let owns = Self.sharedController === self
+            let anchor = owns && composer.hasActiveComposition ? session?.hostAnchor() : nil
+            if owns { session?.hostMayDropEdits = true }
             super.deactivateServer(sender)
             Self.deliver(.deactivate(self, sender, anchor))
         } else {
@@ -502,7 +509,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // fires earlier, while the host still accepts input); by the time
         // deactivateServer runs, native hosts like KakaoTalk have already resigned and
         // ignore insertText. If the observer already committed, this is a no-op.
-        if Self.sharedController === self, leavesTooSoon, let session {
+        if Self.sharedController === self, let session, leavesTooSoon(session) {
             Self.carry(session)
         } else {
             finalizeActiveComposition(sender: sender, reason: .deactivateServer)
@@ -527,6 +534,7 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
         // - mark the context stale so the next handle() re-analyzes it.
         session?.disarmFocusLossFinalizer()
         session?.markContextStale()
+        session?.hostMayDropEdits = false
         Self.focusOwnerPolicy.focusDidLeave(owner: ObjectIdentifier(self))
         if Self.sharedController === self { Self.sharedController = nil }
     }

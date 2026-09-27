@@ -105,6 +105,7 @@ final class InputSession: @unchecked Sendable {
         guard adapter.deliveryMode != resolved else { return }
         finalize(reason: .deliveryModeChange)
         adapter = TextDeliveryPolicy.makeAdapter(for: client, context: context)
+        (adapter as? DirectInsertionAdapter)?.hostMayDropEdits = hostMayDropEdits
     }
 
     /// Establish a composition boundary when a direct-insertion live range no longer
@@ -211,7 +212,34 @@ final class InputSession: @unchecked Sendable {
         return true
     }
 
+    // MARK: Carrying a syllable (see PriTypeInputController, Activation churn)
+
+    /// Whether the live syllable is still this session's alone to write, and so
+    /// can move to another one: marked text, which is only on display, or
+    /// direct-insertion text the host dropped — which from here is handled as
+    /// marked text, so that committing it here after all writes it. Real text the
+    /// host kept is in the document already, and stays there.
+    func releaseUnwrittenSyllable() -> Bool {
+        guard composer.hasActiveComposition else { return false }
+        guard let direct = adapter as? DirectInsertionAdapter else {
+            return adapter.deliveryMode == .markedText
+        }
+        if direct.requiresMarkedTextFinalize { return true }
+        guard case .directLive = direct.state, !direct.hostHoldsLivePreedit else { return false }
+        direct.continueAsMarkedText()
+        return true
+    }
+
     // MARK: Held deactivation (see PriTypeInputController, Re-entrant Lifecycle Calls)
+
+    /// Set when IMK deactivates this session's field inside a call a keystroke
+    /// made into the host, until that deactivation is resolved one way or the
+    /// other: a host finishing its activation takes no edits meanwhile. Only
+    /// direct insertion needs to know, since it writes real text, which cannot be
+    /// sent again without knowing whether the host took it.
+    var hostMayDropEdits = false {
+        didSet { (adapter as? DirectInsertionAdapter)?.hostMayDropEdits = hostMayDropEdits }
+    }
 
     /// Where the composition meets the host's text: the start of the marked text,
     /// else the caret, and the few characters before it. Recorded when IMK
@@ -314,6 +342,7 @@ final class InputSession: @unchecked Sendable {
     ///   longer be reached through this client, and hosts commit the marked text
     ///   of a field they leave. The caller ends the session as a real deactivation.
     func resumeAfterHeldDeactivation(since anchor: HostAnchor?) -> Bool {
+        hostMayDropEdits = false
         guard composesInMarkedText else { return true }
         let preedit = composer.preeditForDisplay
         switch heldPreedit(preedit, since: anchor) {
@@ -339,6 +368,7 @@ final class InputSession: @unchecked Sendable {
     /// moved to another field, end the composition here instead, so the finalize
     /// has nothing left to type twice or into the wrong field.
     func settleHeldDeactivation(since anchor: HostAnchor?) {
+        hostMayDropEdits = false
         guard composesInMarkedText else { return }
         switch heldPreedit(composer.preeditForDisplay, since: anchor) {
         case .shown, .lost:
