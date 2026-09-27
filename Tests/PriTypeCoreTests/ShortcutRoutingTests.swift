@@ -105,6 +105,35 @@ struct ShortcutRoutingTests {
         #expect(seen.snapshot == ["command"], "left ⌘ only")
     }
 
+    @Test("With a ⌘ chord as the Hanja key, the key after ⌘ decides whether it was a shortcut")
+    func hanjaChordDefersCommandDown() throws {
+        let tap = RightCommandSuppressor()
+        let seen = ShortcutActions()
+        tap.onCommandDown = { time in seen.record("\(time)") }
+        tap.onHanjaLookup = { _ in }
+        let toggle = KeyBinding(keyCode: 105, modifiers: 0, displayName: "F13")
+        let hanja = KeyBinding(keyCode: 4, modifiers: CGEventFlags.maskCommand.rawValue, displayName: "⌘H")
+        let command = CGEventFlags.maskCommand.rawValue | 0x8
+        func send(_ type: CGEventType, _ keyCode: CGKeyCode, _ flags: UInt64, at seconds: CGEventTimestamp) throws {
+            let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true))
+            event.type = type
+            event.flags = CGEventFlags(rawValue: flags)
+            event.timestamp = seconds * 1_000_000_000
+            _ = tap.handleEvent(type: type, event: event, toggle: toggle, hanja: hanja,
+                                toggleEnabled: true, hanjaEnabled: true, excludedOverride: false)
+        }
+        try send(.flagsChanged, 55, command, at: 1)     // ⌘ down: undecided
+        try send(.keyDown, 4, command, at: 2)           // H: the Hanja chord
+        #expect(seen.snapshot.isEmpty)
+        try send(.keyDown, 0, command, at: 3)           // A with ⌘ still held: a shortcut
+        #expect(seen.snapshot == ["1.0"], "reported with the time ⌘ went down")
+        try send(.flagsChanged, 55, 0, at: 4)           // ⌘ up
+        try send(.flagsChanged, 55, command, at: 5)     // ⌘ down and up alone
+        try send(.flagsChanged, 55, 0, at: 6)
+        try send(.keyDown, 0, 0, at: 7)                 // a plain key later
+        #expect(seen.snapshot == ["1.0"])
+    }
+
     @Test("Holding an ordinary toggle key fires once and stays suppressed")
     func autorepeatFiresOnce() async throws {
         let tap = RightCommandSuppressor()

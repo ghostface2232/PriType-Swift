@@ -76,6 +76,9 @@ public final class RightCommandSuppressor: Sendable {
         var lastHanjaTriggerTime: DispatchTime = .init(uptimeNanoseconds: 0)
         /// Track Control state for Control+Space
         var controlIsDown = false
+        /// When ⌘ went down, while the next key decides whether it is the
+        /// Hanja chord or a shortcut (see `onCommandDown`).
+        var commandDownAwaitingKey: TimeInterval?
         /// Tracks recovery and makes the CGEventTap -> IOKit handoff exactly-once.
         var failureTracker = EventTapFailureTracker()
 
@@ -415,10 +418,19 @@ public final class RightCommandSuppressor: Sendable {
                 && keyCode == hanjaBinding.keyCode && keyCode != toggleBinding.keyCode
 
             // A ⌘ bound as the Hanja key starts no shortcut: it opens and closes
-            // the candidates.
+            // the candidates. With a ⌘ chord as the Hanja key (⌘H), ⌘ alone does
+            // not say which it starts, so the next key decides.
             if (keyCode == 54 || keyCode == 55) && !isHanjaModifier
                 && ModifierKeyState.isDown(keyCode, flags: flags.rawValue) {
-                state.onCommandDown?(Self.eventTime(of: event))
+                if priTypeHanjaEnabled && !hanjaBinding.isModifierKey
+                    && CGEventFlags(rawValue: hanjaBinding.modifiers).contains(.maskCommand) {
+                    state.commandDownAwaitingKey = Self.eventTime(of: event)
+                } else {
+                    state.onCommandDown?(Self.eventTime(of: event))
+                }
+            }
+            if !flags.contains(.maskCommand) {
+                state.commandDownAwaitingKey = nil
             }
 
             if keyCode == 57 {
@@ -516,6 +528,15 @@ public final class RightCommandSuppressor: Sendable {
             // binding checks this after it has matched, so an unrelated held key
             // is delivered normally.
             let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            // ⌘ held for a key that is not the Hanja chord: a shortcut after all.
+            // Reported now, it can reach a Chromium host after the key, which
+            // then drops the shortcut: the price of a ⌘ chord as the Hanja key.
+            if let commandDown = state.commandDownAwaitingKey,
+               !(keyCode == hanjaBinding.keyCode
+                 && Self.hasExactModifiers(flags: event.flags, required: CGEventFlags(rawValue: hanjaBinding.modifiers))) {
+                state.commandDownAwaitingKey = nil
+                state.onCommandDown?(commandDown)
+            }
             // Regular key (non-modifier) as toggle — single key or combo
             if priTypeToggleEnabled && keyCode == toggleBinding.keyCode && !toggleBinding.isModifierKey {
                 if toggleBinding.isModifierOnly {
