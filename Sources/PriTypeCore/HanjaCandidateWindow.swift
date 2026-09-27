@@ -197,10 +197,9 @@ public final class HanjaCandidateWindow: HanjaCandidatePresenting, @unchecked Se
     }
 
     /// Close the candidates on a click anywhere but the panel. A click moves the
-    /// caret without telling the input method: the lookup committed the
-    /// syllable, and with nothing marked IMK sends no commit. Left open, the
-    /// candidates would take the next digit and replace the text before the new
-    /// caret. A global monitor sees only other apps' events, so clicks on the
+    /// caret, and when the lookup was of committed text, with nothing marked,
+    /// IMK sends no commit to say so. Left open, the candidates would take the
+    /// next digit and replace the text before the new caret. A global monitor sees only other apps' events, so clicks on the
     /// panel's own candidates never reach it.
     @MainActor
     private func watchClicks() {

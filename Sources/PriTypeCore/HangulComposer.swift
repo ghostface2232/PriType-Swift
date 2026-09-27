@@ -650,14 +650,16 @@ public class HangulComposer: @unchecked Sendable {
         let currentBundleId = frontmostBundleID()
             ?? PriTypeInputController.sharedController?.cachedContext?.bundleId ?? ""
         let currentClient = PriTypeInputController.sharedController?.currentClient as AnyObject?
-        let buffer = isBuffer(from: currentBundleId, client: currentClient) ? localTextBuffer : ""
+        // A host that drops ranged edits can convert only what is still marked.
+        let rewritesText = !ClientCompatibilityPolicy.dropsRangedEdits(bundleId: currentBundleId)
+        let buffer = rewritesText && isBuffer(from: currentBundleId, client: currentClient) ? localTextBuffer : ""
 
         let searchStage = recording
             ? Signposts.hanja.beginInterval(Signposts.HanjaStage.dictionarySearch, id: lookupID) : nil
         let lookupText: String
         let entries: [HanjaEntry]
-        // Whether the looked-up text is the end of localTextBuffer (after the
-        // preedit is committed below), so a selection can replace it there too.
+        // Whether the looked-up text is the end of localTextBuffer (once the
+        // preedit is committed), so a selection can replace it there too.
         var lookupIsBufferTail = true
         if hadPreedit && !preeditStr.allSatisfy(\.isHangulSyllable) {
             // A lone jamo is not part of a word: ㅁ → ★, ♥, … from the symbol table.
@@ -666,6 +668,8 @@ public class HangulComposer: @unchecked Sendable {
         } else {
             if hadPreedit || !HanjaManager.trailingHangulWord(in: buffer).isEmpty {
                 lookupText = buffer + preeditStr
+            } else if !rewritesText {
+                lookupText = ""
             } else {
                 // Nothing typed here: the caret was moved, e.g. with the arrow keys.
                 lookupText = delegate.textBeforeCursor(length: HanjaManager.maxWordLength) ?? ""
@@ -689,21 +693,17 @@ public class HangulComposer: @unchecked Sendable {
         
         hanjaMode = true
         
-        // IMPORTANT: Capture cursor position BEFORE commit.
-        // Chromium/Electron apps update cursor position asynchronously after commit,
-        // so firstRect() returns garbage values if called after commitComposition().
-        // While preedit is active, the cursor is at the marked text position → valid
-        // coordinates. The strategy chain lives in CursorRectResolver.
+        // The syllable being typed stays marked while the candidates are up, so a
+        // candidate for it alone replaces the marked text, as any commit does.
+        // That needs no range from the host, and some hosts (Figma) drop edits
+        // aimed at a range. While marked, the caret is also at the marked text,
+        // which is where Chromium/Electron report valid coordinates.
+        // The strategy chain lives in CursorRectResolver.
         let cursorRect = Signposts.interval(Signposts.hanja, Signposts.HanjaStage.resolveCaret,
                                             id: lookupID, recording: recording) {
             CursorRectResolver.resolve(client: PriTypeInputController.sharedController?.currentClient)
         }
 
-        // Commit preedit AFTER capturing cursor position
-        if hadPreedit {
-            commitComposition(delegate: delegate)
-        }
-        
         // Snapshot: Capture client identity at show time for validation at select time.
         // Use ObjectIdentifier instead of weak reference: if the weak ref is deallocated,
         // validation would be skipped and hanja could be inserted into a wrong client.
@@ -730,7 +730,22 @@ public class HangulComposer: @unchecked Sendable {
                         self.hanjaMode = false
                         return
                     }
-                    
+
+                    if let marked = self.engine.composing.map(String.init),
+                       let adapter = PriTypeInputController.sharedController?.currentAdapter ?? self.lastDelegate {
+                        if entry.hangul == marked {
+                            self.engine.reset()
+                            adapter.insertText(entry.hanja)
+                            self.appendToBuffer(entry.hanja)
+                            self.hanjaMode = false
+                            DebugLogger.logSensitive("Hanja: selected a candidate for the marked syllable",
+                                                     sensitiveContent: "'\(entry.hanja)' (\(entry.meaning))")
+                            return
+                        }
+                        // A longer word goes on into committed text.
+                        self.commitComposition(delegate: adapter)
+                    }
+
                     // The candidate replaces the text it was looked up from, which
                     // may be a whole word ending at the caret.
                     let replacementLength = entry.hangul.utf16.count
@@ -770,7 +785,16 @@ public class HangulComposer: @unchecked Sendable {
                                          sensitiveContent: "'\(entry.hanja)' (\(entry.meaning))")
             },
             onDismiss: { [weak self] in
-                self?.hanjaMode = false
+                guard let self else { return }
+                self.hanjaMode = false
+                // Closed without a choice: the syllable is kept as typed, as it
+                // always was, unless the field it was typed in has lost focus —
+                // leaving a field settles its composition on its own.
+                if let client = PriTypeInputController.sharedController?.currentClient,
+                   ObjectIdentifier(client as AnyObject) == snapshotClientID,
+                   let adapter = PriTypeInputController.sharedController?.currentAdapter ?? self.lastDelegate {
+                    self.commitComposition(delegate: adapter)
+                }
                 DebugLogger.log("Hanja: Dismissed")
             },
             onClickOutside: { [weak self] in

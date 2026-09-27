@@ -356,10 +356,12 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
 
     // MARK: - Mode Transitions (한/영)
 
-    /// ⌘ went down (`InputModeCoordinator.requestShortcutCommit`). With the
-    /// Hanja candidates up, keys go to the window first and it decides.
+    /// ⌘ went down (`InputModeCoordinator.requestShortcutCommit`). A shortcut
+    /// ends a Hanja lookup: closing the candidates commits the syllable they
+    /// kept marked, as typed.
     func commitForShortcut() {
-        guard composer.hasActiveComposition, !HanjaCandidateWindow.shared.isVisible else { return }
+        guard composer.hasActiveComposition else { return }
+        composer.dismissHanjaCandidates(reason: "shortcut")
         session?.finalize(reason: .shortcut)
     }
 
