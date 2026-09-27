@@ -84,9 +84,14 @@ public final class IMKHarness {
     /// Take the next event time and move the clock on.
     private func takeClock() -> TimeInterval {
         let time = clock
-        clock += keyInterval
-        Self.issuedClock = max(Self.issuedClock, clock)
+        wait(keyInterval)
         return time
+    }
+
+    /// Time passes with nothing delivered, as it does while a person moves on.
+    public func wait(_ interval: TimeInterval) {
+        clock += interval
+        Self.issuedClock = max(Self.issuedClock, clock)
     }
 
     /// Whether macOS has a PriType mode selected. The fields stand for a PriType
@@ -131,7 +136,7 @@ public final class IMKHarness {
     public func focus(_ field: Field) {
         // A person takes longer to click than IMK's activation churn lasts
         // (`PriTypeInputController.churnWindow`).
-        clock += Self.clickTime
+        wait(Self.clickTime)
         if let focused, focused.client !== field.client {
             focused.controller.deactivateServer(focused.client)
         }
@@ -224,28 +229,24 @@ public final class IMKHarness {
     /// "gksrmf" gives 한글 in Korean mode; an upper-case letter adds Shift.
     @discardableResult
     public func type(_ text: String) -> [Bool] {
-        text.map { character in
-            if character == " " { return press(.space) }
-            guard let (keyCode, shifted) = Self.usKey(for: character) else {
-                preconditionFailure("No US key types \(character)")
-            }
-            return keyDown(keyCode: keyCode, characters: String(character),
-                           modifiers: shifted ? .shift : [])
-        }
+        text.map { keyDown(makeEvent(typing: $0)) }
     }
 
     /// Press a non-character key.
     @discardableResult
     public func press(_ key: Key, modifiers: NSEvent.ModifierFlags = []) -> Bool {
-        keyDown(keyCode: key.keyCode, characters: key.characters, modifiers: modifiers)
+        keyDown(makeEvent(for: key, modifiers: modifiers))
     }
 
     /// One keyDown through `handle()`. If the input method passes it on, the field
     /// gets the host's default action. Returns whether the input method handled it.
     @discardableResult
     public func keyDown(keyCode: UInt16, characters: String, modifiers: NSEvent.ModifierFlags = []) -> Bool {
+        keyDown(makeEvent(keyCode: keyCode, characters: characters, modifiers: modifiers))
+    }
+
+    private func keyDown(_ event: NSEvent) -> Bool {
         guard let field = focused else { preconditionFailure("No focused field") }
-        let event = makeEvent(keyCode: keyCode, characters: characters, modifiers: modifiers)
         let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         let handled = field.controller.handle(event, client: field.client)
         if !handled {
@@ -263,6 +264,21 @@ public final class IMKHarness {
     public private(set) var keyLatencies: [UInt64] = []
 
     public func resetLatencies() { keyLatencies.removeAll() }
+
+    /// The keyDown that types `character` on the US layout: "r" in Korean mode
+    /// is ㄱ, and an upper-case letter adds Shift.
+    public func makeEvent(typing character: Character) -> NSEvent {
+        if character == " " { return makeEvent(for: .space) }
+        guard let (keyCode, shifted) = Self.usKey(for: character) else {
+            preconditionFailure("No US key types \(character)")
+        }
+        return makeEvent(keyCode: keyCode, characters: String(character), modifiers: shifted ? .shift : [])
+    }
+
+    /// The keyDown of a key that types no character of its own.
+    public func makeEvent(for key: Key, modifiers: NSEvent.ModifierFlags = []) -> NSEvent {
+        makeEvent(keyCode: key.keyCode, characters: key.characters, modifiers: modifiers)
+    }
 
     /// A keyDown event stamped with the harness clock, which then advances.
     public func makeEvent(keyCode: UInt16, characters: String,
@@ -326,7 +342,7 @@ public final class IMKHarness {
 
     /// Run everything the key monitor queued, and leave the shared engine idle.
     public func finish() {
-        clock += Self.clickTime
+        wait(Self.clickTime)
         InputModeCoordinator.shared.applyPendingKeyActions()
         runDeferredDeactivations()
         blur()

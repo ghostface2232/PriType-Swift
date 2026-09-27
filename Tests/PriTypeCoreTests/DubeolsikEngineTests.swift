@@ -1,5 +1,6 @@
 import Testing
 @testable import PriTypeCore
+import PriTypeIMKHarness
 
 /// The 두벌식 automaton on its own: keys in, text out, no host.
 @Suite("DubeolsikEngine")
@@ -102,35 +103,73 @@ struct DubeolsikEngineTests {
         #expect(!engine.isComposing)
     }
 
-    @Test("Every output is one NFC scalar, and Backspace returns to the state before the key",
+    /// The automaton holds one syllable at a time, so what a text's keys make of
+    /// it depends only on each syllable and on the boundary into the next — where
+    /// a final either stays or moves on, which the next syllable's first vowel
+    /// decides. Every syllable, alone and before every initial, is all of it.
+    @Test("Typing the keys of any text gives the text back: every syllable, every boundary")
+    func everyTextRoundTrips() {
+        let syllables = (0xAC00...0xD7A3).map { String(Unicode.Scalar($0)!) }
+        // 가 까 나 … 하: each initial, with the vowel that decides the boundary.
+        let followers = [""] + (0..<19).map { String(Unicode.Scalar(0xAC00 + $0 * 21 * 28)!) }
+        var different: [String] = []
+        for syllable in syllables {
+            for follower in followers {
+                let written = syllable + follower
+                if text(Dubeolsik.keys(for: written)) != written { different.append(written) }
+            }
+        }
+        #expect(different.isEmpty, "\(different.count) texts came back otherwise: \(different.prefix(10))")
+    }
+
+    /// The property the pipeline's own sequence test builds on
+    /// (`InputSequenceTests`): whatever order the keys come in, each one ends up
+    /// in the text once, where it was typed. Reading the text back into keys
+    /// gives exactly the keys that were typed, less the ones Backspace undid —
+    /// the combinations the standard layout lacks (ㅏ + ㅣ, ㄱ + ㄱ) and 모아치기
+    /// would each read back as other keys.
+    @Test("Random keys: each lands in the text once, as an NFC scalar, and Backspace undoes one",
           arguments: 0..<50)
-    func invariants(seed: Int) {
+    func keystrokesAreConserved(seed: Int) throws {
         var state = UInt64(seed + 1) &* 0x9E3779B97F4A7C15
         func next(_ bound: Int) -> Int {
             state = state &* 6364136223846793005 &+ 1442695040888963407
             return Int((state >> 33) % UInt64(bound))
         }
-        let letters = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        // "<" is Backspace, as often as a letter of the layout.
+        let keys = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ<<<<<<<<")
         var engine = DubeolsikEngine()
-        for _ in 0..<200 {
-            let before = engine
-            let key = letters[next(letters.count)]
-            guard let step = engine.type(key) else {
-                Issue.record("\(key) is a letter")
-                return
+        var committed = ""
+        // The keys still standing: those typed, less those Backspace undid, as
+        // the layout reads them (Shift on a letter without a shifted jamo is none).
+        var standing = ""
+        for _ in 0..<300 {
+            let key = keys[next(keys.count)]
+            if key == "<" {
+                if engine.backspace() { standing.removeLast() }
+            } else {
+                let before = engine
+                guard let step = engine.type(key) else {
+                    Issue.record("\(key) is a letter")
+                    return
+                }
+                for scalar in [step.committed, step.composing].compactMap({ $0 }) {
+                    let text = String(scalar)
+                    #expect(text == text.precomposedStringWithCanonicalMapping)
+                    #expect((0xAC00...0xD7A3).contains(scalar.value) || (0x3131...0x3163).contains(scalar.value))
+                }
+                #expect(step.composing != nil, "a letter always leaves something composing")
+                // Undoing a key that did not commit anything puts the syllable back.
+                if step.committed == nil {
+                    var undone = engine
+                    undone.backspace()
+                    #expect(undone.composing == before.composing)
+                }
+                committed += step.committed.map(String.init) ?? ""
+                standing.append("REQTWOP".contains(key) ? key : Character(key.lowercased()))
             }
-            for scalar in [step.committed, step.composing].compactMap({ $0 }) {
-                let text = String(scalar)
-                #expect(text == text.precomposedStringWithCanonicalMapping)
-                #expect((0xAC00...0xD7A3).contains(scalar.value) || (0x3131...0x3163).contains(scalar.value))
-            }
-            #expect(step.composing != nil, "a letter always leaves something composing")
-            // Undoing a key that did not commit anything puts the syllable back.
-            if step.committed == nil {
-                var undone = engine
-                undone.backspace()
-                #expect(undone.composing == before.composing)
-            }
+            let text = committed + (engine.composing.map(String.init) ?? "")
+            try #require(Dubeolsik.keys(for: text) == standing, "seed \(seed): '\(text)'")
         }
     }
 }
