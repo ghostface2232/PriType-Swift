@@ -262,11 +262,15 @@ struct DirectInsertionSessionTests {
         // committed boundary. A destructive implementation that deleted committed
         // text would land a replacement range reaching in front of it — the
         // assertion the previous mock-based version could not actually make.
+        // The syllable's first write goes where the host's caret is and replaces
+        // nothing; every rewrite after it targets the range that write made.
         let writesDuringComposition = client.insertCalls.dropFirst(callsAfterCommit)
         #expect(!writesDuringComposition.isEmpty, "adapter performed no writes")
-        for (text, range) in writesDuringComposition {
+        #expect(writesDuringComposition.first?.1.location == NSNotFound,
+                "the first write is an insertion at the host's caret")
+        for (text, range) in writesDuringComposition.dropFirst() {
             #expect(range.location != NSNotFound,
-                    "direct insertion must target an explicit range, wrote '\(text)'")
+                    "a rewrite must target an explicit range, wrote '\(text)'")
             #expect(range.location >= committed.utf16.count,
                     "write '\(text)' at \(range) reached into committed text")
         }

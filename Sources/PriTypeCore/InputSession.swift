@@ -105,6 +105,10 @@ final class InputSession: @unchecked Sendable {
         guard adapter.deliveryMode != resolved else { return }
         finalize(reason: .deliveryModeChange)
         adapter = TextDeliveryPolicy.makeAdapter(for: client, context: context)
+        if let direct = adapter as? DirectInsertionAdapter {
+            direct.hostMayDropEdits = hostMayDropEdits
+            direct.mayStillBeRetired = mayStillBeRetired
+        }
     }
 
     /// Establish a composition boundary when a direct-insertion live range no longer
@@ -211,7 +215,29 @@ final class InputSession: @unchecked Sendable {
         return true
     }
 
+    // MARK: Carrying a syllable (see PriTypeInputController, Activation churn)
+
+    /// Set for a key that reaches this session within `churnWindow` of its
+    /// controller taking the field over, when IMK may yet retire the controller
+    /// and drop what its client was sent. A syllable begun then is composed as
+    /// marked text even under direct insertion, so that it can be carried to
+    /// the next session: real text cannot be, since whether the retired client
+    /// took it is unknowable — a host whose reports lag looks exactly like one
+    /// that dropped the write.
+    var mayStillBeRetired = false {
+        didSet { (adapter as? DirectInsertionAdapter)?.mayStillBeRetired = mayStillBeRetired }
+    }
+
     // MARK: Held deactivation (see PriTypeInputController, Re-entrant Lifecycle Calls)
+
+    /// Set when IMK deactivates this session's field inside a call a keystroke
+    /// made into the host, until that deactivation is resolved one way or the
+    /// other: a host finishing its activation takes no edits meanwhile. Only
+    /// direct insertion needs to know, since it writes real text, which cannot be
+    /// sent again without knowing whether the host took it.
+    var hostMayDropEdits = false {
+        didSet { (adapter as? DirectInsertionAdapter)?.hostMayDropEdits = hostMayDropEdits }
+    }
 
     /// Where the composition meets the host's text: the start of the marked text,
     /// else the caret, and the few characters before it. Recorded when IMK
@@ -295,9 +321,10 @@ final class InputSession: @unchecked Sendable {
     }
 
     /// Whether the live syllable is shown through marked text, which a host can
-    /// drop or end on its own. Direct-live text is real text; the next key's
-    /// `prepareForInput` verifies it as usual.
-    private var composesInMarkedText: Bool {
+    /// drop or end on its own, and which is only on display until committed —
+    /// so it can also be carried to another session. Direct-live text is real
+    /// text; the next key's `prepareForInput` verifies it as usual.
+    var composesInMarkedText: Bool {
         guard composer.hasActiveComposition, adapter.deliveryMode != .immediate else { return false }
         if let direct = adapter as? DirectInsertionAdapter { return direct.requiresMarkedTextFinalize }
         return true
@@ -314,6 +341,7 @@ final class InputSession: @unchecked Sendable {
     ///   longer be reached through this client, and hosts commit the marked text
     ///   of a field they leave. The caller ends the session as a real deactivation.
     func resumeAfterHeldDeactivation(since anchor: HostAnchor?) -> Bool {
+        hostMayDropEdits = false
         guard composesInMarkedText else { return true }
         let preedit = composer.preeditForDisplay
         switch heldPreedit(preedit, since: anchor) {
@@ -339,6 +367,7 @@ final class InputSession: @unchecked Sendable {
     /// moved to another field, end the composition here instead, so the finalize
     /// has nothing left to type twice or into the wrong field.
     func settleHeldDeactivation(since anchor: HostAnchor?) {
+        hostMayDropEdits = false
         guard composesInMarkedText else { return }
         switch heldPreedit(composer.preeditForDisplay, since: anchor) {
         case .shown, .lost:

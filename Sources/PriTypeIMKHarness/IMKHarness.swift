@@ -134,14 +134,15 @@ public final class IMKHarness {
     /// Move focus to `field`: the current field's controller is deactivated,
     /// then the new one activated, the order IMK uses.
     public func focus(_ field: Field) {
-        // A person takes longer to click than IMK's activation churn lasts
-        // (`PriTypeInputController.churnWindow`).
+        // A person takes longer to click, and to start typing after the click,
+        // than IMK's activation churn lasts (`PriTypeInputController.churnWindow`).
         wait(Self.clickTime)
         if let focused, focused.client !== field.client {
             focused.controller.deactivateServer(focused.client)
         }
         field.controller.activateServer(field.client)
         focused = field
+        wait(Self.clickTime)
     }
 
     /// How long a person's click into another field takes, at the least.

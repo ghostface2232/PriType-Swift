@@ -440,6 +440,26 @@ final class DirectInsertionAdapter: BaseClientAdapter {
         state == .markedFallback
     }
 
+    /// Whether the live preedit was written and the host shows it: its range
+    /// still reads back as the preedit, with the caret right after it.
+    var hostHoldsLivePreedit: Bool {
+        guard case let .directLive(range, text) = state else { return false }
+        return DirectInsertionPlanner.liveRegionIsVerified(
+            selectionRange: client.selectedRange(),
+            liveRange: range,
+            actualSubstring: client.attributedSubstring(from: range)?.string,
+            expectedText: text
+        )
+    }
+
+    /// For a syllable none of which is in the document: from here it is shown
+    /// and committed as marked text, as in a host with no usable caret, so that
+    /// whatever ends it writes it rather than taking it to be there already.
+    func continueAsMarkedText() {
+        state = .markedFallback
+        preparedLiveRange = nil
+    }
+
     /// Validate the identity of the real-text preedit before processing a new key.
     /// Both the stored document range and its contents must still match, and the
     /// selection must be the collapsed caret immediately after that exact range.
@@ -510,15 +530,8 @@ final class DirectInsertionAdapter: BaseClientAdapter {
             }
 
         case .idle:
-            let selection = client.selectedRange()
-            guard DirectInsertionPlanner.isUsableCollapsedSelection(selection) else {
-                state = .markedFallback
-                preparedLiveRange = nil
-                renderMarkedFallback(text)
-                DebugLogger.log("DirectInsertionAdapter: invalid selectedRange, falling back to marked text")
-                return
-            }
-            replacementRange = NSRange(location: selection.location, length: 0)
+            writeAtHostCaret(text, keepingLive: keepingLive)
+            return
 
         case .markedFallback:
             renderMarkedFallback(text)
@@ -547,6 +560,72 @@ final class DirectInsertionAdapter: BaseClientAdapter {
                 format: "DirectInsert SLOW total=%.1fms insert=%.1fms len=%d",
                 totalMs, (tEnd - tBeforeInsert) * 1000, keepingLive ? text.utf16.count : 0))
         }
+    }
+
+    /// Whether this host's reports have been seen to trail its document: a write
+    /// of ours did not show in the answer that followed it. Such a host cannot be
+    /// rewritten in place — every range computed from it points at text as it
+    /// was — so its syllables are composed as marked text. Kept until the field
+    /// may have changed (`resumePrecomposing`).
+    private var hostReportsLag = false
+
+    /// Set while IMK is deactivating the field inside a call a keystroke made into
+    /// the host (`InputSession.hostMayDropEdits`). A write that does not show in
+    /// the host's answer then was dropped, not overtaken by a lagging report.
+    var hostMayDropEdits = false
+
+    /// Set while IMK may still retire the controller this adapter's session
+    /// belongs to (`InputSession.mayStillBeRetired`): a syllable begun then is
+    /// composed as marked text.
+    var mayStillBeRetired = false
+
+    /// Write `text` with nothing of ours live: at the caret the host has, not at
+    /// one computed from its report. A report can trail the document (Chromium),
+    /// and a range read from a stale one puts the text somewhere the user did not
+    /// type. The report is still what the live preedit is tracked by, so it has
+    /// to show the write: one read-back per syllable, not per key.
+    private func writeAtHostCaret(_ text: String, keepingLive: Bool) {
+        guard !text.isEmpty else { return }
+        let atCaret = NSRange(location: NSNotFound, length: NSNotFound)
+        guard keepingLive else {
+            // A commit is final, so it is inserted, never shown as marked text:
+            // in a host with no caret (Google Docs) the next mark replaced it.
+            noteOwnOutput()
+            client.insertText(text, replacementRange: atCaret)
+            return
+        }
+
+        let selection = client.selectedRange()
+        guard !hostReportsLag, !mayStillBeRetired,
+              DirectInsertionPlanner.isUsableCollapsedSelection(selection) else {
+            state = .markedFallback
+            preparedLiveRange = nil
+            renderMarkedFallback(text)
+            DebugLogger.log("DirectInsertionAdapter: no trustworthy caret, or a controller IMK may yet retire; composing as marked text")
+            return
+        }
+
+        noteOwnOutput()
+        client.insertText(text, replacementRange: atCaret)
+        let live = NSRange(location: selection.location, length: text.utf16.count)
+        state = .directLive(range: live, text: text)
+        guard !hostHoldsLivePreedit else { return }
+        if hostMayDropEdits {
+            // Not in the document at all. As marked text it is simply sent again
+            // once the host takes edits (`InputSession.resumeAfterHeldDeactivation`).
+            continueAsMarkedText()
+            DebugLogger.log("DirectInsertionAdapter: the host dropped the write while being deactivated; composing as marked text")
+        } else {
+            // In the document, where the user typed it, but not where the report
+            // says. The next key's guard refuses the range and starts over.
+            hostReportsLag = true
+            DebugLogger.log("DirectInsertionAdapter: the host's report does not show the write; composing as marked text")
+        }
+    }
+
+    override func resumePrecomposing() {
+        super.resumePrecomposing()
+        hostReportsLag = false
     }
 
     override func insertText(_ text: String) {

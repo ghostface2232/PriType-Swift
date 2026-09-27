@@ -81,16 +81,10 @@ private enum Step: CaseIterable {
     /// they delete it, type over it, type into the middle of it, or replace it
     /// with Hanja — or, in a host that silently drops replacement ranges, put a
     /// rewrite at the caret, which only `ClientCompatibilityPolicy` can know of.
-    ///
-    /// Experimental direct insertion does not keep this promise yet. It writes
-    /// each jamo into the document at once, so nothing is left to carry when
-    /// IMK retires the controller a first key went to after an app switch (the
-    /// jamo is lost, as on the marked-text path before the carry), and a host
-    /// whose reports lag or name no caret gets keys out of order or not at all.
     var keepsKeystrokes: Bool {
         switch self {
         case .typeBackspace, .typeArrow, .moveCaret, .selectText,
-             .hanjaLookup, .chooseCandidate, .hostIgnoresRanges, .flipDeliveryPolicy:
+             .hanjaLookup, .chooseCandidate, .hostIgnoresRanges:
             return false
         default:
             return true

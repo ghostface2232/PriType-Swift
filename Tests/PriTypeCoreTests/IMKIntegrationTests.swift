@@ -1054,6 +1054,46 @@ struct IMKIntegrationTests {
         #expect(real.client.markedText == "나")
     }
 
+    @Test("Under direct insertion, a syllable begun as IMK may yet retire the controller is marked, and carries on")
+    func directInsertionCarriesAnEarlySyllable() {
+        let restore = Self.enableDirectInsertion()
+        defer { restore() }
+        let (harness, _) = start()
+        defer { harness.finish() }
+        let (transient, real) = churnFields(harness)
+        let key = harness.makeEvent(keyCode: 1, characters: "s")   // ㄴ
+        #expect(transient.controller.handle(key, client: transient.client))
+        #expect(transient.client.calls == [.dropped("ㄴ")], "marked, not written as real text")
+        harness.activateAhead(real)
+        harness.type("k")                                            // ㅏ
+        #expect(real.client.text == "나", "not ㅏ: the ㄴ was sent to a client that dropped it")
+        harness.press(.space)
+        #expect(real.client.text == "나 ")
+
+        // A client whose reports lag keeps what it is sent yet reads back as if
+        // it had dropped it. Had the syllable been written there as real text,
+        // carrying it on would type it twice; as marked text, nothing of it is
+        // committed there.
+        let (brief, next) = churnFields(harness, bundleID: "com.apple.TextEdit")
+        brief.client.ignoresEdits = false
+        brief.client.freezeReports = true
+        harness.activateAhead(brief)
+        harness.type("e")                                            // ㄷ
+        #expect(brief.client.markedText == "ㄷ")
+        brief.controller.deactivateServer(brief.client)
+        harness.activateAhead(next)
+        harness.type("k")                                            // ㅏ
+        #expect(brief.client.committedText.isEmpty, "nothing committed in the retired client")
+        #expect(next.client.text == "다")
+
+        // Typed once the field has been served longer than IMK's churn lasts,
+        // a syllable is real text again.
+        harness.press(.space)
+        harness.type("r")
+        #expect(next.client.text == "다 ㄱ")
+        #expect(next.client.markedText == nil)
+    }
+
     @Test("A key in a field IMK activates and retires within milliseconds carries on in the next one")
     func briefActivationCarriesOn() {
         let (harness, _) = start()
@@ -1184,5 +1224,73 @@ struct IMKIntegrationTests {
         #expect(brief.client.text == "ㄴ")
         #expect(brief.client.markedText == nil)
         #expect(!PriTypeInputController.sharedComposer.hasActiveComposition)
+    }
+
+    // MARK: Direct insertion in hosts that drop edits, lag or hide the caret
+
+    /// Turn the experimental real-text delivery on; call the result to restore.
+    private static func enableDirectInsertion() -> () -> Void {
+        let config = ConfigurationManager.shared
+        let saved = config.experimentalDirectInsertion
+        config.experimentalDirectInsertion = true
+        return { config.experimentalDirectInsertion = saved }
+    }
+
+    @Test("Direct insertion in a host whose reports lag types at the caret, then composes as marked text")
+    func directInsertionInALaggingHost() {
+        let restore = Self.enableDirectInsertion()
+        defer { restore() }
+        let (harness, field) = start()
+        field.client.freezeReports = true   // every answer is the empty field
+        #expect(!harness.press(.space))
+        harness.type("rk")
+        // The stale report puts the caret before the space. Written there, ㄱ
+        // would come before a space typed ahead of it.
+        #expect(field.client.text == " ㄱㅏ", "in the order typed; a range read from the report is not where the caret is")
+        #expect(field.client.markedText == "ㅏ", "a write the report never shows cannot be rewritten in place")
+        harness.press(.space)
+        harness.type("rk")
+        #expect(field.client.markedText == "가", "the host's lag is remembered")
+        harness.press(.space)
+        #expect(field.client.text == " ㄱㅏ 가 ")
+    }
+
+    @Test("Direct insertion in a host that stops reporting a caret loses no keystroke")
+    func directInsertionInAHostWithNoCaret() {
+        let restore = Self.enableDirectInsertion()
+        defer { restore() }
+        let (harness, field) = start()
+        harness.type("r")
+        #expect(field.client.markedText == nil, "real text")
+        field.client.select(NSRange(location: NSNotFound, length: 0))   // Google Docs
+        harness.press(.space)
+        harness.type("k")
+        #expect(field.client.text == "ㄱ ㅏ")
+        harness.press(.space)
+        #expect(field.client.text == "ㄱ ㅏ ")
+    }
+
+    @Test("A real-text syllable the host dropped mid-activation is marked once it takes edits again")
+    func directInsertionAcrossActivationChurn() {
+        let restore = Self.enableDirectInsertion()
+        defer { restore() }
+        let (harness, field) = start()
+        harness.type("gks")
+        harness.churnFocus(of: field, during: .insertText, nestedActivation: false)
+        harness.type("r")                                            // 한 committed, then ㄱ
+        #expect(field.client.calls.last == .dropped("ㄱ"), "the host was not taking edits")
+        harness.completeActivation(field)
+        #expect(field.client.markedText == "ㄱ")
+        harness.type("mf")
+        #expect(field.client.text == "한글")
+
+        // No reactivation, and a click commits before the wait is up.
+        harness.press(.space)
+        harness.type("gks")
+        harness.churnFocus(of: field, during: .insertText, nestedActivation: false)
+        harness.type("r")
+        field.client.ignoresEdits = false   // the host is back, IMK never says so
+        harness.click()
+        #expect(field.client.text == "한글 한ㄱ", "the dropped ㄱ is committed, not lost")
     }
 }
