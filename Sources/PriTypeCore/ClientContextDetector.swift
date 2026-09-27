@@ -102,6 +102,20 @@ public enum ClientCompatibilityPolicy {
         "com.apple.SafariTechnologyPreview"
     ]
 
+    /// Hosts that take only what is typed at the caret: an edit aimed at a range
+    /// lands at the caret too. Figma draws its own text and shows the input
+    /// method a hidden field that does apply the range, so nothing the host
+    /// reports gives this away: `이 ` + a double-space period became `이 . `.
+    private static let rangedEditDroppingBundleIds: Set<String> = [
+        "com.figma.Desktop"
+    ]
+
+    /// Whether `bundleId` drops `insertText(_:replacementRange:)` ranges, so text
+    /// already committed there cannot be rewritten.
+    public static func dropsRangedEdits(bundleId: String) -> Bool {
+        rangedEditDroppingBundleIds.contains(bundleId)
+    }
+
     /// Some chat-style hosts send the message on Return before their text system has
     /// incorporated the IMK commit. When Hangul is still marked, the submitted text can
     /// miss the last composing syllable. For those hosts, consume the Return that only

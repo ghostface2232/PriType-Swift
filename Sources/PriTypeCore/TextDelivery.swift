@@ -227,7 +227,8 @@ class BaseClientAdapter: NSObject, HangulComposerDelegate {
     @discardableResult
     func replaceTextBeforeCursor(length: Int, with text: String, verifying context: String) -> TextReplacementResult {
         let contextLength = context.utf16.count
-        guard length > 0, contextLength >= length else { return .unavailable }
+        guard length > 0, contextLength >= length,
+              !ClientCompatibilityPolicy.dropsRangedEdits(bundleId: bundleId) else { return .unavailable }
 
         let selRange = client.selectedRange()
         guard DirectInsertionPlanner.isUsableCollapsedSelection(selRange),

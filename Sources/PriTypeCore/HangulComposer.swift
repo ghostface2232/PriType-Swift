@@ -650,14 +650,16 @@ public class HangulComposer: @unchecked Sendable {
         let currentBundleId = frontmostBundleID()
             ?? PriTypeInputController.sharedController?.cachedContext?.bundleId ?? ""
         let currentClient = PriTypeInputController.sharedController?.currentClient as AnyObject?
-        let buffer = isBuffer(from: currentBundleId, client: currentClient) ? localTextBuffer : ""
+        // A host that drops ranged edits can convert only what is still marked.
+        let rewritesText = !ClientCompatibilityPolicy.dropsRangedEdits(bundleId: currentBundleId)
+        let buffer = rewritesText && isBuffer(from: currentBundleId, client: currentClient) ? localTextBuffer : ""
 
         let searchStage = recording
             ? Signposts.hanja.beginInterval(Signposts.HanjaStage.dictionarySearch, id: lookupID) : nil
         let lookupText: String
         let entries: [HanjaEntry]
-        // Whether the looked-up text is the end of localTextBuffer (after the
-        // preedit is committed below), so a selection can replace it there too.
+        // Whether the looked-up text is the end of localTextBuffer (once the
+        // preedit is committed), so a selection can replace it there too.
         var lookupIsBufferTail = true
         if hadPreedit && !preeditStr.allSatisfy(\.isHangulSyllable) {
             // A lone jamo is not part of a word: ㅁ → ★, ♥, … from the symbol table.
@@ -666,6 +668,8 @@ public class HangulComposer: @unchecked Sendable {
         } else {
             if hadPreedit || !HanjaManager.trailingHangulWord(in: buffer).isEmpty {
                 lookupText = buffer + preeditStr
+            } else if !rewritesText {
+                lookupText = ""
             } else {
                 // Nothing typed here: the caret was moved, e.g. with the arrow keys.
                 lookupText = delegate.textBeforeCursor(length: HanjaManager.maxWordLength) ?? ""

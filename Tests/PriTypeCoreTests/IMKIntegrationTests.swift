@@ -915,6 +915,40 @@ struct IMKIntegrationTests {
         #expect(field.client.markedText == nil)
     }
 
+    /// Figma: edits aimed at a range land at the caret, and nothing it reports
+    /// says so.
+    private func figmaField(_ harness: IMKHarness) -> IMKHarness.Field {
+        let field = harness.makeField(bundleID: "com.figma.Desktop")
+        field.client.ignoresReplacementRange = true
+        harness.focus(field)
+        return field
+    }
+
+    @Test("In Figma only the marked syllable is offered: committed text cannot be replaced")
+    func hanjaInFigmaOffersOnlyTheMarkedSyllable() {
+        let (harness, _) = start()
+        defer { harness.finish() }
+        let field = figmaField(harness)
+        harness.type(Dubeolsik.keys(for: "대한민국"))
+        harness.pressHanjaKey()
+        #expect(harness.candidates.entries.allSatisfy { $0.hangul == "국" })
+        let offered = harness.candidates.entries.first?.hanja ?? "?"
+        harness.type("1")
+        #expect(field.client.text == "대한민" + offered)
+
+        harness.pressHanjaKey()
+        #expect(!harness.candidates.isVisible, "nothing marked, nothing to convert")
+    }
+
+    @Test("In Figma a double space stays two spaces")
+    func doubleSpaceInFigma() {
+        let (harness, _) = start()
+        defer { harness.finish() }
+        let field = figmaField(harness)
+        harness.type("rk  ")
+        #expect(field.client.text == "가  ", "not 가 . ")
+    }
+
     @Test("A lookup in another app never joins the last syllable typed in the previous one")
     func hanjaIgnoresPreviousApp() throws {
         let (harness, first) = start()
