@@ -36,7 +36,10 @@ if [ -d ".build/release/PriType_PriTypeCore.bundle" ]; then
     cp -R ".build/release/PriType_PriTypeCore.bundle" build_dist/Contents/Resources/
     echo "Copied PriType_PriTypeCore.bundle"
 else
-    echo "Warning: PriType_PriTypeCore.bundle not found"
+    # L10n cannot start without it: the app would crash at launch on every Mac but
+    # this one, where the build path still resolves.
+    echo "Error: PriType_PriTypeCore.bundle not found." >&2
+    exit 1
 fi
 
 

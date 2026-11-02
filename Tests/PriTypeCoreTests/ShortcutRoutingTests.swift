@@ -105,6 +105,29 @@ struct ShortcutRoutingTests {
         #expect(seen.snapshot == ["command"], "left ⌘ only")
     }
 
+    @Test("A key with ⌘ no longer on it does not report a ⌘ whose release was missed")
+    func missedCommandReleaseIsForgotten() throws {
+        let tap = RightCommandSuppressor()
+        let seen = ShortcutActions()
+        tap.onCommandDown = { time in seen.record("\(time)") }
+        tap.onHanjaLookup = { _ in }
+        let toggle = KeyBinding(keyCode: 105, modifiers: 0, displayName: "F13")
+        let hanja = KeyBinding(keyCode: 4, modifiers: CGEventFlags.maskCommand.rawValue, displayName: "⌘H")
+        let command = CGEventFlags.maskCommand.rawValue | 0x8
+        func send(_ type: CGEventType, _ keyCode: CGKeyCode, _ flags: UInt64) throws {
+            let event = try #require(CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true))
+            event.type = type
+            event.flags = CGEventFlags(rawValue: flags)
+            _ = tap.handleEvent(type: type, event: event, toggle: toggle, hanja: hanja,
+                                toggleEnabled: true, hanjaEnabled: true, excludedOverride: false)
+        }
+        try send(.flagsChanged, 55, command)    // ⌘ down: undecided
+        try send(.keyDown, 0, 0)                // its release never seen, then A alone
+        #expect(seen.snapshot.isEmpty)
+        try send(.keyDown, 0, command)          // the memory is gone with it
+        #expect(seen.snapshot.isEmpty)
+    }
+
     @Test("With a ⌘ chord as the Hanja key, the key after ⌘ decides whether it was a shortcut")
     func hanjaChordDefersCommandDown() throws {
         let tap = RightCommandSuppressor()

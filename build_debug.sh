@@ -60,9 +60,13 @@ Tools/compile_app_icon.sh "$RESOURCES_DIR"
 cp "icon.tiff" "$RESOURCES_DIR/" 2>/dev/null || true
 cp "input-ko.tiff" "$RESOURCES_DIR/" 2>/dev/null || true
 cp "input-en.tiff" "$RESOURCES_DIR/" 2>/dev/null || true
-if [ -d "$BUILD_DIR/PriType_PriTypeCore.bundle" ]; then
-    cp -R "$BUILD_DIR/PriType_PriTypeCore.bundle" "$RESOURCES_DIR/"
+if [ ! -d "$BUILD_DIR/PriType_PriTypeCore.bundle" ]; then
+    # L10n cannot start without it: the app would crash at launch on every Mac but
+    # this one, where the build path still resolves.
+    echo "Error: PriType_PriTypeCore.bundle not found." >&2
+    exit 1
 fi
+cp -R "$BUILD_DIR/PriType_PriTypeCore.bundle" "$RESOURCES_DIR/"
 find "$PAYLOAD_DIR" -name '._*' -delete
 xattr -cr "$PAYLOAD_DIR/$APP_BUNDLE" 2>/dev/null || true
 

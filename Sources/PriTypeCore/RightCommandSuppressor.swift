@@ -268,11 +268,13 @@ public final class RightCommandSuppressor: Sendable {
     
     /// Recreate a running tap so its event mask matches the current toggle
     /// trigger (clicks are watched only in tap mode). Main thread.
-    public func restartForTriggerChange() {
+    /// - Returns: `false` if the tap stopped and could not be recreated, which
+    ///   leaves no key monitor running: the caller goes back to `KeyMonitors.start()`.
+    public func restartForTriggerChange() -> Bool {
         state.withLock { state in
-            guard state.eventTap != nil else { return }
+            guard state.eventTap != nil else { return true }
             stopLocked(state)
-            _ = startLocked(state)
+            return startLocked(state)
         }
     }
 
@@ -295,6 +297,7 @@ public final class RightCommandSuppressor: Sendable {
         state.toggleTap.interrupt()
         state.hanjaModifierIsDown = false
         state.controlIsDown = false
+        state.commandDownAwaitingKey = nil
         DebugLogger.log("RightCommandSuppressor: Stopped")
     }
     
@@ -531,6 +534,11 @@ public final class RightCommandSuppressor: Sendable {
             // ⌘ held for a key that is not the Hanja chord: a shortcut after all.
             // Reported now, it can reach a Chromium host after the key, which
             // then drops the shortcut: the price of a ⌘ chord as the Hanja key.
+            // With ⌘ no longer on the key, its release was missed (the tap was off,
+            // or focus was in an excluded app): nothing is being held for this key.
+            if state.commandDownAwaitingKey != nil, !event.flags.contains(.maskCommand) {
+                state.commandDownAwaitingKey = nil
+            }
             if let commandDown = state.commandDownAwaitingKey,
                !(keyCode == hanjaBinding.keyCode
                  && Self.hasExactModifiers(flags: event.flags, required: CGEventFlags(rawValue: hanjaBinding.modifiers))) {
@@ -620,7 +628,7 @@ public final class RightCommandSuppressor: Sendable {
     // MARK: - Helpers
     
     /// Get the CGEventFlags modifier mask for a given keyCode
-    private static func modifierMask(for keyCode: Int64) -> CGEventFlags {
+    static func modifierMask(for keyCode: Int64) -> CGEventFlags {
         switch keyCode {
         case 54, 55: return .maskCommand       // Right/Left Command
         case 61, 58: return .maskAlternate      // Right/Left Option

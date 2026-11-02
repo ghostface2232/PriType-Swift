@@ -404,6 +404,7 @@ public final class ConfigurationManager: ConfigurationProviding, Sendable {
         static let lastUpdateCheck = "com.pritype.lastUpdateCheck"
         static let autoUpdateCheck = "com.pritype.autoUpdateCheck"
         static let pendingUpdateVersion = "com.pritype.pendingUpdateVersion"
+        static let pendingUpdateStartedAt = "com.pritype.pendingUpdateStartedAt"
         static let experimentalDirectInsertion = "com.pritype.experimentalDirectInsertion"
         static let toggleExcludedBundleIDs = "com.pritype.toggleExcludedBundleIDs"
     }
@@ -726,10 +727,10 @@ public final class ConfigurationManager: ConfigurationProviding, Sendable {
 
     /// Version an in-app install was started for, if one was.
     ///
-    /// The package terminates PriType partway through installing, so the
-    /// process that started the install is never around to see it finish. This
-    /// marker is what the next launch reads to tell an update that landed from
-    /// one that failed.
+    /// Set before the password dialog. The package terminates PriType partway
+    /// through installing, so the process that started the install is rarely
+    /// around to see it finish. This marker is what the next launch reads to tell
+    /// an update that landed from one that failed.
     public var pendingUpdateVersion: String? {
         get {
             defaults.string(forKey: Keys.pendingUpdateVersion)
@@ -737,10 +738,18 @@ public final class ConfigurationManager: ConfigurationProviding, Sendable {
         set {
             if let newValue {
                 defaults.set(newValue, forKey: Keys.pendingUpdateVersion)
+                defaults.set(Date(), forKey: Keys.pendingUpdateStartedAt)
             } else {
                 defaults.removeObject(forKey: Keys.pendingUpdateVersion)
+                defaults.removeObject(forKey: Keys.pendingUpdateStartedAt)
             }
         }
+    }
+
+    /// When `pendingUpdateVersion` was set, which tells root's log for this attempt
+    /// from one left by the last.
+    var pendingUpdateStartedAt: Date? {
+        defaults.object(forKey: Keys.pendingUpdateStartedAt) as? Date
     }
 }
 
