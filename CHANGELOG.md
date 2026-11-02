@@ -5,7 +5,7 @@ All notable changes to PriType-Swift will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.9.5] - 2026-11-03 (Stable)
 
 ### 수정 (앱 내 업데이트)
 - 패키지를 실행하기 전 단계(복사, 해시 확인 등)에서 설치가 실패하면 설정 창이 "설치 중입니다"에서 멈춰 있던 문제를 고쳤습니다. 이제 실패를 바로 표시하고 알림도 보냅니다.
