@@ -972,6 +972,30 @@ struct IMKIntegrationTests {
         #expect(leaves([.option, .command], optionSpace))
     }
 
+    @Test("A selection a successful report recorded is not mistaken for a re-assertion")
+    func reportedModeLetsLaterSelectionThrough() {
+        let (harness, _) = start()
+        defer { harness.finish() }
+        harness.systemSelects(.korean)
+        harness.toggle()
+        #expect(PriTypeInputController.sharedComposer.inputMode == .english)
+        // Reported, and no echo: with no client, for one, there is none.
+        PriTypeInputController.noteReportOutcome(.english, selected: true, expected: true)
+        harness.systemSelects(.korean)
+        #expect(PriTypeInputController.sharedComposer.inputMode == .korean)
+    }
+
+    @Test("A failed report leaves the system's mode as it was, so a re-assertion stays one")
+    func failedReportKeepsLastSystemMode() {
+        let (harness, _) = start()
+        defer { harness.finish() }
+        harness.systemSelects(.korean)
+        harness.toggle()
+        PriTypeInputController.noteReportOutcome(.english, selected: false, expected: true)
+        harness.systemSelects(.korean)
+        #expect(PriTypeInputController.sharedComposer.inputMode == .english, "the toggle stands")
+    }
+
     @Test("With focus gone, the Hanja key does not read the field left behind")
     func hanjaWithNoActiveClient() {
         let (harness, field) = start()

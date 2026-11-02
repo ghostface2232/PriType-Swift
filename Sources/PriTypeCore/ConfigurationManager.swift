@@ -404,6 +404,7 @@ public final class ConfigurationManager: ConfigurationProviding, Sendable {
         static let lastUpdateCheck = "com.pritype.lastUpdateCheck"
         static let autoUpdateCheck = "com.pritype.autoUpdateCheck"
         static let pendingUpdateVersion = "com.pritype.pendingUpdateVersion"
+        static let pendingUpdateStartedAt = "com.pritype.pendingUpdateStartedAt"
         static let experimentalDirectInsertion = "com.pritype.experimentalDirectInsertion"
         static let toggleExcludedBundleIDs = "com.pritype.toggleExcludedBundleIDs"
     }
@@ -737,10 +738,18 @@ public final class ConfigurationManager: ConfigurationProviding, Sendable {
         set {
             if let newValue {
                 defaults.set(newValue, forKey: Keys.pendingUpdateVersion)
+                defaults.set(Date(), forKey: Keys.pendingUpdateStartedAt)
             } else {
                 defaults.removeObject(forKey: Keys.pendingUpdateVersion)
+                defaults.removeObject(forKey: Keys.pendingUpdateStartedAt)
             }
         }
+    }
+
+    /// When `pendingUpdateVersion` was set, which tells root's log for this attempt
+    /// from one left by the last.
+    var pendingUpdateStartedAt: Date? {
+        defaults.object(forKey: Keys.pendingUpdateStartedAt) as? Date
     }
 }
 

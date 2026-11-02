@@ -14,6 +14,9 @@ CONTENTS_DIR="${PAYLOAD_DIR}/${APP_BUNDLE}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 PKG_OUTPUT="PriTypeV2_Release.pkg"
+# A run that stops partway must not leave the last run's package to be taken for
+# this one's.
+rm -f "$PKG_OUTPUT"
 COMPONENT_PLIST="PriTypeV2_components.plist"
 # Signing is chosen by the caller, not discovered from the keychain:
 #   APP_SIGN_IDENTITY  codesign identity for the app. Defaults to "-" (ad-hoc).
@@ -145,10 +148,13 @@ if ! pkgutil --payload-files "$PKG_OUTPUT" | grep -q "PriTypeV2.app/Contents/Mac
     echo "Error: the PKG payload is missing the app executable." >&2
     exit 1
 fi
-if ! pkgutil --payload-files "$PKG_OUTPUT" | grep -q "PriTypeV2.app/Contents/Resources/PriType_PriTypeCore.bundle$"; then
-    echo "Error: the PKG payload is missing PriType_PriTypeCore.bundle." >&2
-    exit 1
-fi
+# What L10n and the Hanja lookup load, not just the bundle's directory.
+for resource in ko.lproj/Localizable.strings en.lproj/Localizable.strings hanja.dat; do
+    if ! pkgutil --payload-files "$PKG_OUTPUT" | grep -q "PriType_PriTypeCore.bundle/Contents/Resources/$resource$"; then
+        echo "Error: the PKG payload is missing $resource in PriType_PriTypeCore.bundle." >&2
+        exit 1
+    fi
+done
 if [ -n "$PKG_SIGN_IDENTITY" ]; then
     pkgutil --check-signature "$PKG_OUTPUT"
 fi

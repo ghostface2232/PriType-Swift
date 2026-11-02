@@ -60,8 +60,10 @@ public final class UpdateInstaller: @unchecked Sendable {
     /// What root's log says about the install it was opened for.
     enum InstallLogState: Equatable {
         case absent
-        /// Opened and not finished. `age`: since root last wrote to it.
-        case running(age: TimeInterval)
+        /// Root is at work, or has not started: the log is older than this
+        /// attempt, so the password dialog may still be up. `modified` tells a log
+        /// that is moving from one that is not.
+        case running(modified: Date?)
         case finished(status: Int32)
     }
 
@@ -103,6 +105,8 @@ public final class UpdateInstaller: @unchecked Sendable {
 
     /// How long root may go without writing to its log before it is taken to be
     /// gone: a restart or a kill leaves a log with no status in it for good.
+    /// Measured in uptime while waiting, not from the log's date: root sleeps when
+    /// the machine does, and a clock change is not root going away.
     static let installDeadline: TimeInterval = 10 * 60
 
     // MARK: - Privileged Run
@@ -574,16 +578,27 @@ public final class UpdateInstaller: @unchecked Sendable {
         }
     }
 
-    /// Waits until the install can be judged. `readLog` and `sleep` are for tests.
+    /// Waits until the install can be judged, or root has been silent for
+    /// `installDeadline`. `readLog`, `sleep` and `now` are for tests.
     static func awaitInstallOutcome(
         pending: String,
         runningVersion: String,
-        readLog: @Sendable () -> InstallLogState = readInstallLog,
-        sleep: @Sendable () async -> Void = { try? await Task.sleep(for: installWatchInterval) }
+        readLog: @Sendable () -> InstallLogState = { readInstallLog() },
+        sleep: @Sendable () async -> Void = { try? await Task.sleep(for: installWatchInterval) },
+        now: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) async -> InstallOutcome {
+        var lastLog: InstallLogState?
+        var lastChange = now()
         while true {
-            let outcome = installOutcome(pending: pending, runningVersion: runningVersion, log: readLog())
+            let log = readLog()
+            let outcome = installOutcome(pending: pending, runningVersion: runningVersion, log: log)
             guard outcome == .undecided else { return outcome }
+            if log != lastLog {
+                lastLog = log
+                lastChange = now()
+            } else if now() - lastChange >= installDeadline {
+                return installLanded(pending: pending, runningVersion: runningVersion) ? .landed : .incomplete
+            }
             await sleep()
         }
     }
@@ -607,9 +622,9 @@ public final class UpdateInstaller: @unchecked Sendable {
             // A beta is offered the release of its own number, so for it a matching
             // version says nothing. For anyone else it says the bundle was replaced.
             return landed && channel != .beta ? .landed : .incomplete
-        case .running(let age) where age < installDeadline:
+        case .running:
             return .undecided
-        case .absent, .finished, .running:
+        case .absent, .finished:
             return landed ? .landed : .incomplete
         }
     }
@@ -628,6 +643,7 @@ public final class UpdateInstaller: @unchecked Sendable {
             // The log is the only account of what root actually did.
             let log = installLog() ?? "(no log)"
             DebugLogger.log("UpdateInstaller: Update to \(pending) did not land. installer log: \(log)")
+            noteIncomplete(pending)
             UpdateNotifier.shared.notifyInstallResult(
                 title: L10n.update.installIncompleteTitle,
                 body: String(format: L10n.update.installIncompleteBody, pending)
@@ -635,6 +651,23 @@ public final class UpdateInstaller: @unchecked Sendable {
         }
 
         discardStagedDownloads()
+    }
+
+    /// A version whose install failed, until the settings window has shown it. The
+    /// notification needs a permission the user may not have given, and without it
+    /// nothing else would ever say so.
+    private static let incompleteVersion = OSAllocatedUnfairLock<String?>(initialState: nil)
+
+    static func noteIncomplete(_ version: String) {
+        incompleteVersion.withLock { $0 = version }
+    }
+
+    /// The version whose failed install has not been shown yet, once.
+    public static func takeIncompleteVersion() -> String? {
+        incompleteVersion.withLock { version in
+            defer { version = nil }
+            return version
+        }
     }
 
     /// Whether the version now running means the pending install succeeded.
@@ -660,19 +693,31 @@ public final class UpdateInstaller: @unchecked Sendable {
         return String(bytes: data, encoding: .utf8)
     }
 
-    @Sendable
     static func readInstallLog() -> InstallLogState {
         let attributes = try? FileManager.default.attributesOfItem(atPath: installLogPath)
-        let modified = attributes?[.modificationDate] as? Date
-        return installLogState(text: installLog(), age: modified.map { Date().timeIntervalSince($0) } ?? 0)
+        return installLogState(
+            text: installLog(),
+            modified: attributes?[.modificationDate] as? Date,
+            attemptStarted: ConfigurationManager.shared.pendingUpdateStartedAt
+        )
     }
 
     /// Root ends its log with a `status=` line, and writes it only when finished.
-    static func installLogState(text: String?, age: TimeInterval) -> InstallLogState {
+    ///
+    /// The marker is written before the password dialog and root empties the log
+    /// only after it, so a log older than the attempt, or none at all, belongs to no
+    /// install of this attempt. A process relaunched with the dialog still up (the
+    /// dialog is another process, and outlives a crash here) must not read the last
+    /// install's status as this one's, and then delete what the dialog is about to
+    /// install. `attemptStarted` is `nil` for a marker written before it existed.
+    static func installLogState(text: String?, modified: Date?, attemptStarted: Date?) -> InstallLogState {
+        if let attemptStarted, modified.map({ $0 < attemptStarted }) ?? true {
+            return .running(modified: modified)
+        }
         guard let text else { return .absent }
         guard let last = text.split(whereSeparator: \.isNewline).last, last.hasPrefix("status="),
               let status = Int32(last.dropFirst("status=".count)) else {
-            return .running(age: age)
+            return .running(modified: modified)
         }
         return .finished(status: status)
     }

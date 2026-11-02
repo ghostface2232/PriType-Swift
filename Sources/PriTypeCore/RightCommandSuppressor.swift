@@ -297,6 +297,7 @@ public final class RightCommandSuppressor: Sendable {
         state.toggleTap.interrupt()
         state.hanjaModifierIsDown = false
         state.controlIsDown = false
+        state.commandDownAwaitingKey = nil
         DebugLogger.log("RightCommandSuppressor: Stopped")
     }
     
@@ -533,6 +534,11 @@ public final class RightCommandSuppressor: Sendable {
             // ⌘ held for a key that is not the Hanja chord: a shortcut after all.
             // Reported now, it can reach a Chromium host after the key, which
             // then drops the shortcut: the price of a ⌘ chord as the Hanja key.
+            // With ⌘ no longer on the key, its release was missed (the tap was off,
+            // or focus was in an excluded app): nothing is being held for this key.
+            if state.commandDownAwaitingKey != nil, !event.flags.contains(.maskCommand) {
+                state.commandDownAwaitingKey = nil
+            }
             if let commandDown = state.commandDownAwaitingKey,
                !(keyCode == hanjaBinding.keyCode
                  && Self.hasExactModifiers(flags: event.flags, required: CGEventFlags(rawValue: hanjaBinding.modifiers))) {

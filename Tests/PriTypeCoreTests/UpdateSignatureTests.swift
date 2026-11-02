@@ -353,13 +353,32 @@ struct UpdateInstallerCommandTests {
 
     @Test("Root's log says running until its last line is a status")
     func logStateParsing() {
-        #expect(UpdateInstaller.installLogState(text: nil, age: 5) == .absent)
-        #expect(UpdateInstaller.installLogState(text: "", age: 5) == .running(age: 5))
-        #expect(UpdateInstaller.installLogState(text: "installer: Package name is PriTypeV2\n", age: 5) == .running(age: 5))
-        #expect(UpdateInstaller.installLogState(text: "installer: done\nstatus=0\n", age: 5) == .finished(status: 0))
-        #expect(UpdateInstaller.installLogState(text: "cp: denied\nstatus=1\n", age: 5) == .finished(status: 1))
+        func state(_ text: String?) -> UpdateInstaller.InstallLogState {
+            UpdateInstaller.installLogState(text: text, modified: .distantFuture, attemptStarted: nil)
+        }
+        let running = UpdateInstaller.InstallLogState.running(modified: .distantFuture)
+        #expect(state(nil) == .absent)
+        #expect(state("") == running)
+        #expect(state("installer: Package name is PriTypeV2\n") == running)
+        #expect(state("installer: done\nstatus=0\n") == .finished(status: 0))
+        #expect(state("cp: denied\nstatus=1\n") == .finished(status: 1))
         // A status mid-log is someone's output, not root's last word.
-        #expect(UpdateInstaller.installLogState(text: "status=0\nmore\n", age: 5) == .running(age: 5))
+        #expect(state("status=0\nmore\n") == running)
+    }
+
+    @Test("A log older than this attempt, or none, is not read as this attempt's result")
+    func staleLogIsNotThisAttempts() {
+        let started = Date(timeIntervalSince1970: 1000)
+        let before = started.addingTimeInterval(-60)
+        let after = started.addingTimeInterval(1)
+        func state(_ text: String?, _ modified: Date?, _ attempt: Date? = started) -> UpdateInstaller.InstallLogState {
+            UpdateInstaller.installLogState(text: text, modified: modified, attemptStarted: attempt)
+        }
+        #expect(state("status=1\n", before) == .running(modified: before), "the last install's status")
+        #expect(state(nil, nil) == .running(modified: nil), "the first install: no log before root starts")
+        #expect(state("status=1\n", after) == .finished(status: 1))
+        // A marker from before attempts carried a time.
+        #expect(state("status=1\n", before, nil) == .finished(status: 1))
     }
 
     private static func outcome(
@@ -373,12 +392,12 @@ struct UpdateInstallerCommandTests {
 
     @Test("An old build relaunched during the install waits instead of reporting a failure")
     func oldBuildDuringInstallWaits() {
-        #expect(Self.outcome(running: "2.8.0", log: .running(age: 1)) == .undecided)
+        #expect(Self.outcome(running: "2.8.0", log: .running(modified: nil)) == .undecided)
     }
 
     @Test("The new build launched by postinstall waits for the status")
     func newBuildDuringInstallWaits() {
-        #expect(Self.outcome(running: "2.9.0", log: .running(age: 1)) == .undecided)
+        #expect(Self.outcome(running: "2.9.0", log: .running(modified: nil)) == .undecided)
         #expect(Self.outcome(running: "2.9.0", log: .finished(status: 0)) == .landed)
     }
 
@@ -406,14 +425,52 @@ struct UpdateInstallerCommandTests {
     @Test("A newer build has nothing to report, whatever the log says")
     func newerBuildIgnoresLog() {
         #expect(Self.outcome(running: "2.9.1", log: .finished(status: 1)) == .landed)
-        #expect(Self.outcome(running: "2.9.1", log: .running(age: 1)) == .landed)
+        #expect(Self.outcome(running: "2.9.1", log: .running(modified: nil)) == .landed)
+    }
+
+    /// Waits on a log that never changes, one minute of uptime per read.
+    private static func waitOnSilentLog(running: String) async -> UpdateInstaller.InstallOutcome {
+        let clock = OSAllocatedUnfairLock(initialState: 0.0)
+        let log = UpdateInstaller.InstallLogState.running(modified: .distantPast)
+        return await UpdateInstaller.awaitInstallOutcome(
+            pending: "2.9.0",
+            runningVersion: running,
+            readLog: { log },
+            sleep: { clock.withLock { $0 += 60 } },
+            now: { clock.withLock { $0 } }
+        )
     }
 
     @Test("A log root stopped writing to no longer holds the verdict back")
-    func abandonedLogExpires() {
-        let expired = UpdateInstaller.installDeadline
-        #expect(Self.outcome(running: "2.8.0", log: .running(age: expired)) == .incomplete)
-        #expect(Self.outcome(running: "2.9.0", log: .running(age: expired)) == .landed)
+    func abandonedLogExpires() async {
+        #expect(await Self.waitOnSilentLog(running: "2.8.0") == .incomplete)
+        #expect(await Self.waitOnSilentLog(running: "2.9.0") == .landed)
+    }
+
+    @Test("A log that keeps moving keeps the wait going past the deadline")
+    func movingLogKeepsWaiting() async {
+        let clock = OSAllocatedUnfairLock(initialState: 0.0)
+        let reads = OSAllocatedUnfairLock(initialState: 0)
+        let outcome = await UpdateInstaller.awaitInstallOutcome(
+            pending: "2.9.0",
+            runningVersion: "2.8.0",
+            readLog: {
+                let read = reads.withLock { $0 += 1; return $0 }
+                return read > 20 ? .finished(status: 1) : .running(modified: Date(timeIntervalSince1970: Double(read)))
+            },
+            sleep: { clock.withLock { $0 += 60 } },
+            now: { clock.withLock { $0 } }
+        )
+        #expect(outcome == .incomplete)
+        #expect(reads.withLock { $0 } == 21, "20 minutes in, it was still waiting for the status")
+    }
+
+    @Test("A failed version is handed to the settings window once")
+    func incompleteVersionIsTakenOnce() {
+        _ = UpdateInstaller.takeIncompleteVersion()
+        UpdateInstaller.noteIncomplete("2.9.0")
+        #expect(UpdateInstaller.takeIncompleteVersion() == "2.9.0")
+        #expect(UpdateInstaller.takeIncompleteVersion() == nil)
     }
 
     @Test("Without a log, the version decides")
@@ -425,7 +482,7 @@ struct UpdateInstallerCommandTests {
     @Test("Waiting reads the log until the install can be judged")
     func waitingEndsOnStatus() async {
         let readings = OSAllocatedUnfairLock<[UpdateInstaller.InstallLogState]>(initialState: [
-            .running(age: 0), .running(age: 1), .finished(status: 1), .finished(status: 0)
+            .running(modified: nil), .running(modified: nil), .finished(status: 1), .finished(status: 0)
         ])
         let sleeps = OSAllocatedUnfairLock(initialState: 0)
         let outcome = await UpdateInstaller.awaitInstallOutcome(

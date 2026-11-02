@@ -100,13 +100,19 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
                 echoFilter.expect(mode, at: ProcessInfo.processInfo.systemUptime)
                 expected = true
             }
-            // A failed selection sends no echo; do not wait for one.
-            if expected && !selected {
-                echoFilter.withdrawLatest()
-            }
-            if selected {
-                lastSystemMode = mode
-            }
+            noteReportOutcome(mode, selected: selected, expected: expected)
+        }
+    }
+
+    /// What a report to macOS left behind. `expected`: an echo was expected of it.
+    /// - Warning: Access from main thread only.
+    static func noteReportOutcome(_ mode: InputMode, selected: Bool, expected: Bool) {
+        // A failed selection sends no echo; do not wait for one.
+        if expected && !selected {
+            echoFilter.withdrawLatest()
+        }
+        if selected {
+            lastSystemMode = mode
         }
     }
 

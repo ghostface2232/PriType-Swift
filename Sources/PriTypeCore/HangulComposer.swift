@@ -754,7 +754,7 @@ public class HangulComposer: @unchecked Sendable {
                     }
 
                     if let marked = self.engine.composing.map(String.init),
-                       let adapter = PriTypeInputController.sharedController?.currentAdapter ?? self.lastDelegate {
+                       let adapter = PriTypeInputController.sharedController?.currentAdapter {
                         if entry.hangul == marked {
                             self.engine.reset()
                             adapter.insertText(entry.hanja)
@@ -795,6 +795,11 @@ public class HangulComposer: @unchecked Sendable {
                         // replaced: insert at the caret, as always.
                         client.insertText(entry.hanja, replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
                     }
+                } else {
+                    // The client went away with the candidates up: nothing was typed.
+                    DebugLogger.log("Hanja: No client to take the selection")
+                    self.hanjaMode = false
+                    return
                 }
                 
                 // Read from the host, the word was never in the buffer: start over
@@ -814,7 +819,7 @@ public class HangulComposer: @unchecked Sendable {
                 // leaving a field settles its composition on its own.
                 if let client = PriTypeInputController.sharedController?.currentClient,
                    ObjectIdentifier(client as AnyObject) == snapshotClientID,
-                   let adapter = PriTypeInputController.sharedController?.currentAdapter ?? self.lastDelegate {
+                   let adapter = PriTypeInputController.sharedController?.currentAdapter {
                     self.commitComposition(delegate: adapter)
                 }
                 DebugLogger.log("Hanja: Dismissed")

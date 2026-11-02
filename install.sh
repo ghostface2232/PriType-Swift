@@ -41,19 +41,30 @@ if [ -d "$BUILD_DIR/PriType_PriTypeCore.bundle" ]; then
     cp -R "$BUILD_DIR/PriType_PriTypeCore.bundle" "$RESOURCES_DIR/"
     echo "Copied PriType_PriTypeCore.bundle"
 else
-    echo "Warning: PriType_PriTypeCore.bundle not found"
+    # L10n cannot start without it.
+    echo "Error: PriType_PriTypeCore.bundle not found." >&2
+    exit 1
 fi
 
 # Code Signing
 if [ -z "$SIGNING_IDENTITY" ]; then
-    # 1. 정식 Apple Development 인증서가 있는지 먼저 확인
-    APPLE_DEV_CERT=$(security find-identity -v -p codesigning | grep "Apple Development:" | head -n 1 | awk -F'"' '{print $2}')
-    
-    if [ -n "$APPLE_DEV_CERT" ]; then
-        SIGNING_IDENTITY="$APPLE_DEV_CERT"
+    # -v 없이 찾는다. 자체 서명 인증서는 신뢰되지 않아 -v 목록에 없지만 서명에는 쓸 수 있고,
+    # 이 목록은 개인 키가 있는 인증서만 보여 준다.
+    SIGNING_IDENTITIES=$(security find-identity -p codesigning)
+
+    # 1. 릴리스와 같은 인증서(PriType Release)를 먼저 확인.
+    #    손쉬운 사용·입력 모니터링 권한은 서명 인증서에 묶이므로, 로컬 빌드와
+    #    GitHub 릴리스가 같은 인증서를 써야 둘을 오가도 권한이 유지된다.
+    if echo "$SIGNING_IDENTITIES" | grep -q '"PriType Release"'; then
+        SIGNING_IDENTITY="PriType Release"
     else
-        # 2. 없다면 개발용 자체 서명 인증서(PriTypeDev) 확인
-        if security find-certificate -c "PriTypeDev" > /dev/null 2>&1; then
+        # 2. 정식 Apple Development 인증서
+        APPLE_DEV_CERT=$(security find-identity -v -p codesigning | grep "Apple Development:" | head -n 1 | awk -F'"' '{print $2}')
+
+        if [ -n "$APPLE_DEV_CERT" ]; then
+            SIGNING_IDENTITY="$APPLE_DEV_CERT"
+        # 3. 개발용 자체 서명 인증서(PriTypeDev)
+        elif echo "$SIGNING_IDENTITIES" | grep -q '"PriTypeDev"'; then
             SIGNING_IDENTITY="PriTypeDev"
         fi
     fi
@@ -65,7 +76,7 @@ if [ -n "$SIGNING_IDENTITY" ]; then
     codesign --force --options runtime --sign "$SIGNING_IDENTITY" "$APP_BUNDLE"
     echo "Signing complete."
 else
-    echo "No SIGNING_IDENTITY set and 'PriTypeDev' certificate not found."
+    echo "No SIGNING_IDENTITY set and no usable signing certificate found."
     echo "Using ad-hoc signing. (Warning: Accessibility permissions will break on every build!)"
     codesign --force --deep --options runtime --sign - "$APP_BUNDLE"
 fi

@@ -233,6 +233,9 @@ struct SettingsView: View {
             reloadExcludedApps()
             refreshCapsLockSwitchState()
             checkAccessibility()
+            if let version = UpdateInstaller.takeIncompleteVersion() {
+                updateStatus = .installError(String(format: L10n.update.installIncompleteBody, version))
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshCapsLockSwitchState()
@@ -554,6 +557,8 @@ struct SettingsView: View {
         case .authorizing, .installing:
             EmptyView()
         case .installError:
+            // Checking again is also what a retry starts from.
+            Button(L10n.update.checkButton) { checkForUpdates() }
             Button(L10n.update.openReleasePage) { openLatestRelease() }
         case .idle, .checking, .upToDate, .error:
             Button(L10n.update.checkButton) { checkForUpdates() }
@@ -765,6 +770,8 @@ struct SettingsView: View {
         case .verification:
             message = L10n.update.verificationFailed
         case .installIncomplete:
+            // Shown here, so not again when the window next opens.
+            _ = UpdateInstaller.takeIncompleteVersion()
             message = String(format: L10n.update.installIncompleteBody, info.version)
         case .alreadyInstalling:
             message = L10n.update.installAlreadyRunning
