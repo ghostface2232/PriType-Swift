@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Downloads a release, proves it is genuine, and installs it.
 ///
@@ -8,8 +9,10 @@ import Foundation
 ///
 /// - The package's `preinstall` kills PriTypeV2. The process that starts the
 ///   install is therefore killed halfway through it, so the command is detached
-///   and left to finish on its own; nothing after it can report the outcome.
-///   What happened is read back from a log on the next launch instead.
+///   and left to finish on its own. How it went is read back from root's log:
+///   by the process that started it if the install fails before `preinstall`
+///   runs, else on the next launch, if there is one: a failure after `preinstall`
+///   has removed the bundle leaves nothing to launch.
 /// - Nothing about the download is trustworthy on its own — the PKG is
 ///   unsigned, and its root scripts are outside the app's code signature — so
 ///   `UpdateSignature` has to accept it before the installer is ever offered
@@ -20,7 +23,8 @@ public final class UpdateInstaller: @unchecked Sendable {
 
     public static let shared = UpdateInstaller()
 
-    private init() {}
+    /// The app has exactly one of these — `shared`. Tests make their own.
+    init() {}
 
     // MARK: - Types
 
@@ -31,7 +35,8 @@ public final class UpdateInstaller: @unchecked Sendable {
         case verifying
         /// The authorization dialog is up; the user has not answered yet.
         case awaitingAuthorization
-        /// Handed to `installer`. PriType is about to be killed and relaunched.
+        /// Handed to `installer`. PriType is about to be killed and relaunched,
+        /// unless the install fails first, which `install` then throws.
         case installing
     }
 
@@ -45,6 +50,27 @@ public final class UpdateInstaller: @unchecked Sendable {
         /// The user dismissed the authorization dialog.
         case authorizationCancelled
         case authorizationFailed(String)
+        /// Another run has the dialog up or root's installer running. Its staging
+        /// directory and its marker are in use, so this run touches neither.
+        case alreadyInstalling
+        /// Root's installer ended and did not replace what is running.
+        case installIncomplete
+    }
+
+    /// What root's log says about the install it was opened for.
+    enum InstallLogState: Equatable {
+        case absent
+        /// Opened and not finished. `age`: since root last wrote to it.
+        case running(age: TimeInterval)
+        case finished(status: Int32)
+    }
+
+    /// Where an install attempt stands, judged from outside it.
+    enum InstallOutcome: Equatable {
+        case landed
+        case incomplete
+        /// Root is still at work: nothing can be said yet.
+        case undecided
     }
 
     // MARK: - Constants
@@ -72,12 +98,44 @@ public final class UpdateInstaller: @unchecked Sendable {
     /// wherever it led. Readable by everyone, as the rest of `/var/log` is.
     static let installLogPath = "/private/var/log/pritype-update.log"
 
+    /// How often root's log is read while an install runs.
+    private static let installWatchInterval: Duration = .seconds(1)
+
+    /// How long root may go without writing to its log before it is taken to be
+    /// gone: a restart or a kill leaves a log with no status in it for good.
+    static let installDeadline: TimeInterval = 10 * 60
+
+    // MARK: - Privileged Run
+
+    /// Whether a run has reached the dialog or root's installer. Only one may: a
+    /// second would empty the staging directory the first asked root to read, and
+    /// answer for the first's marker.
+    private let privilegedRun = OSAllocatedUnfairLock(initialState: false)
+
+    private var hasPrivilegedRun: Bool {
+        privilegedRun.withLock { $0 }
+    }
+
+    func claimPrivilegedRun() -> Bool {
+        privilegedRun.withLock { held in
+            defer { held = true }
+            return !held
+        }
+    }
+
+    func releasePrivilegedRun() {
+        privilegedRun.withLock { $0 = false }
+    }
+
     // MARK: - Install
 
     /// Downloads, verifies and installs `update`.
     ///
-    /// Returns once the privileged command has been started, not once it has
-    /// finished: by then PriType is being terminated by the installer.
+    /// Does not return while root's installer runs, and once `preinstall` runs it
+    /// never returns at all: that kills PriType whether the install then succeeds
+    /// or not. One that fails before then leaves PriType alive and throws
+    /// `Failure.installIncomplete`, after notifying the user as on a next launch,
+    /// so it reaches them even if the window that asked is gone.
     ///
     /// - Parameter progress: called on an arbitrary queue as the phase changes.
     public func install(
@@ -88,6 +146,7 @@ public final class UpdateInstaller: @unchecked Sendable {
         guard assets.packageSize <= Self.maximumPackageSize else {
             throw Failure.implausibleSize(assets.packageSize)
         }
+        guard !hasPrivilegedRun else { throw Failure.alreadyInstalling }
 
         let staging = try stagingDirectory(for: update.version)
         let packageURL = staging.appendingPathComponent(Self.packageFileName)
@@ -104,10 +163,16 @@ public final class UpdateInstaller: @unchecked Sendable {
             signature: signatureData,
             expectedVersion: update.version
         )
+        // Nothing else in here looks: past this point a cancelled run would still
+        // put the password dialog up.
+        try Task.checkCancellation()
         // Kept beside the package for the authorization child, which trusts
         // nothing it is handed and verifies all three again itself.
         try manifestData.write(to: staging.appendingPathComponent(Self.manifestFileName))
         try signatureData.write(to: staging.appendingPathComponent(Self.signatureFileName))
+
+        guard claimPrivilegedRun() else { throw Failure.alreadyInstalling }
+        defer { releasePrivilegedRun() }
 
         progress(.awaitingAuthorization)
         // Recorded before the dialog, not after: once the command starts, this
@@ -121,6 +186,15 @@ public final class UpdateInstaller: @unchecked Sendable {
             throw error
         }
         progress(.installing)
+
+        // Detached: cancelling the caller calls nothing off, root answers to no
+        // one here, and a cancelled sleep would turn this into a busy loop.
+        let pending = update.version
+        let outcome = await Task.detached(priority: .utility) {
+            await Self.awaitInstallOutcome(pending: pending, runningVersion: AboutInfo.version)
+        }.value
+        Self.settleInstall(outcome, pending: pending, runningVersion: AboutInfo.version)
+        guard outcome == .landed else { throw Failure.installIncomplete }
     }
 
     // MARK: - Verification
@@ -345,15 +419,22 @@ public final class UpdateInstaller: @unchecked Sendable {
     /// The package path is the only user-controlled path in it, and root only
     /// reads it. Everything root writes is in a directory only root can write:
     /// its own staging directory, and `installLogPath`.
+    ///
+    /// The log is emptied before the command returns, not when the detached part
+    /// gets around to opening it: from the moment authorization succeeds, a status
+    /// in the log is this install's and not the last one's. Every way out of the
+    /// detached part writes a status, since a log without one means root is at work.
     static func installCommand(packagePath: String, digest: String) -> String {
-        """
-        ( staging=$(/usr/bin/mktemp -d /private/tmp/pritype-update.XXXXXX) || exit 70
+        let log = shellQuoted(installLogPath)
+        return """
+        : > \(log); /bin/chmod 644 \(log)
+        ( staging=$(/usr/bin/mktemp -d /private/tmp/pritype-update.XXXXXX) || { echo "status=70"; exit 70; }
           /bin/cp \(shellQuoted(packagePath)) "$staging/package.pkg" \
         && [ "$(/usr/bin/shasum -a 256 "$staging/package.pkg" | /usr/bin/cut -d ' ' -f 1)" = \(shellQuoted(digest)) ] \
         && /usr/sbin/installer -pkg "$staging/package.pkg" -target /
           status=$?
           /bin/rm -rf "$staging"
-          echo "status=$status" ) > \(shellQuoted(installLogPath)) 2>&1 &
+          echo "status=$status" ) >> \(log) 2>&1 &
         """
     }
 
@@ -398,8 +479,15 @@ public final class UpdateInstaller: @unchecked Sendable {
         } catch let failure as Failure {
             throw failure
         } catch {
-            throw Failure.download(error.localizedDescription)
+            throw Self.downloadError(from: error, taskIsCancelled: Task.isCancelled)
         }
+    }
+
+    /// What a failed download amounts to. A task cancelled mid-download fails with
+    /// `URLError.cancelled`, which is the user's decision and not a failure. Only
+    /// the task's own state can say so: the size limit cancels the download too.
+    static func downloadError(from error: any Error, taskIsCancelled: Bool) -> any Error {
+        taskIsCancelled ? CancellationError() : Failure.download(error.localizedDescription)
     }
 
     private func downloadMetadata(from url: URL) async throws -> Data {
@@ -424,7 +512,7 @@ public final class UpdateInstaller: @unchecked Sendable {
         } catch let failure as Failure {
             throw failure
         } catch {
-            throw Failure.download(error.localizedDescription)
+            throw Self.downloadError(from: error, taskIsCancelled: Task.isCancelled)
         }
     }
 
@@ -457,19 +545,80 @@ public final class UpdateInstaller: @unchecked Sendable {
 
     /// Reports how the last in-app install went, if one was attempted.
     ///
-    /// The installer kills PriType partway through, so nothing in the process
-    /// that started an install can report its outcome. This runs on the next
-    /// launch instead and decides from the version now running: the marker was
-    /// written before the install began, so finding it means an install was
-    /// started and either landed or did not.
+    /// The installer kills PriType partway through, so the process that started
+    /// an install rarely lives to report it. This runs on the next launch instead:
+    /// the marker was written before the password dialog, so finding it means an
+    /// install was attempted.
     ///
-    /// - Parameter runningVersion: the version this build reports, overridable
-    ///   for tests.
-    public static func reportPendingInstall(runningVersion: String = AboutInfo.version) {
+    /// That launch can come before the install is over. IMK relaunches the old
+    /// build if a key arrives between `preinstall`'s kill and its removal of the
+    /// bundle, and `postinstall` launches the new one while the installer is still
+    /// running. Judged then, the first would report a failure just before the
+    /// install landed. So while root is at work the marker stays, and this waits:
+    /// `postinstall` kills an old build, and the new one hears the status.
+    public static func reportPendingInstall() {
         guard let pending = ConfigurationManager.shared.pendingUpdateVersion else { return }
+        let running = AboutInfo.version
+        let outcome = installOutcome(pending: pending, runningVersion: running, log: readInstallLog())
+        guard outcome == .undecided else {
+            settleInstall(outcome, pending: pending, runningVersion: running)
+            return
+        }
+
+        DebugLogger.log("UpdateInstaller: The install of \(pending) is still running; waiting for it")
+        guard shared.claimPrivilegedRun() else { return }
+        Task.detached(priority: .utility) {
+            defer { shared.releasePrivilegedRun() }
+            let settled = await awaitInstallOutcome(pending: pending, runningVersion: running)
+            settleInstall(settled, pending: pending, runningVersion: running)
+        }
+    }
+
+    /// Waits until the install can be judged. `readLog` and `sleep` are for tests.
+    static func awaitInstallOutcome(
+        pending: String,
+        runningVersion: String,
+        readLog: @Sendable () -> InstallLogState = readInstallLog,
+        sleep: @Sendable () async -> Void = { try? await Task.sleep(for: installWatchInterval) }
+    ) async -> InstallOutcome {
+        while true {
+            let outcome = installOutcome(pending: pending, runningVersion: runningVersion, log: readLog())
+            guard outcome == .undecided else { return outcome }
+            await sleep()
+        }
+    }
+
+    /// Whether the install landed, from the version now running and root's log.
+    ///
+    /// The version alone cannot say: it cannot tell a build that lost from one that
+    /// is about to be replaced. And the log alone cannot either: after a failure the
+    /// user may install the same release by hand, and the failed log is still there.
+    static func installOutcome(
+        pending: String,
+        runningVersion: String,
+        log: InstallLogState,
+        channel: ReleaseChannel = AboutInfo.releaseChannel
+    ) -> InstallOutcome {
+        // Installed by hand in the meantime: the log is about something else.
+        if UpdateChecker.isNewer(runningVersion, than: pending) { return .landed }
+        let landed = installLanded(pending: pending, runningVersion: runningVersion)
+        switch log {
+        case .finished(let status) where status != 0:
+            // A beta is offered the release of its own number, so for it a matching
+            // version says nothing. For anyone else it says the bundle was replaced.
+            return landed && channel != .beta ? .landed : .incomplete
+        case .running(let age) where age < installDeadline:
+            return .undecided
+        case .absent, .finished, .running:
+            return landed ? .landed : .incomplete
+        }
+    }
+
+    /// Tells the user how the install went and ends the attempt.
+    private static func settleInstall(_ outcome: InstallOutcome, pending: String, runningVersion: String) {
         ConfigurationManager.shared.pendingUpdateVersion = nil
 
-        if installLanded(pending: pending, runningVersion: runningVersion) {
+        if outcome == .landed {
             DebugLogger.log("UpdateInstaller: Update to \(pending) landed")
             UpdateNotifier.shared.notifyInstallResult(
                 title: L10n.update.installedTitle,
@@ -509,6 +658,23 @@ public final class UpdateInstaller: @unchecked Sendable {
     static func installLog() -> String? {
         guard let data = FileManager.default.contents(atPath: installLogPath) else { return nil }
         return String(bytes: data, encoding: .utf8)
+    }
+
+    @Sendable
+    static func readInstallLog() -> InstallLogState {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: installLogPath)
+        let modified = attributes?[.modificationDate] as? Date
+        return installLogState(text: installLog(), age: modified.map { Date().timeIntervalSince($0) } ?? 0)
+    }
+
+    /// Root ends its log with a `status=` line, and writes it only when finished.
+    static func installLogState(text: String?, age: TimeInterval) -> InstallLogState {
+        guard let text else { return .absent }
+        guard let last = text.split(whereSeparator: \.isNewline).last, last.hasPrefix("status="),
+              let status = Int32(last.dropFirst("status=".count)) else {
+            return .running(age: age)
+        }
+        return .finished(status: status)
     }
 }
 

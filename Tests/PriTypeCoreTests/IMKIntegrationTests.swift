@@ -915,6 +915,74 @@ struct IMKIntegrationTests {
         #expect(field.client.markedText == nil)
     }
 
+    @Test("⌘ going down closes candidates for committed text too")
+    func hanjaOfCommittedTextClosedByShortcut() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "한국"))
+        harness.click()
+        harness.pressHanjaKey()
+        #expect(harness.candidates.isVisible)
+        #expect(field.client.markedText == nil)
+        harness.pressCommand()
+        #expect(!harness.candidates.isVisible)
+        #expect(field.client.text == "한국")
+    }
+
+    @Test("A ⌥ chord with the candidates up goes to the app and chooses nothing")
+    func hanjaLeavesOptionChordToTheApp() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "한"))
+        harness.pressHanjaKey()
+        #expect(harness.candidates.isVisible)
+        #expect(!harness.keyDown(keyCode: 18, characters: "1", modifiers: .option))
+        #expect(!harness.candidates.isVisible)
+        #expect(field.client.text == "한", "committed as typed, not converted")
+    }
+
+    @Test("A digit rolled over the Hanja key still picks a candidate where nothing strips the modifier")
+    func hanjaDigitRolledOverItsModifier() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "한"))
+        harness.pressHanjaKey()
+        let rightOption = NSEvent.ModifierFlags(rawValue: NSEvent.ModifierFlags.option.rawValue | 0x40)
+        #expect(harness.keyDown(keyCode: 18, characters: "1", modifiers: rightOption))
+        #expect(!harness.candidates.isVisible)
+        #expect(field.client.text != "한", "converted, not committed as typed")
+    }
+
+    @Test("Which modifiers leave the candidates: not the Hanja key's own")
+    func chordsThatLeaveCandidates() {
+        typealias Flags = NSEvent.ModifierFlags
+        let leaves = HangulComposer.chordLeavesCandidates
+        let rightOption = KeyBinding.defaultHanja
+        #expect(rightOption.keyCode == 61)
+        #expect(!leaves([], rightOption))
+        #expect(!leaves(.shift, rightOption))
+        #expect(!leaves(Flags(rawValue: Flags.option.rawValue | 0x40), rightOption))
+        #expect(leaves(Flags(rawValue: Flags.option.rawValue | 0x20), rightOption), "left ⌥1 types ¡")
+        #expect(leaves(Flags(rawValue: Flags.option.rawValue | 0x60), rightOption), "both held: the left one is meant")
+        #expect(leaves(.option, rightOption), "no device bits: cannot be told apart")
+        #expect(leaves(.command, rightOption))
+
+        let optionSpace = KeyBinding(keyCode: 49, modifiers: CGEventFlags.maskAlternate.rawValue, displayName: "Option + Space")
+        #expect(!leaves(.option, optionSpace))
+        #expect(leaves([.option, .command], optionSpace))
+    }
+
+    @Test("With focus gone, the Hanja key does not read the field left behind")
+    func hanjaWithNoActiveClient() {
+        let (harness, field) = start()
+        defer { harness.finish() }
+        harness.type(Dubeolsik.keys(for: "한국"))
+        field.controller.deactivateServer(field.client)
+        harness.pressHanjaKey()
+        #expect(!harness.candidates.isVisible)
+        #expect(field.client.text == "한국")
+    }
+
     /// Figma: edits aimed at a range land at the caret, and nothing it reports
     /// says so.
     private func figmaField(_ harness: IMKHarness) -> IMKHarness.Field {

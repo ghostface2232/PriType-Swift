@@ -63,15 +63,16 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     ///
     /// IMK re-asserts the selected input source on every activation, so a plain
     /// focus change delivers `setValue` again with the mode the system already
-    /// had. A custom toggle deliberately does not touch that system selection
-    /// (see `performPriTypeModeTransition`), so after one the composer and the
-    /// system disagree, and applying the re-assertion would snap the user back to
+    /// had. A custom toggle switches the composer at once and reports to the system
+    /// only afterwards (see `performPriTypeModeTransition`), so the two can disagree
+    /// for a while, and applying a re-assertion then would snap the user back to
     /// whichever mode the input source happens to name — Korean or English —
-    /// every time they leave a window and come back.
+    /// when they leave a window and come back.
     ///
     /// The system value only ever changes when the user really does switch input
-    /// source, so a repeat of the value we already saw identifies a re-assertion.
-    /// Static because the selection is systemwide while controllers are per
+    /// source or a toggle reports its mode, which is noted here even if no `setValue`
+    /// echoes it (with no field, there is no client to echo to). So a repeat of this
+    /// value identifies a re-assertion. Static because the selection is systemwide while controllers are per
     /// client: a freshly created controller must not mistake a re-assertion for a
     /// first observation.
     /// - Warning: Access from main thread only (guaranteed by IMK).
@@ -102,6 +103,9 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
             // A failed selection sends no echo; do not wait for one.
             if expected && !selected {
                 echoFilter.withdrawLatest()
+            }
+            if selected {
+                lastSystemMode = mode
             }
         }
     }
@@ -363,11 +367,11 @@ public class PriTypeInputController: IMKInputController, @unchecked Sendable {
     // MARK: - Mode Transitions (한/영)
 
     /// ⌘ went down (`InputModeCoordinator.requestShortcutCommit`). A shortcut
-    /// ends a Hanja lookup: closing the candidates commits the syllable they
-    /// kept marked, as typed.
+    /// ends a Hanja lookup, of committed text too: closing the candidates commits
+    /// the syllable they kept marked, as typed.
     func commitForShortcut() {
-        guard composer.hasActiveComposition else { return }
         composer.dismissHanjaCandidates(reason: "shortcut")
+        guard composer.hasActiveComposition else { return }
         session?.finalize(reason: .shortcut)
     }
 

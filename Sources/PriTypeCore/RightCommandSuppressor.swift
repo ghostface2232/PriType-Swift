@@ -268,11 +268,13 @@ public final class RightCommandSuppressor: Sendable {
     
     /// Recreate a running tap so its event mask matches the current toggle
     /// trigger (clicks are watched only in tap mode). Main thread.
-    public func restartForTriggerChange() {
+    /// - Returns: `false` if the tap stopped and could not be recreated, which
+    ///   leaves no key monitor running: the caller goes back to `KeyMonitors.start()`.
+    public func restartForTriggerChange() -> Bool {
         state.withLock { state in
-            guard state.eventTap != nil else { return }
+            guard state.eventTap != nil else { return true }
             stopLocked(state)
-            _ = startLocked(state)
+            return startLocked(state)
         }
     }
 
@@ -620,7 +622,7 @@ public final class RightCommandSuppressor: Sendable {
     // MARK: - Helpers
     
     /// Get the CGEventFlags modifier mask for a given keyCode
-    private static func modifierMask(for keyCode: Int64) -> CGEventFlags {
+    static func modifierMask(for keyCode: Int64) -> CGEventFlags {
         switch keyCode {
         case 54, 55: return .maskCommand       // Right/Left Command
         case 61, 58: return .maskAlternate      // Right/Left Option

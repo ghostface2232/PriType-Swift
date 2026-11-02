@@ -54,6 +54,7 @@
 "update.downloadFailed" = "다운로드 실패";
 "update.verificationFailed" = "서명 확인 실패";
 "update.installFailed" = "설치를 시작하지 못했습니다";
+"update.installAlreadyRunning" = "이미 설치가 진행 중입니다";
 "update.openReleasePage" = "릴리스 페이지 열기";
 "update.cancel" = "취소";
 "update.installedTitle" = "PriType 업데이트 완료";

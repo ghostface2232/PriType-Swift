@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 import Testing
 @testable import PriTypeCore
 
@@ -326,6 +327,151 @@ struct UpdateInstallerCommandTests {
         #expect(UpdateInstaller.installLanded(pending: "2.9.0", runningVersion: "2.9.1"))
         // A tag written "2.9" and a bundle written "2.9.0" are one version.
         #expect(UpdateInstaller.installLanded(pending: "v2.9", runningVersion: "2.9.0"))
+    }
+
+    @Test("The log is emptied before the command returns, so a status in it is this install's")
+    func logIsEmptiedSynchronously() {
+        let command = UpdateInstaller.installCommand(packagePath: "/tmp/p.pkg", digest: "abc123")
+        let log = "'\(UpdateInstaller.installLogPath)'"
+        #expect(command.hasPrefix(": > \(log); /bin/chmod 644 \(log)\n("))
+        // Appended: reopening with `>` would race whoever reads it meanwhile.
+        #expect(command.hasSuffix("echo \"status=$status\" ) >> \(log) 2>&1 &"))
+        // Without a status the log reads as an install still running.
+        #expect(command.contains("|| { echo \"status=70\"; exit 70; }"))
+    }
+
+    @Test("The install command parses as shell")
+    func commandParses() throws {
+        // `-n` reads the script without running any of it.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-n", "-c", UpdateInstaller.installCommand(packagePath: "/tmp/it's.pkg", digest: "abc123")]
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+    }
+
+    @Test("Root's log says running until its last line is a status")
+    func logStateParsing() {
+        #expect(UpdateInstaller.installLogState(text: nil, age: 5) == .absent)
+        #expect(UpdateInstaller.installLogState(text: "", age: 5) == .running(age: 5))
+        #expect(UpdateInstaller.installLogState(text: "installer: Package name is PriTypeV2\n", age: 5) == .running(age: 5))
+        #expect(UpdateInstaller.installLogState(text: "installer: done\nstatus=0\n", age: 5) == .finished(status: 0))
+        #expect(UpdateInstaller.installLogState(text: "cp: denied\nstatus=1\n", age: 5) == .finished(status: 1))
+        // A status mid-log is someone's output, not root's last word.
+        #expect(UpdateInstaller.installLogState(text: "status=0\nmore\n", age: 5) == .running(age: 5))
+    }
+
+    private static func outcome(
+        pending: String = "2.9.0",
+        running: String,
+        log: UpdateInstaller.InstallLogState,
+        channel: ReleaseChannel = .stable
+    ) -> UpdateInstaller.InstallOutcome {
+        UpdateInstaller.installOutcome(pending: pending, runningVersion: running, log: log, channel: channel)
+    }
+
+    @Test("An old build relaunched during the install waits instead of reporting a failure")
+    func oldBuildDuringInstallWaits() {
+        #expect(Self.outcome(running: "2.8.0", log: .running(age: 1)) == .undecided)
+    }
+
+    @Test("The new build launched by postinstall waits for the status")
+    func newBuildDuringInstallWaits() {
+        #expect(Self.outcome(running: "2.9.0", log: .running(age: 1)) == .undecided)
+        #expect(Self.outcome(running: "2.9.0", log: .finished(status: 0)) == .landed)
+    }
+
+    @Test("A failed install leaves an old build incomplete")
+    func failureOnOldBuild() {
+        #expect(Self.outcome(running: "2.8.0", log: .finished(status: 1)) == .incomplete)
+    }
+
+    @Test("The same release installed by hand after a failure has landed")
+    func manualInstallAfterFailure() {
+        #expect(Self.outcome(running: "2.9.0", log: .finished(status: 1)) == .landed)
+    }
+
+    @Test("A beta is offered the release of its own number, so a matching version proves nothing")
+    func failureBeatsMatchingVersionOnBeta() {
+        #expect(Self.outcome(running: "2.9.0", log: .finished(status: 1), channel: .beta) == .incomplete)
+        #expect(Self.outcome(running: "2.9.0", log: .finished(status: 0), channel: .beta) == .landed)
+    }
+
+    @Test("An old build still alive after a clean status did not get replaced")
+    func cleanStatusOnOldBuild() {
+        #expect(Self.outcome(running: "2.8.0", log: .finished(status: 0)) == .incomplete)
+    }
+
+    @Test("A newer build has nothing to report, whatever the log says")
+    func newerBuildIgnoresLog() {
+        #expect(Self.outcome(running: "2.9.1", log: .finished(status: 1)) == .landed)
+        #expect(Self.outcome(running: "2.9.1", log: .running(age: 1)) == .landed)
+    }
+
+    @Test("A log root stopped writing to no longer holds the verdict back")
+    func abandonedLogExpires() {
+        let expired = UpdateInstaller.installDeadline
+        #expect(Self.outcome(running: "2.8.0", log: .running(age: expired)) == .incomplete)
+        #expect(Self.outcome(running: "2.9.0", log: .running(age: expired)) == .landed)
+    }
+
+    @Test("Without a log, the version decides")
+    func noLog() {
+        #expect(Self.outcome(running: "2.8.0", log: .absent) == .incomplete)
+        #expect(Self.outcome(running: "2.9.0", log: .absent) == .landed)
+    }
+
+    @Test("Waiting reads the log until the install can be judged")
+    func waitingEndsOnStatus() async {
+        let readings = OSAllocatedUnfairLock<[UpdateInstaller.InstallLogState]>(initialState: [
+            .running(age: 0), .running(age: 1), .finished(status: 1), .finished(status: 0)
+        ])
+        let sleeps = OSAllocatedUnfairLock(initialState: 0)
+        let outcome = await UpdateInstaller.awaitInstallOutcome(
+            pending: "2.9.0",
+            runningVersion: "2.8.0",
+            readLog: { readings.withLock { $0.removeFirst() } },
+            sleep: { sleeps.withLock { $0 += 1 } }
+        )
+        #expect(outcome == .incomplete)
+        #expect(sleeps.withLock { $0 } == 2)
+        #expect(readings.withLock { $0 } == [.finished(status: 0)])
+    }
+
+    @Test("A cancelled download is a cancellation; one the size limit stopped is not")
+    func cancelledDownloadError() {
+        let cancelled = URLError(.cancelled)
+        #expect(UpdateInstaller.downloadError(from: cancelled, taskIsCancelled: true) is CancellationError)
+        let error = UpdateInstaller.downloadError(from: cancelled, taskIsCancelled: false)
+        #expect(error as? UpdateInstaller.Failure == .download(cancelled.localizedDescription))
+    }
+
+    @Test("Only one run may hold the dialog and root's installer")
+    func privilegedRunIsExclusive() {
+        let installer = UpdateInstaller()
+        #expect(installer.claimPrivilegedRun())
+        #expect(!installer.claimPrivilegedRun())
+        installer.releasePrivilegedRun()
+        #expect(installer.claimPrivilegedRun())
+    }
+
+    @Test("A second install is refused before it can touch the first one's staging directory")
+    func secondInstallIsRefused() async throws {
+        let installer = UpdateInstaller()
+        #expect(installer.claimPrivilegedRun())
+        let version = "99.\(UUID().uuidString)"
+        let staging = try UpdateInstaller.updatesDirectory().appendingPathComponent(version, isDirectory: true)
+        let url = try #require(URL(string: "https://github.com/none"))
+        let update = UpdateChecker.UpdateInfo(
+            version: version,
+            releasePageURL: url,
+            assets: .init(package: url, manifest: url, signature: url, packageSize: 1)
+        )
+        await #expect(throws: UpdateInstaller.Failure.alreadyInstalling) {
+            try await installer.install(update) { _ in }
+        }
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
     }
 
     @Test("The authorization script asks for administrator privileges with a prompt")

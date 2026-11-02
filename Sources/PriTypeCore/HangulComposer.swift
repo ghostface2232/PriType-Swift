@@ -54,8 +54,8 @@ public class HangulComposer: @unchecked Sendable {
     // MARK: - Private Properties
     
     /// The adapter of the last key handled. Held strongly: IMK deallocates
-    /// controllers often (Electron apps), and a mode switch or Hanja lookup that
-    /// arrives between two keys still needs somewhere to deliver text.
+    /// controllers often (Electron apps), and a mode switch that arrives between
+    /// two keys still needs somewhere to deliver text.
     private var lastDelegate: (any HangulComposerDelegate)?
 
     /// Whether this composer opened the Hanja candidate window
@@ -374,8 +374,14 @@ public class HangulComposer: @unchecked Sendable {
             return textConvenience.handleDoubleSpacePeriod(buffer: &typed, delegate: delegate) == .convertedToPeriod
         }
         
-        // If Hanja candidate window is visible, forward keys to it
-        if hanjaMode {
+        let isShortcut = !event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+
+        // If Hanja candidate window is visible, forward keys to it. A ⌘, ⌃ or ⌥
+        // chord is the app's, as the event tap decides too (⌥1 types ¡, it does
+        // not choose a candidate), and like any shortcut it ends the lookup.
+        if hanjaMode && Self.chordLeavesCandidates(event.modifierFlags, hanja: ConfigurationManager.shared.hanjaKeyBinding) {
+            dismissHanjaCandidates(reason: "shortcut")
+        } else if hanjaMode {
             let consumed = candidatePresenter.handleKey(event)
             if !candidatePresenter.isVisible {
                 hanjaMode = false
@@ -394,7 +400,7 @@ public class HangulComposer: @unchecked Sendable {
         // Right Option key is handled via CGEventTap in RightCommandSuppressor.
         // Pass through if modifiers (Command, Control, Option) are present
         // This ensures system shortcuts work correctly without interference
-        if !event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+        if isShortcut {
              // Commit any in-progress composition first. Otherwise marked text stays
              // live and the host app ignores or misapplies the shortcut (e.g. Cmd+←).
              if engine.isComposing {
@@ -458,6 +464,23 @@ public class HangulComposer: @unchecked Sendable {
 
         // If we processed anything, we return true to stop system from handling duplicates.
         return handledAtLeastOnce
+    }
+
+    /// Whether a key's ⌘, ⌃ or ⌥ make it a shortcut for the app with the candidates
+    /// up. Those of the Hanja key do not: a person's finger may still be on it when
+    /// the digit goes down. The event tap takes a lone modifier off the key by
+    /// itself; a chord's modifiers it leaves on, and the IOKit fallback cannot take
+    /// off any. A lone modifier counts by side, so left ⌥1 still types ¡ while
+    /// Right Option is the Hanja key. Device bits missing means it cannot be told.
+    static func chordLeavesCandidates(_ flags: NSEvent.ModifierFlags, hanja: KeyBinding) -> Bool {
+        var raw = UInt64(flags.rawValue)
+        if !hanja.isModifierKey {
+            raw &= ~hanja.modifiers
+        } else if hanja.isModifierOnly, ModifierKeyState.isDown(hanja.keyCode, flags: raw),
+                  !ModifierKeyState.isDown(ModifierKeyState.opposite(hanja.keyCode), flags: raw) {
+            raw &= ~RightCommandSuppressor.modifierMask(for: hanja.keyCode).rawValue
+        }
+        return !NSEvent.ModifierFlags(rawValue: UInt(raw)).intersection([.command, .control, .option]).isEmpty
     }
 
     /// Delivers what a key did to the syllable: the syllable it completed, then
@@ -608,11 +631,10 @@ public class HangulComposer: @unchecked Sendable {
             return
         }
         
-        // Use the active controller's current adapter, fallback to the last key's
-        let activeDelegate = PriTypeInputController.sharedController?.currentAdapter
-            ?? lastDelegate
-        guard let delegate = activeDelegate else {
-            DebugLogger.log("Hanja: No delegate available")
+        // With no active client there is nothing to look up in and nowhere to put a
+        // choice. The last key's adapter would read the field that was left behind.
+        guard let delegate = PriTypeInputController.sharedController?.currentAdapter else {
+            DebugLogger.log("Hanja: No active client")
             return
         }
         _ = handleHanjaLookup(delegate: delegate)

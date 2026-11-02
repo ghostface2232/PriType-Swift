@@ -54,6 +54,7 @@
 "update.downloadFailed" = "Download failed";
 "update.verificationFailed" = "Could not verify the download";
 "update.installFailed" = "Could not start the install";
+"update.installAlreadyRunning" = "An install is already in progress";
 "update.openReleasePage" = "Open release page";
 "update.cancel" = "Cancel";
 "update.installedTitle" = "PriType updated";

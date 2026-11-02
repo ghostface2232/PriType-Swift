@@ -111,6 +111,7 @@ public enum L10n {
         public static var downloadFailed: String { localized("update.downloadFailed") }
         public static var verificationFailed: String { localized("update.verificationFailed") }
         public static var installFailed: String { localized("update.installFailed") }
+        public static var installAlreadyRunning: String { localized("update.installAlreadyRunning") }
         public static var openReleasePage: String { localized("update.openReleasePage") }
         public static var cancel: String { localized("update.cancel") }
         /// Reported on the launch after an install.

@@ -118,6 +118,10 @@ struct SettingsView: View {
     @State private var updateStatusReset: DispatchWorkItem?
     /// The download-verify-authorize sequence, kept so it can be called off.
     @State private var installTask: Task<Void, Never>?
+    /// The install this view still speaks for. A run called off, or replaced by
+    /// another, can still deliver a phase or its end, which must not overwrite
+    /// what the view has moved on to.
+    @State private var installRun: UUID?
 
     // Polls for the accessibility grant while the window is open. Stored so it can
     // be replaced on repeated taps and invalidated when the view disappears.
@@ -144,7 +148,8 @@ struct SettingsView: View {
         case downloading(UpdateChecker.UpdateInfo, fraction: Double?)
         case verifying(UpdateChecker.UpdateInfo)
         case authorizing(UpdateChecker.UpdateInfo)
-        /// Handed to the installer; PriType is about to be killed and relaunched.
+        /// Handed to the installer; PriType is about to be killed and relaunched,
+        /// unless the install fails first.
         case installing
         /// The check itself failed.
         case error
@@ -266,7 +271,9 @@ struct SettingsView: View {
         }
         .onChange(of: toggleTrigger) { _, newValue in
             ConfigurationManager.shared.toggleTrigger = newValue
-            RightCommandSuppressor.shared.restartForTriggerChange()
+            if !RightCommandSuppressor.shared.restartForTriggerChange() {
+                KeyMonitors.start()
+            }
         }
         .onChange(of: hanjaEnabled) { _, isOn in
             ConfigurationManager.shared.hanjaEnabled = isOn
@@ -682,25 +689,35 @@ struct SettingsView: View {
     /// Downloads, verifies and installs `info`.
     ///
     /// The last step hands the package to a root installer that terminates
-    /// PriType, so this view is not around for the end of it: what happened is
-    /// reported on the next launch instead.
+    /// PriType, so this view is usually not around for the end of it: what happened
+    /// is reported on the next launch instead. An install that fails before
+    /// `preinstall` leaves PriType running, and `UpdateInstaller` throws once root's
+    /// log says so.
     private func install(_ info: UpdateChecker.UpdateInfo) {
         updateStatusReset?.cancel()
         installTask?.cancel()
         withAnimation { updateStatus = .downloading(info, fraction: nil) }
 
+        let run = UUID()
+        installRun = run
         installTask = Task {
             do {
                 try await UpdateInstaller.shared.install(info) { phase in
                     Task { @MainActor in
-                        // A cancelled run can still deliver one last phase; it
-                        // must not overwrite the state cancelling restored.
-                        guard !Task.isCancelled else { return }
+                        guard installRun == run else { return }
                         applyInstallPhase(phase, for: info)
                     }
                 }
+                await MainActor.run {
+                    guard installRun == run else { return }
+                    finishInstall()
+                    withAnimation { updateStatus = .idle }
+                }
             } catch {
-                await MainActor.run { finishInstall(with: error, for: info) }
+                await MainActor.run {
+                    guard installRun == run else { return }
+                    finishInstall(with: error, for: info)
+                }
             }
         }
     }
@@ -722,8 +739,14 @@ struct SettingsView: View {
     }
 
     @MainActor
-    private func finishInstall(with error: any Error, for info: UpdateChecker.UpdateInfo) {
+    private func finishInstall() {
         installTask = nil
+        installRun = nil
+    }
+
+    @MainActor
+    private func finishInstall(with error: any Error, for info: UpdateChecker.UpdateInfo) {
+        finishInstall()
 
         // Cancelling and dismissing the authorization dialog are both decisions,
         // not failures: the update is still there to install.
@@ -741,6 +764,10 @@ struct SettingsView: View {
             message = L10n.update.downloadFailed
         case .verification:
             message = L10n.update.verificationFailed
+        case .installIncomplete:
+            message = String(format: L10n.update.installIncompleteBody, info.version)
+        case .alreadyInstalling:
+            message = L10n.update.installAlreadyRunning
         case .noInstallableAssets, .authorizationFailed, .none:
             message = L10n.update.installFailed
         }
@@ -751,7 +778,7 @@ struct SettingsView: View {
 
     private func cancelInstall() {
         installTask?.cancel()
-        installTask = nil
+        finishInstall()
         if case .downloading(let info, _) = updateStatus {
             withAnimation { updateStatus = .available(info) }
         } else if case .verifying(let info) = updateStatus {

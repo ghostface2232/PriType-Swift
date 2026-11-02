@@ -726,10 +726,10 @@ public final class ConfigurationManager: ConfigurationProviding, Sendable {
 
     /// Version an in-app install was started for, if one was.
     ///
-    /// The package terminates PriType partway through installing, so the
-    /// process that started the install is never around to see it finish. This
-    /// marker is what the next launch reads to tell an update that landed from
-    /// one that failed.
+    /// Set before the password dialog. The package terminates PriType partway
+    /// through installing, so the process that started the install is rarely
+    /// around to see it finish. This marker is what the next launch reads to tell
+    /// an update that landed from one that failed.
     public var pendingUpdateVersion: String? {
         get {
             defaults.string(forKey: Keys.pendingUpdateVersion)
